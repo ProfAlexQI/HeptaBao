@@ -105,6 +105,7 @@ jobs:
           SEED: ${{ matrix.seed }}
         run: |
           set -u
+          set +e
           manifest="$PROBE_DIR/Cargo.toml"
           export CARGO_TARGET_DIR="$RUNNER_TEMP/h02-openraft-fault-target-${TOOLCHAIN}"
 
@@ -171,6 +172,7 @@ jobs:
           CHECKER_EXIT_CODE: ${{ steps.execute.outputs.checker_exit_code || '125' }}
         run: |
           set -u
+          set +e
           mkdir -p "$EVIDENCE_DIR"
           [ -s "$EVIDENCE_DIR/hostile-result.json" ] || printf '{}\n' > "$EVIDENCE_DIR/hostile-result.json"
           [ -s "$EVIDENCE_DIR/linearizability-history.json" ] || printf '{}\n' > "$EVIDENCE_DIR/linearizability-history.json"
