@@ -56,7 +56,7 @@
   "provenance_ref": "HB-SP-H01-SYNTHETIC-HEALTH-0001",
   "raw_capture_digest_sha256": null,
   "review_status": "PENDING",
-  "sanitized_capture_digest_sha256": "fc9e386ceeb72e680f8ca37c85cde3846a86e1d4fc15d7a11bc8c2c77d06b672",
+  "sanitized_capture_digest_sha256": "e79ae141529f2e1c5c54e95e753a6ab0b754b4afc843be12e34859992cea2dec",
   "schema": "heptabao.oracle-side-effect-observation.v1",
   "secret_material_present": false,
   "status": "SYNTHETIC_CONTRACT"
