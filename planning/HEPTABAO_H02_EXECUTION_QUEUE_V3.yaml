@@ -1,0 +1,84 @@
+schema: heptabao.h02-execution-queue.v3
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.2'
+status: ACTIVE_FAIL_CLOSED
+authority_effect: NONE
+selection_effect: NONE
+
+stack:
+  parent_branch: codex/h02-openraft-inmemory-cluster-v1
+  parent_pr: 22
+  active_branch: codex/h02-openraft-hostile-faults-linearizability-v1
+  merge_policy: stacked draft; no merge or retarget to main before parent governance and H00/H01/H02 evidence gates are resolved
+
+completed_implementation_layers:
+  - canonical candidate, package checksum and release-commit bindings
+  - provider-neutral platform contracts and isolated candidate probes
+  - package graph, SBOM, build-script, native-link, license, advisory and MSRV evidence scaffolding
+  - real three-node OpenRaft in-memory candidate cluster
+  - real append, pre-vote, vote and full-snapshot forwarding
+  - real client writes, ReadIndex, membership transition, follower replay, snapshot catch-up, transport partition and quorum-loss guard
+  - isolated stale committed-snapshot injection child/parent harness
+  - real concurrent single-register OpenRaft history generator
+  - independent bounded real-time linearizability checker
+  - combined fail-closed evidence schema and collector
+  - 27 local Python semantic and negative tests
+
+active_execution:
+  - work_package: H02-WP01
+    action: execute Tokio minimal profile on Rust 1.71.0 and 1.98.0
+    state: QUEUED_PENDING_RUNNER
+  - work_package: H02-WP02
+    action: execute rustls ring and aws-lc profiles on Rust 1.71.0 and 1.98.0
+    state: QUEUED_PENDING_RUNNER
+  - work_package: H02-WP07
+    action: execute original OpenRaft behavioral profile on Rust 1.85.0 and 1.98.0
+    state: QUEUED_PENDING_RUNNER
+  - work_package: H02-WP07B
+    action: execute hostile snapshot and external linearizability matrix on Rust 1.85.0 and 1.98.0
+    state: IMPLEMENTED_QUEUED_PENDING_RUNNER
+  - work_package: H02-WP10
+    action: capture locked graph, SBOM, build scripts, native links, licenses, advisories and heuristic unsafe/FFI evidence
+    state: QUEUED_PENDING_RUNNER
+
+runner_observation:
+  parent_pr_22_head: 7757875fc104c493e031840cb24f2e8c2fce2d23
+  dedicated_parent_run_id: 33170789205
+  dedicated_parent_job_id: 98847157197
+  github_status: queued
+  runner_id: null
+  runner_name: null
+  steps: []
+  classification: INFRASTRUCTURE_UNEXECUTED
+
+next_after_first_executable_runner:
+  - preserve and classify every actual Rust compile, API, runtime, child-process and checker failure
+  - repair failures on the same stacked branch without discarding prior artifacts
+  - bind numeric runner and job identities through trusted post-run enrichment
+  - reproduce exact commit, tree, lock graph and evidence in a second attested environment
+  - add OS process suspension and scheduling-pause execution
+  - introduce durable storage candidates and disk/torn-write/corruption testing
+  - execute monotonic and wall-clock fault cases
+  - finish advisory, license, unsafe/FFI, native/build-script and effective-MSRV disposition
+  - obtain independent platform, distributed-systems, storage and security approvals
+  - issue no prototype-selection receipt until every critical result is PASS, current and independently reproduced
+
+hard_blocks:
+  - H00 not qualified
+  - no executable Runner evidence for the new fault-lab layer
+  - independent reproduction count is zero
+  - production durable storage candidate count is zero
+  - OS process pause, disk and clock fault cases are unexecuted
+  - supply-chain and effective-MSRV closure is incomplete
+  - independent specialist approvals are absent
+  - candidate selection receipts are absent
+
+authority_flags:
+  prototype_selection_authority: false
+  production_dependency_authority: false
+  crypto_implementation_authority: false
+  raft_implementation_authority: false
+  compatibility_claim: false
+  production_authority: false
+  migration_authority: false
+  release_authority: false
