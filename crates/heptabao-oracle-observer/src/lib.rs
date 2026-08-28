@@ -177,9 +177,7 @@ pub const fn validate_delta(
     if delta.raft_commit_index != 0 && !policy.allow_raft_commit_index {
         return Err(ObservationError::UnexpectedRaftMutation);
     }
-    if delta.external_effect_receipt_count != 0
-        && !policy.allow_external_effect_receipt_count
-    {
+    if delta.external_effect_receipt_count != 0 && !policy.allow_external_effect_receipt_count {
         return Err(ObservationError::UnexpectedExternalEffectMutation);
     }
     if delta.sealed_changed && !policy.allow_seal_transition {
@@ -237,7 +235,10 @@ mod tests {
             secret_material_present: true,
             authority_effect: AuthorityEffect::None,
         };
-        assert_eq!(context.validate(), Err(ObservationError::SecretMaterialPresent));
+        assert_eq!(
+            context.validate(),
+            Err(ObservationError::SecretMaterialPresent)
+        );
     }
 
     #[test]
