@@ -8,16 +8,21 @@ on:
       - "crates/heptabao-platform-contracts/**"
       - "planning/HEPTABAO_H02_SOURCE_INTEGRITY_POLICY_V1.yaml"
       - "planning/HEPTABAO_H02_EXECUTION_PROFILES_V1.yaml"
+      - "planning/HEPTABAO_H02_CANDIDATE_PROBE_MATRIX_V1.yaml"
       - "planning/evidence/h02/**"
       - "schemas/heptabao_dependency_registry_evidence_v1.schema.json"
       - "schemas/heptabao_dependency_execution_profiles_v1.schema.json"
+      - "scripts/h02_dependency_probe_v1.py"
       - "scripts/validate_dependency_registry_evidence_v1.py"
       - "scripts/validate_dependency_execution_profiles_v1.py"
       - "scripts/validate_dependency_research_captures_v1.py"
       - "tests/platform/**"
+      - "probes/h02/**"
       - ".github/workflows/h02-source-integrity-evidence.yml"
   push:
-    branches: ["codex/h02-source-integrity-evidence"]
+    branches:
+      - "codex/h02-source-integrity-evidence"
+      - "codex/h02-os-durable-clock-supplychain-v1"
   workflow_dispatch:
     inputs:
       run_byte_rehash:
@@ -41,6 +46,7 @@ jobs:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -92,69 +98,46 @@ jobs:
   byte-rehash:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_byte_rehash }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - candidate: HB-DEP-ASYNC-TOKIO
-            package: tokio
-            version: 1.53.1
-            source_url: https://api.github.com/repos/tokio-rs/tokio/tarball/tokio-1.53.1
-            crate_url: https://static.crates.io/crates/tokio/tokio-1.53.1.crate
-            registry_checksum: 202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed
-            release_commit: 75fef53d0a8590c2d1dbb63672aa7b7d1ef51155
-          - candidate: HB-DEP-TLS-RUSTLS
-            package: rustls
-            version: 0.23.43
-            source_url: https://api.github.com/repos/rustls/rustls/tarball/v/0.23.43
-            crate_url: https://static.crates.io/crates/rustls/rustls-0.23.43.crate
-            registry_checksum: 0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06
-            release_commit: fcf61cdbba30913cfd5b40aefa83989c6233812d
-          - candidate: HB-DEP-RAFT-OPENRAFT
-            package: openraft
-            version: 0.10.0-alpha.33
-            source_url: https://api.github.com/repos/databendlabs/openraft/tarball/v0.10.0-alpha.33
-            crate_url: https://static.crates.io/crates/openraft/openraft-0.10.0-alpha.33.crate
-            registry_checksum: ba6e911fb3c97faeecb8324b803a37d77a7387d02ee7019fc2a9777569e7f7b8
-            release_commit: 2be3f99a23c0ec734aefc18d1c8e756b35567c35
+    timeout-minutes: 60
     steps:
-      - name: Download bounded public artifacts
+      - name: Download and verify all bounded public artifacts serially
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
-          curl --fail --location --proto '=https' --max-redirs 5 --max-time 180 --output evidence/source.tar.gz "${{ matrix.source_url }}"
-          curl --fail --location --proto '=https' --max-redirs 5 --max-time 180 --output evidence/package.crate "${{ matrix.crate_url }}"
-          test -s evidence/source.tar.gz
-          test -s evidence/package.crate
-          test "$(stat -c %s evidence/source.tar.gz)" -le 104857600
-          test "$(stat -c %s evidence/package.crate)" -le 52428800
+          python - <<'PY' > /tmp/h02-rehash.tsv
+          rows = [
+              ("HB-DEP-ASYNC-TOKIO", "tokio", "1.53.1", "https://api.github.com/repos/tokio-rs/tokio/tarball/tokio-1.53.1", "https://static.crates.io/crates/tokio/tokio-1.53.1.crate", "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed", "75fef53d0a8590c2d1dbb63672aa7b7d1ef51155"),
+              ("HB-DEP-TLS-RUSTLS", "rustls", "0.23.43", "https://api.github.com/repos/rustls/rustls/tarball/v/0.23.43", "https://static.crates.io/crates/rustls/rustls-0.23.43.crate", "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06", "fcf61cdbba30913cfd5b40aefa83989c6233812d"),
+              ("HB-DEP-RAFT-OPENRAFT", "openraft", "0.10.0-alpha.33", "https://api.github.com/repos/databendlabs/openraft/tarball/v0.10.0-alpha.33", "https://static.crates.io/crates/openraft/openraft-0.10.0-alpha.33.crate", "ba6e911fb3c97faeecb8324b803a37d77a7387d02ee7019fc2a9777569e7f7b8", "2be3f99a23c0ec734aefc18d1c8e756b35567c35"),
+          ]
+          for row in rows:
+              print("\t".join(row))
+          PY
 
-      - name: Verify package checksum and capture VCS metadata
-        shell: bash
-        env:
-          CANDIDATE: ${{ matrix.candidate }}
-          PACKAGE: ${{ matrix.package }}
-          VERSION: ${{ matrix.version }}
-          REGISTRY_CHECKSUM: ${{ matrix.registry_checksum }}
-          RELEASE_COMMIT: ${{ matrix.release_commit }}
-        run: |
-          set -euo pipefail
-          package_sha="$(sha256sum evidence/package.crate | cut -d' ' -f1)"
-          test "$package_sha" = "$REGISTRY_CHECKSUM"
-          mkdir -p evidence/package
-          tar -xzf evidence/package.crate -C evidence/package
-          vcs_file="$(find evidence/package -name .cargo_vcs_info.json -type f -print -quit)"
-          test -n "$vcs_file"
-          package_vcs_commit="$(python - "$vcs_file" <<'PY'
+          while IFS=$'\t' read -r candidate package version source_url crate_url checksum release_commit; do
+            out="evidence/$package-$version"
+            mkdir -p "$out/package"
+            curl --fail --location --proto '=https' --max-redirs 5 --max-time 180 --output "$out/source.tar.gz" "$source_url"
+            curl --fail --location --proto '=https' --max-redirs 5 --max-time 180 --output "$out/package.crate" "$crate_url"
+            test -s "$out/source.tar.gz"
+            test -s "$out/package.crate"
+            test "$(stat -c %s "$out/source.tar.gz")" -le 104857600
+            test "$(stat -c %s "$out/package.crate")" -le 52428800
+            package_sha="$(sha256sum "$out/package.crate" | cut -d' ' -f1)"
+            test "$package_sha" = "$checksum"
+            tar -xzf "$out/package.crate" -C "$out/package"
+            vcs_file="$(find "$out/package" -name .cargo_vcs_info.json -type f -print -quit)"
+            test -n "$vcs_file"
+            package_vcs_commit="$(python - "$vcs_file" <<'PY'
           import json, sys
           print(json.load(open(sys.argv[1], encoding="utf-8"))["git"]["sha1"])
           PY
           )"
-          test "$package_vcs_commit" = "$RELEASE_COMMIT"
-          python - <<'PY'
+            test "$package_vcs_commit" = "$release_commit"
+            CANDIDATE="$candidate" PACKAGE="$package" VERSION="$version" CHECKSUM="$checksum" RELEASE_COMMIT="$release_commit" OUT="$out" python - <<'PY'
           import json, os, platform, subprocess
+          out = os.environ["OUT"]
           def sha(path):
               return subprocess.check_output(["sha256sum", path], text=True).split()[0]
           value = {
@@ -162,10 +145,10 @@ jobs:
               "candidate_id": os.environ["CANDIDATE"],
               "package": os.environ["PACKAGE"],
               "version": os.environ["VERSION"],
-              "source_archive_sha256": sha("evidence/source.tar.gz"),
+              "source_archive_sha256": sha(f"{out}/source.tar.gz"),
               "source_archive_digest_kind": "OBSERVED_GITHUB_GENERATED_ARCHIVE",
-              "crate_download_sha256": sha("evidence/package.crate"),
-              "registry_checksum_sha256": os.environ["REGISTRY_CHECKSUM"],
+              "crate_download_sha256": sha(f"{out}/package.crate"),
+              "registry_checksum_sha256": os.environ["CHECKSUM"],
               "matches_registry_checksum": True,
               "package_vcs_commit_sha": os.environ["RELEASE_COMMIT"],
               "runner_name": os.environ.get("RUNNER_NAME"),
@@ -179,15 +162,16 @@ jobs:
               "selection_effect": "NONE",
               "authority_effect": "NONE",
           }
-          with open("evidence/rehash.json", "w", encoding="utf-8") as handle:
+          with open(f"{out}/rehash.json", "w", encoding="utf-8") as handle:
               json.dump(value, handle, indent=2, sort_keys=True)
               handle.write("\n")
           PY
+          done < /tmp/h02-rehash.tsv
 
-      - name: Upload unreviewed rehash evidence
+      - name: Upload all unreviewed rehash evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: h02-rehash-${{ matrix.package }}-${{ matrix.version }}
-          path: evidence/rehash.json
+          name: h02-rehash-all-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/*/rehash.json
           if-no-files-found: error
           retention-days: 30
