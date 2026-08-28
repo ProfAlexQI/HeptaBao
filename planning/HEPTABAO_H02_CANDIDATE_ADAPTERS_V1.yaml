@@ -76,7 +76,7 @@ adapters:
     adapter_scope: FULL_REFERENCE_CASE_SET
     toolchains: ['1.71.0', '1.98.0']
     public_fixture_digests:
-      root_der_sha256: a25411462f6a04f4b6787d5198cc7a2e78b867100802dfd5dc138fe2d0053a
+      root_der_sha256: a25411462f6a04f4b6787d7d1198cc7a2e78b867100802dfd5dc138fe2d0053a
       valid_client_der_sha256: 6f64c58577a9946e9d75969f95e9a32df08ed9645dcd37f6a810d323a107f1e3
       expired_client_der_sha256: 87975f6e8cc8bc56bde21309475835b844f27314820acd02ea90f0baec0c7a20
       private_keys_committed: false
@@ -109,7 +109,7 @@ adapters:
     adapter_scope: FULL_REFERENCE_CASE_SET
     toolchains: ['1.71.0', '1.98.0']
     public_fixture_digests:
-      root_der_sha256: a25411462f6a04f4b6787d7d5198cc7a2e78b867100802dfd5dc138fe2d0053a
+      root_der_sha256: a25411462f6a04f4b6787d7d1198cc7a2e78b867100802dfd5dc138fe2d0053a
       valid_client_der_sha256: 6f64c58577a9946e9d75969f95e9a32df08ed9645dcd37f6a810d323a107f1e3
       expired_client_der_sha256: 87975f6e8cc8bc56bde21309475835b844f27314820acd02ea90f0baec0c7a20
       private_keys_committed: false
