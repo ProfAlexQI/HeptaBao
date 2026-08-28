@@ -5,7 +5,7 @@ on:
     branches: ["codex/plan-v1.1-h00-execution"]
     paths:
       - ".github/workflows/materialize-plan-v1-1.yml"
-      - "bootstrap/plan-v1-1-generator/**"
+      - "bootstrap/plan-v1-1-generator/gzip-part-*"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -34,7 +35,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p tools
-          cat bootstrap/plan-v1-1-generator/part-* | base64 --decode > tools/generate_plan_v1_1.py
+          cat bootstrap/plan-v1-1-generator/gzip-part-* | base64 --decode > /tmp/generate_plan_v1_1.py.gz
+          test "$(sha256sum /tmp/generate_plan_v1_1.py.gz | awk '{print $1}')" = "005beba54b215a1830e7f81de2faf7739bce58a68f9679e38e1bcfaee613af13"
+          gzip -dc /tmp/generate_plan_v1_1.py.gz > tools/generate_plan_v1_1.py
           test "$(sha256sum tools/generate_plan_v1_1.py | awk '{print $1}')" = "950f7799dff8e980552374998df169f8af77be2bb92dc41b92ecb93298c3b04b"
 
       - name: Materialize Plan V1.1 and H00 implementation
