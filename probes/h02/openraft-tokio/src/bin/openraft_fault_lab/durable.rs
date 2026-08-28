@@ -177,7 +177,8 @@ fn corrupt_payload(path: &Path, record_offset: u64) -> io::Result<()> {
 fn write_snapshot_atomic(root: &Path, sequence: u64, value: &str) -> io::Result<PathBuf> {
     let temporary = root.join("snapshot.json.tmp");
     let final_path = root.join("snapshot.json");
-    let bytes = serde_json::to_vec(&json!({"sequence": sequence, "value": value}))?;
+    let bytes = serde_json::to_vec(&json!({"sequence": sequence, "value": value}))
+        .map_err(|error| invalid_data(error.to_string()))?;
     {
         let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&temporary)?;
         file.write_all(&bytes)?;
@@ -262,7 +263,8 @@ pub async fn execute_durable_faults(seed: u64) -> Value {
 
         let snapshot_value = format!("snapshot-{seed:016x}");
         let snapshot_path = write_snapshot_atomic(&root, 9, &snapshot_value)?;
-        let snapshot: Value = serde_json::from_slice(&fs::read(snapshot_path)?)?;
+        let snapshot: Value = serde_json::from_slice(&fs::read(snapshot_path)?)
+            .map_err(|error| invalid_data(error.to_string()))?;
         let snapshot_pass = snapshot["sequence"].as_u64() == Some(9)
             && snapshot["value"].as_str() == Some(snapshot_value.as_str());
 
@@ -293,7 +295,7 @@ pub async fn execute_durable_faults(seed: u64) -> Value {
             "selection_effect": "NONE",
             "authority_effect": "NONE",
         }))
-    })
+    })()
     .await;
 
     let value = match outcome {
