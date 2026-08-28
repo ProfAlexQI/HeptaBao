@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -10,9 +11,13 @@ import yaml
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
 SPEC = importlib.util.spec_from_file_location(
     "validate_dependency_bakeoff_v1",
-    ROOT / "scripts" / "validate_dependency_bakeoff_v1.py",
+    SCRIPTS / "validate_dependency_bakeoff_v1.py",
 )
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
