@@ -2,7 +2,7 @@ schema: heptabao.dependency-research-capture.v1
 plan_id: HEPTABAO-PLAN-2026-08-28
 plan_revision: '1.1'
 capture_id: HB-DEP-CAPTURE-ASYNC-TOKIO-0001
-candidate_id: HB-DEP-ASYNC-TOKIO-0001
+candidate_id: HB-DEP-ASYNC-TOKIO
 capability: ASYNC_RUNTIME
 capture_status: OFFICIAL_METADATA_CAPTURED_UNREVIEWED
 captured_at_utc: '2026-08-28T06:30:00Z'
@@ -46,7 +46,8 @@ review_status:
 selection_state: IDENTIFIED
 authority_effect: NONE
 remaining_evidence:
-  - independently hash the release source archive and crates.io package
+  - bind and verify the crates.io-index checksum in the separate registry evidence object
+  - download and hash the release source archive and crates.io package in an attested runner
   - review all Tokio and transitive security advisories for the pinned graph
   - inventory unsafe code and OS-specific FFI paths under the proposed feature set
   - build and test the proposed minimal feature profile on Rust 1.98.0 and the declared MSRV

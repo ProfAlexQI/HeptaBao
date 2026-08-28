@@ -18,7 +18,7 @@ SCHEMA_PATH = ROOT / "schemas" / "heptabao_dependency_research_capture_v1.schema
 CATALOG_PATH = ROOT / "planning" / "HEPTABAO_H02_DEPENDENCY_BAKEOFF_V1.yaml"
 
 EXPECTED = {
-    "HB-DEP-ASYNC-TOKIO-0001": {
+    "HB-DEP-ASYNC-TOKIO": {
         "file": "HB-DEP-ASYNC-TOKIO-0001.capture.yaml",
         "capability": "ASYNC_RUNTIME",
         "tag": "tokio-1.53.1",
@@ -29,7 +29,7 @@ EXPECTED = {
         "declared_license": "MIT",
         "declared_rust_version": "1.71",
     },
-    "HB-DEP-TLS-RUSTLS-0001": {
+    "HB-DEP-TLS-RUSTLS": {
         "file": "HB-DEP-TLS-RUSTLS-0001.capture.yaml",
         "capability": "TLS",
         "tag": "v/0.23.43",
@@ -49,7 +49,7 @@ EXPECTED = {
         "tree_sha": "84c2f86b6bdffb3f25ffbc7a9341ef7295a5ac28",
         "manifest_blob_sha": "4fa4ab541c8940cf324b94e950c8f1118433aa32",
         "declared_license": "MIT OR Apache-2.0",
-        "declared_rust_version": None,
+        "declared_rust_version": null,
     },
 }
 
@@ -89,12 +89,9 @@ def validate() -> int:
         capture = load_yaml(path)
         errors = list(validator.iter_errors(capture))
         if errors:
-            fail(
-                f"{path.relative_to(ROOT)}: "
-                + "; ".join(error.message for error in errors)
-            )
+            fail(f"{path.relative_to(ROOT)}: " + "; ".join(error.message for error in errors))
         if capture["candidate_id"] != candidate_id:
-            fail(f"{path.name}: candidate ID mismatch")
+            fail(f"{path.name}: candidate ID must match canonical catalog ID")
         if candidate_id in observed:
             fail(f"duplicate research capture for {candidate_id}")
         observed.add(candidate_id)
@@ -127,7 +124,7 @@ def validate() -> int:
 
         integrity = capture["source_integrity"]
         if integrity["source_archive_sha256"] is not None or integrity["crate_package_checksum"] is not None:
-            fail(f"{candidate_id}: unreviewed metadata capture must not invent package/archive checksums")
+            fail(f"{candidate_id}: official Git metadata capture cannot claim byte verification")
         if capture["selection_state"] != "IDENTIFIED" or capture["authority_effect"] != "NONE":
             fail(f"{candidate_id}: research capture attempted selection or authority")
         reviews = capture["review_status"]
@@ -156,7 +153,8 @@ def main() -> int:
         return 1
     print(
         "H02 dependency research-capture validation passed: "
-        f"captures={count} state=IDENTIFIED review=PENDING selection=0 authority=NONE"
+        f"captures={count} canonical_ids=true state=IDENTIFIED review=PENDING "
+        "byte_verification=0 selection=0 authority=NONE"
     )
     return 0
 

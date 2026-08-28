@@ -46,14 +46,15 @@ review_status:
 selection_state: IDENTIFIED
 authority_effect: NONE
 remaining_evidence:
-  - independently hash the release source archive and crates.io package
+  - bind and verify the crates.io-index checksum in the separate registry evidence object
+  - download and hash the release source archive and crates.io package in an attested runner
   - capture the crate-level feature manifest in addition to workspace metadata
   - establish and execute the effective MSRV for the exact feature/profile graph
-  - review the alpha API-stability risk and breaking linearizable-read/snapshot-metadata changes
-  - inventory unsafe code and all storage/network/runtime transitive dependencies
+  - review the alpha API-stability risk and breaking linearizable-read and snapshot-metadata changes
+  - inventory unsafe code and all storage, network and runtime transitive dependencies
   - replay deterministic FSM traces across architectures and process restarts
   - run snapshot-conflict, membership, process-pause, partition, quorum-loss and incomplete-run diagnostics
-  - run independent Jepsen-style linearizability and serializability qualification rather than relying on upstream claims
-  - benchmark an equal-durability profile behind the HeptaBao consensus/storage/network traits
+  - run independent Jepsen-style linearizability qualification rather than relying on upstream claims
+  - benchmark an equal-durability profile behind the HeptaBao consensus, storage and network traits
   - obtain distributed-systems, platform and security approvals
   - issue no prototype selection receipt until every mandatory field is complete

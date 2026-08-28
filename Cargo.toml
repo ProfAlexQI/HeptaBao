@@ -3,6 +3,7 @@ members = [
     "crates/heptabao-governance",
     "crates/heptabao-oracle-observer",
     "crates/heptabao-platform-bakeoff",
+    "crates/heptabao-platform-contracts",
 ]
 resolver = "3"
 

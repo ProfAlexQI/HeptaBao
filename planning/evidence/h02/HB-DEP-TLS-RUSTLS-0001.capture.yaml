@@ -2,7 +2,7 @@ schema: heptabao.dependency-research-capture.v1
 plan_id: HEPTABAO-PLAN-2026-08-28
 plan_revision: '1.1'
 capture_id: HB-DEP-CAPTURE-TLS-RUSTLS-0001
-candidate_id: HB-DEP-TLS-RUSTLS-0001
+candidate_id: HB-DEP-TLS-RUSTLS
 capability: TLS
 capture_status: OFFICIAL_METADATA_CAPTURED_UNREVIEWED
 captured_at_utc: '2026-08-28T06:32:00Z'
@@ -46,10 +46,11 @@ review_status:
 selection_state: IDENTIFIED
 authority_effect: NONE
 remaining_evidence:
-  - independently hash the release source archive and crates.io package
+  - bind and verify the crates.io-index checksum in the separate registry evidence object
+  - download and hash the release source archive and crates.io package in an attested runner
   - classify the pinned release's pre-authentication ticket panic and QUIC fixes against the HeptaBao threat model
-  - choose and independently review an exact crypto-provider/feature profile; default features are not an automatic selection
-  - inventory unsafe code, aws-lc/ring provider FFI, build scripts and transitive native dependencies
+  - choose and independently review an exact crypto-provider and feature profile
+  - inventory unsafe code, provider FFI, build scripts and transitive native dependencies
   - execute TLS protocol, malformed-record, resumption, mTLS, key-update, shutdown and memory-residue suites
   - verify Rust 1.98.0 and declared-MSRV builds for the proposed feature profile
   - benchmark equal-profile handshakes and data paths without weakening TLS or audit policy
