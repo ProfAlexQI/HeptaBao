@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/heptabao-governance"]
+members = [
+    "crates/heptabao-governance",
+    "crates/heptabao-oracle-observer",
+    "crates/heptabao-platform-bakeoff",
+]
 resolver = "3"
 
 [workspace.package]
