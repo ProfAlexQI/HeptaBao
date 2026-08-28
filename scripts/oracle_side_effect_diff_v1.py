@@ -2,7 +2,7 @@
 """Compute and fail-closed validate secret-free Oracle side-effect deltas.
 
 The input is a JSON object containing `before`, `after` and `declared_policy`.
-The command never connects to OpenBao.  It is suitable for synthetic contracts
+The command never connects to OpenBao. It is suitable for synthetic contracts
 and for sanitized observations produced by a restricted Oracle lane.
 """
 
@@ -48,6 +48,7 @@ FORBIDDEN_VALUE_MARKERS = (
     "-----BEGIN PRIVATE KEY-----",
     "-----BEGIN OPENSSH PRIVATE KEY-----",
 )
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ObservationError(ValueError):
@@ -131,6 +132,18 @@ def validate_delta(delta: dict[str, Any], policy: dict[str, bool]) -> None:
             raise ObservationError(f"unexpected side effect: {field} changed but {policy_field}=false")
 
 
+def validate_raw_capture_digest(document: dict[str, Any]) -> str | None:
+    digest = document.get("raw_capture_digest_sha256")
+    capture_kind = document["capture_kind"]
+    if capture_kind == "SYNTHETIC_CONTRACT":
+        if digest is not None:
+            raise ObservationError("synthetic contract must not carry a raw Oracle capture digest")
+        return None
+    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+        raise ObservationError("black-box Oracle capture requires raw_capture_digest_sha256")
+    return digest
+
+
 def build_observation(document: dict[str, Any]) -> dict[str, Any]:
     scan_secret_free(document)
     required = {
@@ -146,7 +159,8 @@ def build_observation(document: dict[str, Any]) -> dict[str, Any]:
         "provenance_ref",
         "review_status",
     }
-    unknown = set(document) - required
+    allowed = required | {"raw_capture_digest_sha256"}
+    unknown = set(document) - allowed
     missing = required - set(document)
     if missing or unknown:
         raise ObservationError(f"input shape mismatch: missing={sorted(missing)} unknown={sorted(unknown)}")
@@ -154,11 +168,19 @@ def build_observation(document: dict[str, Any]) -> dict[str, Any]:
         raise ObservationError("unexpected baseline_id")
     if document["capture_kind"] not in {"SYNTHETIC_CONTRACT", "BLACK_BOX_ORACLE"}:
         raise ObservationError("unsupported capture_kind")
-    if document["capture_kind"] == "BLACK_BOX_ORACLE" and document["artifact_signature_verified"] is not True:
-        raise ObservationError("black-box Oracle capture requires verified artifact signature")
+    if document["capture_kind"] == "BLACK_BOX_ORACLE":
+        if document["artifact_signature_verified"] is not True:
+            raise ObservationError("black-box Oracle capture requires verified artifact signature")
+        if document["status"] == "SYNTHETIC_CONTRACT":
+            raise ObservationError("black-box Oracle capture cannot use synthetic status")
+    elif document["status"] != "SYNTHETIC_CONTRACT":
+        raise ObservationError("synthetic capture must use SYNTHETIC_CONTRACT status")
     if document["review_status"] not in {"PENDING", "APPROVED", "REJECTED", "SUPERSEDED"}:
         raise ObservationError("unsupported review_status")
+    if document["status"] in {"REVIEWED", "QUALIFIED"} and document["review_status"] != "APPROVED":
+        raise ObservationError("reviewed or qualified observation requires approved review")
 
+    raw_capture_digest = validate_raw_capture_digest(document)
     before = validate_snapshot(document["before"], "before")
     after = validate_snapshot(document["after"], "after")
     policy = validate_policy(document["declared_policy"])
@@ -185,9 +207,7 @@ def build_observation(document: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "heptabao.oracle-side-effect-observation.v1",
         **sanitized_core,
-        "raw_capture_digest_sha256": None
-        if document["capture_kind"] == "SYNTHETIC_CONTRACT"
-        else document.get("raw_capture_digest_sha256"),
+        "raw_capture_digest_sha256": raw_capture_digest,
         "sanitized_capture_digest_sha256": digest,
     }
 
