@@ -49,7 +49,7 @@ EXPECTED = {
         "tree_sha": "84c2f86b6bdffb3f25ffbc7a9341ef7295a5ac28",
         "manifest_blob_sha": "4fa4ab541c8940cf324b94e950c8f1118433aa32",
         "declared_license": "MIT OR Apache-2.0",
-        "declared_rust_version": null,
+        "declared_rust_version": None,
     },
 }
 
