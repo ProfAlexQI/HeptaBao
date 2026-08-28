@@ -117,12 +117,31 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"state": {"const": "SELECTED_FOR_PROTOTYPE"}}},
+      "if": {"properties": {"state": {"const": "SELECTED_FOR_PROTOTYPE"}}, "required": ["state"]},
       "then": {
         "properties": {
-          "pin": {"properties": {"version": {"type": "string"}, "commit_sha": {"type": "string"}, "source_digest_sha256": {"type": "string"}}},
+          "pin": {
+            "properties": {
+              "version": {"type": "string", "minLength": 1},
+              "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+              "source_digest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          },
           "project": {"properties": {"license_status": {"const": "ACCEPTABLE"}}},
-          "criteria": {"additionalProperties": false},
+          "criteria": {
+            "properties": {
+              "maintenance": {"type": "integer", "minimum": 0, "maximum": 5},
+              "security_history": {"type": "integer", "minimum": 0, "maximum": 5},
+              "license_fit": {"type": "integer", "minimum": 0, "maximum": 5},
+              "unsafe_surface": {"type": "integer", "minimum": 0, "maximum": 5},
+              "api_stability": {"type": "integer", "minimum": 0, "maximum": 5},
+              "rust_version_fit": {"type": "integer", "minimum": 0, "maximum": 5},
+              "performance": {"type": "integer", "minimum": 0, "maximum": 5},
+              "replacement_seam": {"type": "integer", "minimum": 0, "maximum": 5},
+              "ecosystem_fit": {"type": "integer", "minimum": 0, "maximum": 5},
+              "qualification_cost": {"type": "integer", "minimum": 0, "maximum": 5}
+            }
+          },
           "evidence": {
             "properties": {
               "source_and_release_pinned": {"const": true},
@@ -141,7 +160,7 @@
               "evidence_refs": {"minItems": 1}
             }
           },
-          "qualification": {"properties": {"selection_receipt": {"type": "string"}}}
+          "qualification": {"properties": {"selection_receipt": {"type": "string", "minLength": 1}}}
         }
       }
     }
