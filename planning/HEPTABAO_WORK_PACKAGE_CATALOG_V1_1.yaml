@@ -9,7 +9,7 @@ gates:
   H00:
     packages:
     - H00-WP01:repository-governance
-    - H00-WP02:plan-v1.1-execution-model
+    - H00-WP02:plan-v1-1-execution-model
     - H00-WP03:receipt-claim-grant-revocation-schemas
     - H00-WP04:semantic-validators-and-ci
     - H00-WP05:clean-room-access-separation
