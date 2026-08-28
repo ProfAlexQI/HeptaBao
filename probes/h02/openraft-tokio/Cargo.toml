@@ -14,10 +14,14 @@ path = "src/main.rs"
 name = "heptabao-h02-openraft-inmemory-cluster"
 path = "src/bin/inmemory_cluster.rs"
 
+[[bin]]
+name = "heptabao-h02-openraft-fault-lab"
+path = "src/bin/openraft_fault_lab.rs"
+
 [dependencies]
 openraft = { version = "=0.10.0-alpha.33", default-features = false, features = ["serde", "tokio-rt", "type-alias"] }
 openraft-memstore = { version = "=0.10.0-alpha.33" }
 serde_json = "=1.0.145"
-tokio = { version = "=1.53.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 
 [workspace]
