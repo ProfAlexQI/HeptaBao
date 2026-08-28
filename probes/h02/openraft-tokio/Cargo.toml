@@ -1,0 +1,11 @@
+[package]
+name = "heptabao-h02-probe-openraft-tokio"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+openraft = { version = "=0.10.0-alpha.33", default-features = false, features = ["serde", "tokio-rt"] }
+
+[workspace]
