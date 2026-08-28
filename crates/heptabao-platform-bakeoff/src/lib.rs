@@ -292,7 +292,10 @@ mod tests {
 
     #[test]
     fn validated_candidate_has_no_authority() {
-        assert_eq!(validate_candidate(GOOD_CANDIDATE), Ok(AuthorityEffect::None));
+        assert_eq!(
+            validate_candidate(GOOD_CANDIDATE),
+            Ok(AuthorityEffect::None)
+        );
     }
 
     #[test]
