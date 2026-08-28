@@ -397,11 +397,7 @@ pub trait StateMachineAdapter {
         command: &[u8],
     ) -> Result<Self::ApplyOutput, RaftError>;
 
-    fn install_snapshot(
-        &mut self,
-        metadata: SnapshotMeta,
-        bytes: &[u8],
-    ) -> Result<(), RaftError>;
+    fn install_snapshot(&mut self, metadata: SnapshotMeta, bytes: &[u8]) -> Result<(), RaftError>;
 }
 
 /// Provider-neutral consensus/storage boundary.
