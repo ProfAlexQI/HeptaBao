@@ -1,0 +1,113 @@
+schema: heptabao.h02-os-durable-clock-blocker-closure.v1
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.1'
+status: IMPLEMENTED_PENDING_REMOTE_EXECUTION
+qualification: false
+selection_effect: NONE
+authority_effect: NONE
+
+candidate_binding:
+  candidate_id: HB-DEP-RAFT-OPENRAFT
+  package: openraft
+  version: 0.10.0-alpha.33
+  profile_id: HB-H02-BLOCKER-CLOSURE-OPENRAFT-0_10_0_ALPHA_33
+  state: IDENTIFIED
+
+implementation:
+  manifest: probes/h02/openraft-tokio/Cargo.toml
+  binary: heptabao-h02-openraft-blocker-closure-lab
+  entrypoint: probes/h02/openraft-tokio/src/bin/blocker_closure_lab.rs
+  os_parent_module: probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock.rs
+  candidate_child_module: probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs
+  durable_module: probes/h02/openraft-tokio/src/bin/openraft_fault_lab/durable.rs
+
+os_process_suspend:
+  execution:
+    - start a real three-node OpenRaft cluster in an isolated child process
+    - commit values and perform ReadIndex reads while atomically publishing progress
+    - send SIGSTOP through the Linux process interface
+    - verify /proc reports a stopped process state
+    - verify committed/read progress does not change during the stopped interval
+    - send SIGCONT and require candidate commit and ReadIndex progress to resume
+  scope_limit:
+    topology: SINGLE_OS_PROCESS_THREE_INPROCESS_RAFT_NODES
+    separate_process_majority_election: false
+    composition_evidence: PR22 separately executes old-leader transport pause and majority re-election
+  fail_closed:
+    - missing child PID blocks
+    - missing readiness or progress blocks
+    - process state other than stopped fails
+    - progress movement during SIGSTOP fails
+    - failure to resume commit and ReadIndex progress fails
+
+durable_file_wal:
+  candidate_id: HB-STORE-FILE-WAL-PROTOTYPE
+  state: PROTOTYPE_NOT_SELECTED
+  format:
+    magic: HBWAL001
+    sequence: u64-le
+    payload_length: u32-le
+    payload_integrity: CRC32
+    commit_boundary: write-all + flush + sync_all
+    snapshot_boundary: temp-write + sync_all + rename + parent-directory sync_all
+  cases:
+    - restart recovery from synced records
+    - bounded injected disk stall with no post-deadline state advance
+    - synced torn tail detection, truncation to last complete record and continued append
+    - simulated loss of an unsynced tail
+    - committed-record corruption detection and fail-closed reopen
+    - atomic snapshot publication and reopen
+  scope_limit:
+    openraft_storage_integrated: false
+    production_selected: false
+    kernel_power_loss: simulated at the storage fault seam
+
+clock_faults:
+  execution:
+    - real three-node OpenRaft cluster
+    - real client_write operations
+    - real ReadIndex linearizable reads
+    - injected application wall-clock projections of minus/plus one day and one year
+    - monotonic elapsed-time bounds and stable leader checks
+  scope_limit:
+    kernel_wall_clock_changed: false
+    per_node_kernel_clock_skew: false
+    candidate_runtime_timer_kind: MONOTONIC_TOKIO_INSTANT
+
+execution_matrix:
+  toolchains: ['1.85.0', '1.98.0']
+  target: x86_64-unknown-linux-gnu
+  seeds:
+    - '0x5eed20260828cafe'
+    - '0x8badf00d12345678'
+    - '0xd15ea5e5cafef00d'
+  entries: 6
+  scheduling: SERIAL_ON_ONE_RUNNER
+  preserve_every_outcome: true
+
+technical_pass_requires:
+  - binary exit code is zero
+  - raw result satisfies Draft 2020-12 schema
+  - OS suspend component is EXECUTED_PASS
+  - durable file WAL component is EXECUTED_PASS
+  - clock fault component is EXECUTED_PASS
+  - source tree is clean and exact commit/tree are bound
+  - manifest and generated Cargo.lock digests are bound
+  - qualification remains false
+  - selection_effect remains NONE
+  - authority_effect remains NONE
+
+remaining_external_gaps:
+  - production-quality OpenRaft RaftLogStorage/RaftStateMachine integration
+  - per-node kernel or time-namespace skew in a multi-process cluster
+  - second independent attested environment
+  - independent distributed-systems, storage, platform and security approvals
+  - signed bounded prototype-selection receipt
+
+invariants:
+  - A technical pass does not select OpenRaft or the file WAL prototype.
+  - Process-fatal or blocked outcomes remain visible and cannot become a pass.
+  - The file WAL prototype cannot create a production durability claim.
+  - Application wall-clock projection cannot be represented as kernel-clock mutation evidence.
+  - Missing external approvals and signed receipts remain real blockers and are never fabricated.
+  - qualification=false, selection_effect=NONE and authority_effect=NONE are immutable.
