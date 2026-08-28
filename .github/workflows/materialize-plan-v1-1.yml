@@ -1,0 +1,59 @@
+name: materialize-plan-v1-1
+
+on:
+  push:
+    branches: ["codex/plan-v1.1-h00-execution"]
+    paths:
+      - ".github/workflows/materialize-plan-v1-1.yml"
+      - "bootstrap/plan-v1-1-generator/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-plan-v1-1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Reconstruct audited generator
+        shell: bash
+        run: |
+          mkdir -p tools
+          cat bootstrap/plan-v1-1-generator/part-* | base64 --decode > tools/generate_plan_v1_1.py
+          test "$(sha256sum tools/generate_plan_v1_1.py | awk '{print $1}')" = "950f7799dff8e980552374998df169f8af77be2bb92dc41b92ecb93298c3b04b"
+
+      - name: Materialize Plan V1.1 and H00 implementation
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.2 jsonschema==4.23.0
+          python tools/generate_plan_v1_1.py
+          python scripts/validate_plan_v2.py
+
+      - name: Commit generated execution baseline
+        shell: bash
+        run: |
+          if git diff --quiet -- . ':!bootstrap/plan-v1-1-generator'; then
+            echo "No generated changes."
+            exit 0
+          fi
+          git config user.name "heptabao-plan-bot"
+          git config user.email "heptabao-plan-bot@users.noreply.github.com"
+          git add README.md SECURITY.md LICENSE-PLANNING.md Cargo.toml Cargo.lock rust-toolchain.toml requirements-plan.txt \
+            .github/CODEOWNERS .github/pull_request_template.md .github/workflows/plan-integrity-v2.yml \
+            crates docs planning qualifications schemas scripts specs tools/generate_plan_v1_1.py
+          git commit -m "feat(h00): materialize executable Plan V1.1 baseline"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
