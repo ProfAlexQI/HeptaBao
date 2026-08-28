@@ -88,8 +88,46 @@ class SideEffectDiffTests(unittest.TestCase):
             MODULE.build_observation(value)
 
     def test_black_box_capture_requires_verified_artifact(self):
-        value = document(capture_kind="BLACK_BOX_ORACLE")
+        value = document(
+            capture_kind="BLACK_BOX_ORACLE",
+            status="SANITIZED",
+            raw_capture_digest_sha256="0" * 64,
+        )
         with self.assertRaisesRegex(MODULE.ObservationError, "verified artifact signature"):
+            MODULE.build_observation(value)
+
+    def test_black_box_capture_requires_raw_digest(self):
+        value = document(
+            capture_kind="BLACK_BOX_ORACLE",
+            status="SANITIZED",
+            artifact_signature_verified=True,
+        )
+        with self.assertRaisesRegex(MODULE.ObservationError, "raw_capture_digest_sha256"):
+            MODULE.build_observation(value)
+
+    def test_verified_black_box_capture_binds_raw_digest(self):
+        value = document(
+            capture_kind="BLACK_BOX_ORACLE",
+            status="SANITIZED",
+            artifact_signature_verified=True,
+            raw_capture_digest_sha256="1" * 64,
+        )
+        observation = MODULE.build_observation(value)
+        self.assertEqual(observation["raw_capture_digest_sha256"], "1" * 64)
+        self.assertEqual(observation["authority_effect"], "NONE")
+
+    def test_synthetic_capture_rejects_raw_digest(self):
+        value = document(raw_capture_digest_sha256="2" * 64)
+        with self.assertRaisesRegex(MODULE.ObservationError, "synthetic contract"):
+            MODULE.build_observation(value)
+
+    def test_black_box_capture_cannot_use_synthetic_status(self):
+        value = document(
+            capture_kind="BLACK_BOX_ORACLE",
+            artifact_signature_verified=True,
+            raw_capture_digest_sha256="3" * 64,
+        )
+        with self.assertRaisesRegex(MODULE.ObservationError, "cannot use synthetic status"):
             MODULE.build_observation(value)
 
     def test_secret_bearing_key_is_rejected(self):
