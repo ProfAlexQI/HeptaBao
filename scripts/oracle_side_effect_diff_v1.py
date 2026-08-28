@@ -187,6 +187,9 @@ def build_observation(document: dict[str, Any]) -> dict[str, Any]:
     delta = compute_delta(before, after)
     validate_delta(delta, policy)
 
+    # The sanitized digest binds the raw-capture digest (or explicit null for a
+    # synthetic contract). A reviewer therefore cannot swap the underlying raw
+    # observation while retaining the same sanitized observation digest.
     sanitized_core = {
         "baseline_id": document["baseline_id"],
         "observation_id": document["observation_id"],
@@ -202,12 +205,12 @@ def build_observation(document: dict[str, Any]) -> dict[str, Any]:
         "provenance_ref": document["provenance_ref"],
         "review_status": document["review_status"],
         "authority_effect": "NONE",
+        "raw_capture_digest_sha256": raw_capture_digest,
     }
     digest = sha256(sanitized_core)
     return {
         "schema": "heptabao.oracle-side-effect-observation.v1",
         **sanitized_core,
-        "raw_capture_digest_sha256": raw_capture_digest,
         "sanitized_capture_digest_sha256": digest,
     }
 
