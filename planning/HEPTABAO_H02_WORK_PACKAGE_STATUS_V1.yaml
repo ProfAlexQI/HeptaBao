@@ -1,0 +1,103 @@
+schema: heptabao.h02-work-package-status.v1
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.1'
+status: PUBLIC_CANDIDATE_BAKEOFF_ACTIVE_NOT_QUALIFIED
+program_authority_gate: H00
+work_start_basis:
+  required_interfaces:
+    - H00.dependency-policy:FROZEN
+    - H01.public-baseline-metadata:FROZEN
+  satisfied_for:
+    - public candidate identification
+    - schemas and fail-closed selection model
+    - HeptaBao-owned replacement-seam design
+    - synthetic validator and Rust contract tests
+  not_satisfied_for:
+    - prototype dependency selection
+    - production dependency selection
+    - crypto or Raft implementation
+    - compatibility or authority claim
+  reason: Candidate governance can proceed on public information, but exact source evidence, independent review and executable CI remain incomplete.
+authority_effect: NONE
+selected_candidates: []
+selection_receipts: []
+work_packages:
+  H02-WP01:
+    title: async runtime bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED_AND_RUST_SELECTION_GUARD_IMPLEMENTED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-ASYNC-TOKIO, HB-DEP-ASYNC-SMOL]
+    delivered: [heptabao-platform-bakeoff model, runtime replacement-seam requirement]
+    blockers: [release pins, cancellation/deterministic-time/task-leak benchmark evidence, review]
+  H02-WP02:
+    title: HTTP and TLS stack bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-HTTP-HYPER, HB-DEP-HTTP-AXUM, HB-DEP-HTTP-REQWEST, HB-DEP-TLS-RUSTLS, HB-DEP-TLS-OPENSSL]
+    blockers: [smuggling/slowloris/redirect/TLS/mTLS matrix, unsafe inventory, exact pins, review]
+  H02-WP03:
+    title: cryptographic provider bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED
+    qualification_status: BLOCKED_SPECIALIST_REVIEW
+    candidates: [HB-DEP-CRYPTO-AWS-LC-RS, HB-DEP-CRYPTO-RUSTCRYPTO]
+    blockers: [external crypto reviewer, KAT and cross-provider suite, unsafe/FIPS disposition, exact pins]
+  H02-WP04:
+    title: secure-memory bakeoff
+    implementation_status: CANDIDATE_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-MEMORY-ZEROIZE-SECRECY]
+    blockers: [allocator-copy analysis, mlock/guarded-allocation profile, panic/core-dump tests, exact pin]
+  H02-WP05:
+    title: serialization, HCL, template and CEL bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-SERDE-JSON, HB-DEP-HCL-HCL-RS, HB-DEP-TEMPLATE-MINIJINJA, HB-DEP-CEL-INTERPRETER]
+    blockers: [OpenBao corpus, parser/template/CEL fuzz, resource bounds, exact pins]
+  H02-WP06:
+    title: PostgreSQL client bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-POSTGRES-TOKIO-POSTGRES, HB-DEP-POSTGRES-SQLX]
+    blockers: [transaction/cancellation/TLS/failover/pool benchmark evidence, exact pins]
+  H02-WP07:
+    title: Raft library bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED_NO_SELECTION
+    qualification_status: BLOCKED_SPECIALIST_REVIEW
+    candidates: [HB-DEP-RAFT-OPENRAFT, HB-DEP-RAFT-RAFT-RS]
+    blockers: [distributed-systems reviewer, deterministic FSM seam, model/snapshot/membership/Jepsen evidence, exact pins]
+  H02-WP08:
+    title: plugin gRPC bakeoff
+    implementation_status: CANDIDATE_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-GRPC-TONIC]
+    blockers: [Go interop, codegen provenance, mTLS/size/streaming tests, exact pin]
+  H02-WP09:
+    title: fuzz and model tooling bakeoff
+    implementation_status: CANDIDATES_IDENTIFIED
+    qualification_status: NOT_QUALIFIED
+    candidates: [HB-DEP-QUAL-CARGO-FUZZ-PROPTEST, HB-DEP-QUAL-LOOM-KANI-STATERIGHT]
+    blockers: [toolchain pins, corpus/counterexample replay, resource budgets, CI execution]
+  H02-WP10:
+    title: dependency vet, license, unsafe and replacement policy
+    implementation_status: SCHEMA_MODEL_AND_CATALOG_IMPLEMENTED
+    qualification_status: INFRASTRUCTURE_UNEXECUTED
+    delivered:
+      - schemas/heptabao_dependency_candidate_v1.schema.json
+      - schemas/heptabao_dependency_selection_receipt_v1.schema.json
+      - planning/HEPTABAO_H02_DEPENDENCY_BAKEOFF_V1.yaml
+      - crates/heptabao-platform-bakeoff
+    blockers: [cross-file validator, executable CI, legal/security/domain reviews, source pins]
+next_execution_order:
+  - validate every candidate object against the candidate schema
+  - correct and freeze catalog coverage counters
+  - capture exact releases, commits and source digests from primary upstream sources
+  - add transitive dependency and unsafe inventories
+  - implement runtime, TLS, crypto, storage, Raft and plugin replacement traits
+  - run candidate-specific correctness/security/benchmark profiles
+  - keep every candidate unselected until a signed prototype selection receipt exists
+promotion_rules:
+  H02_qualification: forbidden until H00 qualified, required H02 receipts are valid and every critical lane is PASS
+  prototype_selection: bounded engineering decision with authority_effect NONE
+  production_selection: forbidden before later profile qualification and a separate grant
+  crypto_implementation: forbidden before H02-WP03 prototype selection receipt
+  raft_implementation: forbidden before H02-WP07 prototype selection receipt
