@@ -47,7 +47,6 @@ FORBIDDEN_KEY = re.compile(
 FORBIDDEN_VALUE_MARKERS = (
     "-----BEGIN PRIVATE KEY-----",
     "-----BEGIN OPENSSH PRIVATE KEY-----",
-    "s.",
 )
 
 
