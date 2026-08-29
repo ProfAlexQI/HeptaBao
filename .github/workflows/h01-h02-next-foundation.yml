@@ -47,8 +47,18 @@ jobs:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          git diff --quiet
+          git diff --cached --quiet
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -154,9 +164,11 @@ jobs:
               'runner_name': os.environ.get('RUNNER_NAME'),
               'runner_os': os.environ.get('RUNNER_OS'),
               'runner_arch': os.environ.get('RUNNER_ARCH'),
-              'source_ref': os.environ.get('GITHUB_REF'),
-              'source_sha': os.environ.get('GITHUB_SHA'),
+              'source_ref': os.environ.get('GITHUB_HEAD_REF') or os.environ.get('GITHUB_REF_NAME') or os.environ.get('GITHUB_REF'),
+              'source_sha': output('git', 'rev-parse', 'HEAD'),
+              'event_sha': os.environ.get('GITHUB_SHA'),
               'tree_sha': output('git', 'rev-parse', 'HEAD^{tree}'),
+              'clean_tree': output('git', 'status', '--porcelain') == '',
               'cargo_lock_sha256': output('sha256sum', 'Cargo.lock').split()[0],
               'python': platform.python_version(),
               'rustc': output('rustc', '--version'),
@@ -169,3 +181,11 @@ jobs:
               handle.write('\n')
           print(json.dumps(evidence, sort_keys=True))
           PY
+
+      - name: Upload execution evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h01-h02-ci-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: h01-h02-ci-evidence.json
+          if-no-files-found: error
+          retention-days: 30
