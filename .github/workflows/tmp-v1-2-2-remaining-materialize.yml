@@ -1,0 +1,79 @@
+name: tmp-v1-2-2-remaining-materialize
+
+on:
+  push:
+    branches: ["codex/tmp-v1.2.2-remaining-materialize"]
+    paths:
+      - ".github/workflows/tmp-v1-2-2-remaining-materialize.yml"
+      - ".github/workflows/tmp-v1-2-2-remaining.trigger"
+      - "bootstrap/v122-remchunk-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-v1-2-2-remaining-materialize
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact transition commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: true
+      - name: Extract, verify and self-remove
+        shell: bash
+        env:
+          EXACT_PARENT: cedb6c95a5323f7004551087d75e2f57a1ec484a
+          ARCHIVE_SHA256: 6fc9c1069a0aeb425538f8c3bb5a13139fb374275523f509f1214307adeefc9f
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cat bootstrap/v122-remchunk-* > "$RUNNER_TEMP/remaining-overlay.tar.gz"
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$RUNNER_TEMP/remaining-overlay.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/remaining-overlay.tar.gz" -C .
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              "probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs": "e4c2021df0709b5a294e5a5f8648d752056a84e4",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs": "efac26b188933e0d3f4be5bb1ab4abe21c75920c",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs": "f39c9ae126a4d54ff955d2bd30d6f6d7bf1ab2fa",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/durable.rs": "79a9ec159a8ecc4e7e10134de12a51326d3d64ea",
+              "probes/h02/openraft-tokio/src/main.rs": "7153ace242c842076fb78fa61090cf23c242198b",
+              "scripts/validate_h02_blocker_closure_v1.py": "65264c4bfd86630bc0edbc7821f5f47235e67056",
+              "scripts/validate_h02_openraft_fault_lab_v1.py": "29030a55ffd978f34602c3483f652257aba13547",
+          }
+          for path, digest in expected.items():
+              actual = subprocess.run(["git", "hash-object", path], check=True, capture_output=True, text=True).stdout.strip()
+              assert actual == digest, (path, actual, digest)
+          PY
+          rm -f bootstrap/v122-remchunk-*
+          rm -f .github/workflows/tmp-v1-2-2-remaining-materialize.yml
+          rm -f .github/workflows/tmp-v1-2-2-remaining.trigger
+          git add -A
+          git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              "probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/durable.rs",
+              "probes/h02/openraft-tokio/src/main.rs",
+              "scripts/validate_h02_blocker_closure_v1.py",
+              "scripts/validate_h02_openraft_fault_lab_v1.py",
+          }
+          actual = set(subprocess.run(["git", "diff", "--cached", "--name-only"], check=True, capture_output=True, text=True).stdout.splitlines())
+          assert actual == expected, (actual, expected)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(h02): materialize unified Rust and validator blobs"
+          git push origin HEAD:codex/tmp-v1.2.2-remaining-materialize
