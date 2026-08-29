@@ -165,6 +165,10 @@ jobs:
           def digest(path):
               return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
+          manifest = root / summary["dependency_binding"]["manifest_path"]
+          lock = root / summary["dependency_binding"]["lock_path"]
+          assert digest(manifest) == summary["dependency_binding"]["manifest_digest"]
+          assert digest(lock) == summary["dependency_binding"]["lock_digest"]
           for entry in summary["entries"]:
               assert entry["process_started"] is True
               assert entry["exit_code"] == 0
@@ -174,6 +178,7 @@ jobs:
               assert entry["validation_errors"] == []
               assert digest(matrix_root / entry["stdout_path"]) == entry["stdout_digest"]
               assert digest(matrix_root / entry["stderr_path"]) == entry["stderr_digest"]
+              assert (matrix_root / entry["exit_path"]).read_text(encoding="utf-8").strip() == "0"
               command = json.dumps(entry["command"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
               assert "sha256:" + hashlib.sha256(command).hexdigest() == entry["command_digest"]
           assert summary["qualification"] is False
