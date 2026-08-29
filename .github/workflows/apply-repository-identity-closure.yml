@@ -1,4 +1,4 @@
-# Maintenance epoch: final source repair after temporarily closing stacked PR #25.
+# Maintenance epoch: deterministic source repair after temporarily closing stacked PR #25.
 name: apply-repository-identity-closure
 
 on:
@@ -34,11 +34,13 @@ jobs:
           git diff --quiet
           git diff --cached --quiet
 
-      - name: Apply exact repository identity and Oracle surface repairs
+      - name: Apply exact repository identity, Oracle and evidence-binding repairs
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
+          import hashlib
+          import json
           import re
           import subprocess
           from pathlib import Path
@@ -95,8 +97,58 @@ jobs:
               raise SystemExit(
                   f"expected invalid Oracle surface identity was absent: {required_surface_path}"
               )
-          if surface_occurrences < 1:
-              raise SystemExit("unexpectedly shallow Oracle surface replacement count")
+          if surface_occurrences != 1:
+              raise SystemExit(
+                  f"expected one Oracle surface replacement, observed {surface_occurrences}"
+              )
+
+          endpoint_path = Path("oracle/inventory/openbao-v2.6.2/endpoint-seed.yaml")
+          endpoint_data = endpoint_path.read_bytes()
+          endpoint_old = b"""  - id: HB-ENDPOINT-RAFT-SNAPSHOT-READ
+    path_template: /v1/sys/storage/raft/snapshot
+    methods: [GET]
+    operation_class: CLUSTER_OPERATION
+    exposure: PUBLIC_AUTHENTICATED
+    criticality: DATA_DURABILITY_CRITICAL
+    authentication_mode: TOKEN_REQUIRED
+    policy_capability: sudo
+    request_audit: REQUIRED
+    response_audit: REQUIRED
+    side_effects: [STORAGE, CLUSTER]
+    secret_response: true
+"""
+          endpoint_new = endpoint_old.replace(
+              b"    response_audit: REQUIRED\n",
+              b"    response_audit: REQUIRED_BEFORE_SECRET_RELEASE\n",
+          )
+          endpoint_count = endpoint_data.count(endpoint_old)
+          if endpoint_count != 1:
+              raise SystemExit(
+                  f"snapshot-read audit anchor drift: expected=1 observed={endpoint_count}"
+              )
+          endpoint_path.write_bytes(endpoint_data.replace(endpoint_old, endpoint_new, 1))
+          changed.append(endpoint_path.as_posix())
+
+          evidence_paths = {
+              "RUNTIME": Path("planning/evidence/h02/reference-model/local/runtime-5eed20260828cafe.json"),
+              "TLS": Path("planning/evidence/h02/reference-model/local/tls-5eed20260828cafe.json"),
+              "RAFT": Path("planning/evidence/h02/reference-model/local/raft-5eed20260828cafe.json"),
+          }
+          status_path = Path("qualifications/H02/H02-SEEDED-BEHAVIOR-IMPLEMENTATION-STATUS.json")
+          status = json.loads(status_path.read_text(encoding="utf-8"))
+          rows = status.get("local_execution", {}).get("reference_models", [])
+          rows_by_domain = {row.get("domain"): row for row in rows}
+          if set(rows_by_domain) != set(evidence_paths):
+              raise SystemExit(
+                  f"reference-model hash binding drift: {sorted(rows_by_domain)}"
+              )
+          for domain, path in evidence_paths.items():
+              rows_by_domain[domain]["file_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+          status_path.write_text(
+              json.dumps(status, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
 
           remaining_owner = [
               path.as_posix() for path in tracked if owner_old in path.read_bytes()
@@ -118,10 +170,11 @@ jobs:
 
           print(
               "applied deterministic source repairs: "
-              f"files={len(changed)} owner_occurrences={owner_occurrences} "
-              f"surface_occurrences={surface_occurrences}"
+              f"files={len(set(changed))} owner_occurrences={owner_occurrences} "
+              f"surface_occurrences={surface_occurrences} endpoint_audit_repairs=1 "
+              "reference_hash_bindings=3"
           )
-          for path in changed:
+          for path in sorted(set(changed)):
               print(path)
           PY
           git diff --check
@@ -161,5 +214,5 @@ jobs:
           git config user.name "heptabao-maintenance-bot"
           git config user.email "heptabao-maintenance-bot@users.noreply.github.com"
           git add -A
-          git commit -m "fix(evidence): close identity and Oracle surface blockers"
+          git commit -m "fix(evidence): close identity and Oracle safety blockers"
           git push origin "HEAD:${GITHUB_REF_NAME}"
