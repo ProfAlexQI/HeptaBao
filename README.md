@@ -5,9 +5,11 @@ HeptaBao is an independent clean-room Rust reimplementation program for an OpenB
 ## Current truth
 
 - Current plan: **V1.2**
+- Current operational amendment: **V1.2.1**
 - Current maturity: **governance / Oracle / platform bakeoff implementation**
 - Qualification: **false**
 - Compatibility claim: **false**
+- Dependency selections: **none**
 - Production, migration, release and mixed-cluster authority: **false**
 - Supported production versions: **none**
 
@@ -16,12 +18,19 @@ The repository contains governance contracts, Oracle inventory/normalization sca
 ## Normative entry points
 
 1. `docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md`
-2. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
-3. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml`
-4. `planning/HEPTABAO_BLOCKER_REGISTER_V1.yaml`
-5. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
+2. `docs/plan/HEPTABAO_PLAN_V1_2_1_EXECUTION_DEEPENING.md`
+3. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
+4. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml`
+5. `planning/HEPTABAO_BLOCKER_REGISTER_V1.yaml`
+6. `planning/HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml`
+7. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
+8. `docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md`
 
 A resolved state must be generated from the exact checked-out commit/tree. Historical V1.1 status and queue files are retained for audit history but are not the V1.2 current-state authority.
+
+## Blocker boundary
+
+Repository-controlled remediation is not closed until exact-head CI, complete matrix evidence and required independent review exist. Repository settings, reviewer identities, legal conclusions, incident operations, isolated signing, restricted Oracle capture, power-cut laboratories and independent reproduction remain `EXTERNAL_ACTION_REQUIRED` until their one-to-one action packages produce signed, current and independently verified completion objects.
 
 ## Security boundary
 
