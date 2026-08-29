@@ -1,5 +1,7 @@
-#[path = "openraft_fault_lab/cluster.rs"]
-mod cluster;
+mod cluster {
+    include!("openraft_fault_lab/cluster.rs");
+    include!("openraft_fault_lab/hostile_snapshot_guard.rs");
+}
 #[path = "inmemory_cluster/network.rs"]
 mod network;
 
@@ -106,26 +108,28 @@ async fn execute_hostile_parent(seed: u64) -> Value {
         value.get("kind").and_then(Value::as_str) == Some("phase")
             && value.get("phase").and_then(Value::as_str) == Some(HOSTILE_PHASE)
     });
-    let child_outcome = values
-        .iter()
-        .rev()
-        .find(|value| {
-            value.get("kind").and_then(Value::as_str) == Some("hostile_snapshot_child_result")
-        })
+    let child_result = values.iter().rev().find(|value| {
+        value.get("kind").and_then(Value::as_str) == Some("hostile_snapshot_child_result")
+    });
+    let child_outcome = child_result
         .and_then(|value| value.get("outcome"))
         .and_then(Value::as_str);
+    let child_detail = child_result
+        .and_then(|value| value.get("detail"))
+        .cloned()
+        .unwrap_or(Value::Null);
 
     let (status, outcome, reason) = if output.status.success() {
         match child_outcome {
             Some("REJECTED") => (
                 "EXECUTED_PASS",
                 "REJECTED_OR_ABORTED_AFTER_INJECTION",
-                "candidate returned an explicit rejection after stale committed snapshot injection",
+                "candidate explicitly rejected the stale snapshot or proved that it was an idempotent no-op across every guarded state surface",
             ),
             Some("ACCEPTED") => (
                 "EXECUTED_FAIL",
                 "ACCEPTED",
-                "candidate accepted a stale committed snapshot",
+                "candidate accepted a stale committed snapshot and changed guarded state",
             ),
             Some("TIMED_OUT_AFTER_INJECTION") => (
                 "BLOCKED",
@@ -161,6 +165,7 @@ async fn execute_hostile_parent(seed: u64) -> Value {
     result["detail"] = json!({
         "reason": reason,
         "child_reported_outcome": child_outcome,
+        "child_reported_detail": child_detail,
         "stderr_tail": stderr_tail(&output.stderr),
         "availability_note": if !output.status.success() && phase_reached {
             "process-fatal rejection preserves safety but remains an availability and production-promotion blocker"
@@ -191,7 +196,7 @@ async fn main() {
                 std::process::exit(2);
             }
         }
-        "hostile-snapshot-child" => match cluster::execute_hostile_snapshot_child(seed).await {
+        "hostile-snapshot-child" => match cluster::execute_hostile_snapshot_child_guarded(seed).await {
             Ok(result) => print_json(&result),
             Err(error) => {
                 print_json(&json!({
