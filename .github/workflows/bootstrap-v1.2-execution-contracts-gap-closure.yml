@@ -1,4 +1,4 @@
-name: bootstrap-v1-2-deepened-blocker-closure-macos
+name: export-tested-v1-2-deepened-blocker-closure
 
 on:
   push:
@@ -8,23 +8,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: bootstrap-v1-2-deepened-blocker-closure-macos
+  group: export-tested-v1-2-deepened-blocker-closure
   cancel-in-progress: false
 
 jobs:
-  materialize-validate-and-commit:
+  materialize-validate-and-export:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - name: Checkout exact transport head
+      - name: Checkout exact transport head without write credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify isolated transport ancestry and surface
         shell: bash
@@ -89,9 +89,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md")
-          lines = path.read_text(encoding="utf-8").splitlines()
-          path.write_text("\n".join(line.rstrip() for line in lines) + "\n", encoding="utf-8")
+          path = Path('docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          path.write_text('\n'.join(line.rstrip() for line in lines) + '\n', encoding='utf-8')
           PY
           rm -f \
             .github/workflows/apply-h02-candidate-binding-contract.yml \
@@ -163,23 +163,76 @@ jobs:
                   assert value is False, (key, value)
           print('authority boolean sentinels remain false')
           PY
-          changed="$(git diff --name-only f1d1a92783ef5fa8d69f12e1f8ccd7b9277422b3)"
-          test -n "$changed"
-          ! printf '%s\n' "$changed" | grep -E '^\.github/bootstrap-payload/|bootstrap-v1\.2-execution-contracts-gap-closure'
+          test -n "$(git diff --name-only HEAD)"
 
-      - name: Commit final tree without rebasing or rewriting tested input
+      - name: Export exact tested tree delta manifest
         shell: bash
         run: |
           set -euo pipefail
-          branch="$GITHUB_REF_NAME"
-          remote_head="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
-          test "$remote_head" = "$GITHUB_SHA" || {
-            printf 'branch drift: remote=%s tested=%s\n' "$remote_head" "$GITHUB_SHA" >&2
-            exit 1
+          mkdir -p "$RUNNER_TEMP/v1.2-tested-tree"
+          python3 - "$RUNNER_TEMP/v1.2-tested-tree/final-tree-manifest.json" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import stat
+          import subprocess
+          import sys
+
+          def zpaths(command: list[str]) -> list[str]:
+              raw = subprocess.check_output(command)
+              return [item.decode('utf-8') for item in raw.split(b'\0') if item]
+
+          tracked = zpaths(['git', 'diff', '--name-only', '-z', 'HEAD'])
+          untracked = zpaths(['git', 'ls-files', '--others', '--exclude-standard', '-z'])
+          paths = sorted(set(tracked + untracked))
+          assert paths, 'empty final delta'
+          entries = []
+          for name in paths:
+              path = pathlib.Path(name)
+              if not path.exists():
+                  entries.append({'path': name, 'delete': True})
+                  continue
+              assert path.is_file(), name
+              data = path.read_bytes()
+              mode = '100755' if os.stat(path).st_mode & stat.S_IXUSR else '100644'
+              entries.append({
+                  'path': name,
+                  'delete': False,
+                  'mode': mode,
+                  'type': 'blob',
+                  'sha256': hashlib.sha256(data).hexdigest(),
+                  'content_base64': base64.b64encode(data).decode('ascii'),
+              })
+          document = {
+              'schema': 'heptabao.tested-tree-delta.v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'source_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'workflow_run_id': os.environ['GITHUB_RUN_ID'],
+              'workflow_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'qualification': False,
+              'authority_effect': 'NONE',
+              'entry_count': len(entries),
+              'entries': entries,
           }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "docs(plan): land V1.2 execution contracts and close repository gaps"
-          git push origin "HEAD:refs/heads/$branch"
+          payload = json.dumps(document, sort_keys=True, separators=(',', ':')).encode('utf-8')
+          output = pathlib.Path(sys.argv[1])
+          output.write_bytes(payload + b'\n')
+          digest = hashlib.sha256(payload + b'\n').hexdigest()
+          pathlib.Path(output.parent / 'manifest.sha256').write_text(
+              f'{digest}  {output.name}\n', encoding='utf-8'
+          )
+          subprocess.run(['git', 'diff', '--binary', 'HEAD'], check=True, stdout=open(output.parent / 'final-tree.patch', 'wb'))
+          print(f'exported entries={len(entries)} manifest_sha256={digest}')
+          PY
+
+      - name: Upload tested final tree manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1-2-tested-tree-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.2-tested-tree/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
