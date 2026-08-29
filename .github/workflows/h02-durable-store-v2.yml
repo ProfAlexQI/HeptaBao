@@ -35,9 +35,9 @@ jobs:
           test "$actual_head" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           mkdir -p "$RUNNER_TEMP/results"
-          printf 'repository=%s\nref=%s\nevent=%s\ngithub_sha=%s\nsource_commit=%s\nsource_tree=%s\nrunner_id=%s\nrunner_name=%s\nos=%s\narch=%s\n' \
+          printf 'repository=%s\nref=%s\nevent=%s\ngithub_sha=%s\nsource_commit=%s\nsource_tree=%s\nrunner_tracking_id=%s\nrunner_name=%s\nos=%s\narch=%s\n' \
             "$GITHUB_REPOSITORY" "$GITHUB_REF" "$GITHUB_EVENT_NAME" "$GITHUB_SHA" \
-            "$actual_head" "$actual_tree" "$RUNNER_TRACKING_ID" "$RUNNER_NAME" \
+            "$actual_head" "$actual_tree" "${RUNNER_TRACKING_ID:-unavailable}" "$RUNNER_NAME" \
             "$RUNNER_OS" "$RUNNER_ARCH" \
             | tee "$RUNNER_TEMP/results/source-binding.txt"
       - name: Install exact Rust toolchains
