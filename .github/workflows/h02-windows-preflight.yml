@@ -1,0 +1,149 @@
+name: h02-windows-preflight
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-windows-preflight-v1"]
+    paths:
+      - ".github/workflows/h02-windows-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-windows-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consolidated-preflight:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install pinned validation dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Execute complete Python validation surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_repository_identity_v1.py
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_provenance_v1.py
+          python scripts/validate_evidence_objects_v1.py
+          python scripts/validate_oracle_foundation_v1.py
+          python scripts/validate_h01_h02_next_v1.py
+          python scripts/validate_dependency_bakeoff_v1.py
+          python scripts/validate_dependency_research_captures_v1.py
+          python scripts/h02_dependency_probe_v1.py validate-matrix
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.71.0 --profile minimal
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+          rustup run 1.71.0 rustc --version --verbose
+          rustup run 1.85.0 rustc --version --verbose
+          rustup run 1.98.0 rustc --version --verbose
+
+      - name: Execute Rust workspace gates on 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo fmt --all --check
+          rustup run 1.98.0 cargo test --workspace --all-targets --locked
+          rustup run 1.98.0 cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Execute every candidate manifest on both required toolchains
+        shell: bash
+        env:
+          SEED: "0x5eed20260828cafe"
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/heptabao-h02-windows-candidates"
+          rm -rf "$root"
+          mkdir -p "$root"
+          specs=(
+            "tokio-1_71|tokio-minimal|1.71.0"
+            "tokio-1_98|tokio-minimal|1.98.0"
+            "rustls-ring-1_71|rustls-ring|1.71.0"
+            "rustls-ring-1_98|rustls-ring|1.98.0"
+            "rustls-aws-lc-1_71|rustls-aws-lc|1.71.0"
+            "rustls-aws-lc-1_98|rustls-aws-lc|1.98.0"
+            "openraft-1_85|openraft-tokio|1.85.0"
+            "openraft-1_98|openraft-tokio|1.98.0"
+          )
+          for spec in "${specs[@]}"; do
+            IFS='|' read -r name subdir toolchain <<< "$spec"
+            work="$root/$name"
+            mkdir -p "$work"
+            cp -a probes/h02/. "$work/"
+            manifest="$work/$subdir/Cargo.toml"
+            export CARGO_TARGET_DIR="$root/target-$name"
+            rustup run "$toolchain" cargo generate-lockfile --manifest-path "$manifest"
+            rustup run "$toolchain" cargo test --locked --all-targets --manifest-path "$manifest"
+            rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" -- --seed "$SEED" > "$root/$name-output.jsonl"
+          done
+
+      - name: Execute real OpenRaft cluster and hostile fault paths
+        shell: bash
+        env:
+          SEED: "0x5eed20260828cafe"
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/heptabao-h02-windows-openraft"
+          rm -rf "$root"
+          mkdir -p "$root"
+          cp -a probes/h02/. "$root/"
+          manifest="$root/openraft-tokio/Cargo.toml"
+          export CARGO_TARGET_DIR="$root/target"
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path "$manifest"
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path "$manifest"
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed "$SEED" \
+            > "$root/cluster-output.jsonl"
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-fault-lab -- --mode hostile-snapshot-parent --seed "$SEED" \
+            > "$root/hostile-result.json"
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-fault-lab -- --mode linearizability-history --seed "$SEED" \
+            > "$root/linearizability-history.json"
+          python scripts/h02_linearizability_checker_v1.py check \
+            --history "$root/linearizability-history.json" \
+            --output "$root/linearizability-result.json"
+
+      - name: Preserve fail-closed scope statement
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Windows preflight passed for source-level diagnostics only."
+          echo "qualification=false selection_effect=NONE authority_effect=NONE"
