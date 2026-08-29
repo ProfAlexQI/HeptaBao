@@ -1,3 +1,4 @@
+# Maintenance epoch: final source repair after temporarily closing stacked PR #25.
 name: apply-repository-identity-closure
 
 on:
