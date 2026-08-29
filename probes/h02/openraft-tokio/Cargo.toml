@@ -31,10 +31,14 @@ openraft-memstore = { version = "=0.10.0-alpha.33" }
 openraft-rt = "=0.10.0-alpha.33"
 openraft-rt-tokio = "=0.10.0-alpha.33"
 openraft-macros = "=0.10.0-alpha.33"
-# Match the upstream alpha.33 workspace dependency instead of the newer 0.2.6
-# release, whose declared MSRV is above the candidate's Rust 1.85 profile.
-validit = "=0.2.5"
 serde_json = "=1.0.145"
 tokio = { version = "=1.53.1", default-features = false, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+
+# OpenRaft alpha.33 was authored against validit 0.2.5. That package was later
+# yanked from crates.io and can no longer be selected by a fresh resolver. Use
+# the exact upstream BumpVer commit as an auditable, immutable source override;
+# do not silently resolve validit 0.2.6, whose declared MSRV is Rust 1.88.
+[patch.crates-io]
+validit = { git = "https://github.com/drmingdrmer/validit.git", rev = "7016fa5e072a86092928144b3a3040381e6964e9" }
 
 [workspace]
