@@ -104,19 +104,20 @@ jobs:
 
           endpoint_path = Path("oracle/inventory/openbao-v2.6.2/endpoint-seed.yaml")
           endpoint_data = endpoint_path.read_bytes()
-          endpoint_old = b"""  - id: HB-ENDPOINT-RAFT-SNAPSHOT-READ
-    path_template: /v1/sys/storage/raft/snapshot
-    methods: [GET]
-    operation_class: CLUSTER_OPERATION
-    exposure: PUBLIC_AUTHENTICATED
-    criticality: DATA_DURABILITY_CRITICAL
-    authentication_mode: TOKEN_REQUIRED
-    policy_capability: sudo
-    request_audit: REQUIRED
-    response_audit: REQUIRED
-    side_effects: [STORAGE, CLUSTER]
-    secret_response: true
-"""
+          endpoint_old = (
+              b"  - id: HB-ENDPOINT-RAFT-SNAPSHOT-READ\n"
+              b"    path_template: /v1/sys/storage/raft/snapshot\n"
+              b"    methods: [GET]\n"
+              b"    operation_class: CLUSTER_OPERATION\n"
+              b"    exposure: PUBLIC_AUTHENTICATED\n"
+              b"    criticality: DATA_DURABILITY_CRITICAL\n"
+              b"    authentication_mode: TOKEN_REQUIRED\n"
+              b"    policy_capability: sudo\n"
+              b"    request_audit: REQUIRED\n"
+              b"    response_audit: REQUIRED\n"
+              b"    side_effects: [STORAGE, CLUSTER]\n"
+              b"    secret_response: true\n"
+          )
           endpoint_new = endpoint_old.replace(
               b"    response_audit: REQUIRED\n",
               b"    response_audit: REQUIRED_BEFORE_SECRET_RELEASE\n",
