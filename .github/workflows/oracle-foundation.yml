@@ -116,7 +116,17 @@ jobs:
           enabled = [name for name, value in status['authority_flags'].items() if value]
           if enabled:
               raise SystemExit(f'unexpected H01 authority: {enabled}')
-          if any(status['capture_evidence'].values()):
-              raise SystemExit('H01 currently has no real capture/review/qualification evidence')
-          print('H01 foundation validated; capture=0 qualified=0 authority=NONE')
+
+          evidence = status['capture_evidence']
+          expected = {
+              'raw_restricted_fixtures': 0,
+              'black_box_sanitized_fixtures': 0,
+              'synthetic_contract_fixtures': 1,
+              'signed_provenance_transfers': 0,
+              'reviewed_normalization_rules': 0,
+              'qualified_fixtures': 0,
+          }
+          if evidence != expected:
+              raise SystemExit(f'unexpected H01 evidence maturity: {evidence!r}')
+          print('H01 foundation validated; synthetic=1 real-capture=0 qualified=0 authority=NONE')
           PY
