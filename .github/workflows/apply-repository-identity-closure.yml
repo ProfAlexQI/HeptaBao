@@ -33,44 +33,93 @@ jobs:
           git diff --quiet
           git diff --cached --quiet
 
-      - name: Replace deprecated owner identity in tracked bytes
+      - name: Apply exact repository identity and Oracle surface repairs
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
+          import re
           import subprocess
           from pathlib import Path
 
-          old = ("ProfAlex" + "QI").encode("utf-8")
-          new = b"ProfHepta"
-          tracked = [Path(item.decode("utf-8")) for item in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0") if item]
-          changed = []
-          occurrences = 0
+          owner_old = ("ProfAlex" + "QI").encode("utf-8")
+          owner_new = b"ProfHepta"
+          surface_old = ("HB-SURFACE-" + "CLI").encode("utf-8")
+          surface_new = b"HB-SURFACE-CLI-ROOT"
+          surface_pattern = re.compile(
+              rb"(?<![A-Z0-9._-])" + re.escape(surface_old) + rb"(?![A-Z0-9._-])"
+          )
+
+          tracked = [
+              Path(item.decode("utf-8"))
+              for item in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+              if item
+          ]
+          changed: list[str] = []
+          owner_occurrences = 0
+          surface_occurrences = 0
+
           for path in tracked:
               data = path.read_bytes()
-              count = data.count(old)
-              if not count:
+              owner_count = data.count(owner_old)
+              repaired = data.replace(owner_old, owner_new)
+              surface_count = len(surface_pattern.findall(repaired))
+              repaired = surface_pattern.sub(surface_new, repaired)
+              if repaired == data:
                   continue
-              path.write_bytes(data.replace(old, new))
+              path.write_bytes(repaired)
               changed.append(path.as_posix())
-              occurrences += count
+              owner_occurrences += owner_count
+              surface_occurrences += surface_count
 
-          required = {
+          required_owner_paths = {
               ".github/CODEOWNERS",
               "schemas/heptabao_dependency_probe_evidence_v1.schema.json",
               "schemas/heptabao_qualification_receipt_v2.schema.json",
               "scripts/h02_dependency_probe_v1.py",
               "scripts/validate_plan_v2.py",
           }
-          missing = sorted(required - set(changed))
-          if missing:
-              raise SystemExit(f"expected deprecated owner bindings were absent: {missing}")
-          if occurrences < len(required):
-              raise SystemExit(f"unexpectedly shallow replacement count: {occurrences}")
-          remaining = [path.as_posix() for path in tracked if old in path.read_bytes()]
-          if remaining:
-              raise SystemExit(f"deprecated owner remains in tracked files: {remaining}")
-          print(f"canonicalized repository owner: files={len(changed)} occurrences={occurrences}")
+          missing_owner_paths = sorted(required_owner_paths - set(changed))
+          if missing_owner_paths:
+              raise SystemExit(
+                  f"expected deprecated owner bindings were absent: {missing_owner_paths}"
+              )
+          if owner_occurrences < len(required_owner_paths):
+              raise SystemExit(
+                  f"unexpectedly shallow owner replacement count: {owner_occurrences}"
+              )
+
+          required_surface_path = "oracle/inventory/openbao-v2.6.2/surface-catalog.yaml"
+          if required_surface_path not in changed:
+              raise SystemExit(
+                  f"expected invalid Oracle surface identity was absent: {required_surface_path}"
+              )
+          if surface_occurrences < 1:
+              raise SystemExit("unexpectedly shallow Oracle surface replacement count")
+
+          remaining_owner = [
+              path.as_posix() for path in tracked if owner_old in path.read_bytes()
+          ]
+          if remaining_owner:
+              raise SystemExit(
+                  f"deprecated owner remains in tracked files: {remaining_owner}"
+              )
+
+          remaining_surface = [
+              path.as_posix()
+              for path in tracked
+              if surface_pattern.search(path.read_bytes()) is not None
+          ]
+          if remaining_surface:
+              raise SystemExit(
+                  f"invalid Oracle surface identity remains in tracked files: {remaining_surface}"
+              )
+
+          print(
+              "applied deterministic source repairs: "
+              f"files={len(changed)} owner_occurrences={owner_occurrences} "
+              f"surface_occurrences={surface_occurrences}"
+          )
           for path in changed:
               print(path)
           PY
@@ -102,13 +151,14 @@ jobs:
           python scripts/h02_dependency_probe_v1.py validate-matrix
           python -m unittest discover -s tests -p 'test_*.py' -v
 
-      - name: Commit exact replacement batch
+      - name: Retire one-shot workflow and commit exact repair batch
         shell: bash
         run: |
           set -euo pipefail
+          rm -- .github/workflows/apply-repository-identity-closure.yml
           test -n "$(git status --porcelain)"
           git config user.name "heptabao-maintenance-bot"
           git config user.email "heptabao-maintenance-bot@users.noreply.github.com"
-          git add -u
-          git commit -m "fix(evidence): bind repository ownership and receipts to canonical identity"
+          git add -A
+          git commit -m "fix(evidence): close identity and Oracle surface blockers"
           git push origin "HEAD:${GITHUB_REF_NAME}"
