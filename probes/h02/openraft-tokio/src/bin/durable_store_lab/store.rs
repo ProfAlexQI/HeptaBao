@@ -21,6 +21,10 @@ use tokio::sync::Mutex;
 
 const LOG_MAGIC: [u8; 8] = *b"HBRLOG01";
 const STATE_BUNDLE_MAGIC: [u8; 8] = *b"HBRSB001";
+const INITIALIZATION_MAGIC: [u8; 8] = *b"HBRINI01";
+const INITIALIZATION_MARKER_FILE: &str = "initialized.bin";
+const LOG_DOMAIN: &str = "raft-log";
+const STATE_MACHINE_DOMAIN: &str = "state-machine";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -89,35 +93,81 @@ fn decode_envelope(magic: [u8; 8], bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(payload.to_vec())
 }
 
-fn recover_interrupted_replace(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        return Ok(());
+fn ensure_real_directory(path: &Path, label: &str) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(invalid(format!("{label} is not a real directory"))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(path)?;
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_dir() {
+                Ok(())
+            } else {
+                Err(invalid(format!("{label} is not a real directory")))
+            }
+        }
+        Err(error) => Err(error),
     }
+}
+
+fn regular_file_status(path: &Path, label: &str) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(invalid(format!("{label} is not a regular file"))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn require_real_directory(path: &Path, label: &str) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(invalid(format!("{label} is not a real directory"))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(invalid(format!("{label} does not exist")))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn replacement_candidates(path: &Path, suffix: &str) -> io::Result<Vec<PathBuf>> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid(format!("{} has no parent directory", path.display())))?;
     if !parent.is_dir() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| invalid("durable file name is not valid UTF-8"))?;
     let prefix = format!(".{file_name}.");
-    let mut previous = fs::read_dir(parent)?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|candidate| {
-            candidate
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".previous"))
-        })
-        .collect::<Vec<_>>();
-    previous.sort();
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(parent)? {
+        let candidate = entry?.path();
+        let matches = candidate
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(suffix));
+        if matches {
+            candidates.push(candidate);
+        }
+    }
+    candidates.sort();
+    Ok(candidates)
+}
+
+fn recover_interrupted_replace(path: &Path) -> io::Result<()> {
+    if regular_file_status(path, "durable replacement target")? {
+        return Ok(());
+    }
+    let previous = replacement_candidates(path, ".previous")?;
     match previous.as_slice() {
         [] => Ok(()),
         [candidate] => {
+            if !regular_file_status(candidate, "interrupted replacement candidate")? {
+                return Err(invalid("interrupted replacement candidate disappeared"));
+            }
             fs::rename(candidate, path)?;
             sync_parent(path)
         }
@@ -126,6 +176,48 @@ fn recover_interrupted_replace(path: &Path) -> io::Result<()> {
             path.display()
         ))),
     }
+}
+
+fn discard_stale_previous_after_validation(path: &Path) -> io::Result<()> {
+    if !regular_file_status(path, "validated durable current generation")? {
+        return Err(invalid(format!(
+            "cannot retire replacement history without current generation: {}",
+            path.display()
+        )));
+    }
+    let previous = replacement_candidates(path, ".previous")?;
+    match previous.as_slice() {
+        [] => Ok(()),
+        [candidate] => {
+            if !regular_file_status(candidate, "stale replacement candidate")? {
+                return Err(invalid("stale replacement candidate is not a regular file"));
+            }
+            fs::remove_file(candidate)?;
+            sync_parent(path)
+        }
+        _ => Err(invalid(format!(
+            "multiple stale replacement candidates for {}",
+            path.display()
+        ))),
+    }
+}
+
+fn ensure_create_location_is_fresh(root: &Path, data_path: &Path) -> io::Result<()> {
+    let entries = fs::read_dir(root)?
+        .map(|entry| entry.map(|value| value.path()))
+        .collect::<io::Result<Vec<_>>>()?;
+    if !entries.is_empty() {
+        return Err(invalid(format!(
+            "create-new refused nonempty store directory for {}: {}",
+            data_path.display(),
+            entries
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    Ok(())
 }
 
 fn read_payload(path: &Path, magic: [u8; 8]) -> io::Result<Vec<u8>> {
@@ -228,6 +320,74 @@ where
     atomic_write(path, magic, &payload)
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistentInitializationMarker {
+    format_version: u16,
+    domain: String,
+    authoritative_file: String,
+}
+
+impl PersistentInitializationMarker {
+    fn new(domain: &str, authoritative_file: &str) -> Self {
+        Self {
+            format_version: 1,
+            domain: domain.to_owned(),
+            authoritative_file: authoritative_file.to_owned(),
+        }
+    }
+
+    fn validate(&self, expected_domain: &str, expected_file: &str) -> io::Result<()> {
+        if self.format_version != 1 {
+            return Err(invalid("unsupported initialization marker version"));
+        }
+        if self.domain != expected_domain {
+            return Err(invalid(format!(
+                "initialization marker domain mismatch: expected {expected_domain}, got {}",
+                self.domain
+            )));
+        }
+        if self.authoritative_file != expected_file {
+            return Err(invalid(format!(
+                "initialization marker file mismatch: expected {expected_file}, got {}",
+                self.authoritative_file
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn initialization_marker_path(root: &Path) -> PathBuf {
+    root.join(INITIALIZATION_MARKER_FILE)
+}
+
+fn read_initialization_marker(
+    root: &Path,
+    expected_domain: &str,
+    expected_file: &str,
+) -> io::Result<Option<PersistentInitializationMarker>> {
+    let path = initialization_marker_path(root);
+    recover_interrupted_replace(&path)?;
+    if !regular_file_status(&path, "initialization marker")? {
+        return Ok(None);
+    }
+    let marker: PersistentInitializationMarker = read_json(&path, INITIALIZATION_MAGIC)?;
+    marker.validate(expected_domain, expected_file)?;
+    discard_stale_previous_after_validation(&path)?;
+    Ok(Some(marker))
+}
+
+fn persist_initialization_marker(
+    root: &Path,
+    domain: &str,
+    authoritative_file: &str,
+) -> io::Result<()> {
+    write_json(
+        &initialization_marker_path(root),
+        INITIALIZATION_MAGIC,
+        &PersistentInitializationMarker::new(domain, authoritative_file),
+    )
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistentLogState {
     last_purged_log_id: Option<LogIdOf<TypeConfig>>,
@@ -263,16 +423,69 @@ pub struct DurableLogStore {
 }
 
 impl DurableLogStore {
-    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn create(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref();
-        fs::create_dir_all(root)?;
+        ensure_real_directory(root, "raft log store root")?;
         let state_path = root.join("raft-log.bin");
-        let state = if state_path.is_file() {
-            read_json(&state_path, LOG_MAGIC)?
-        } else {
-            PersistentLogState::default()
-        };
+        ensure_create_location_is_fresh(root, &state_path)?;
+        let state = PersistentLogState::default();
+        write_json(&state_path, LOG_MAGIC, &state)?;
+        persist_initialization_marker(root, LOG_DOMAIN, "raft-log.bin")?;
+        Ok(Self {
+            state_path,
+            state: Arc::new(Mutex::new(state)),
+        })
+    }
+
+    pub fn open_existing(root: impl AsRef<Path>) -> io::Result<Self> {
+        let root = root.as_ref();
+        require_real_directory(root, "raft log store root")?;
+        let state_path = root.join("raft-log.bin");
+        let marker = read_initialization_marker(root, LOG_DOMAIN, "raft-log.bin")?;
+        if marker.is_none() {
+            return Err(invalid(
+                "raft log store is not initialized; explicit legacy adoption is required",
+            ));
+        }
+        recover_interrupted_replace(&state_path)?;
+        if !regular_file_status(&state_path, "authoritative raft log generation")? {
+            return Err(invalid(
+                "initialized raft log store is missing its authoritative generation",
+            ));
+        }
+        let state: PersistentLogState = read_json(&state_path, LOG_MAGIC)?;
         state.validate()?;
+        discard_stale_previous_after_validation(&state_path)?;
+        Ok(Self {
+            state_path,
+            state: Arc::new(Mutex::new(state)),
+        })
+    }
+
+    pub fn adopt_legacy(root: impl AsRef<Path>) -> io::Result<Self> {
+        let root = root.as_ref();
+        require_real_directory(root, "legacy raft log store root")?;
+        let state_path = root.join("raft-log.bin");
+        if read_initialization_marker(root, LOG_DOMAIN, "raft-log.bin")?.is_some() {
+            return Err(invalid(
+                "raft log store already has an initialization marker; use open_existing",
+            ));
+        }
+        if !replacement_candidates(&initialization_marker_path(root), ".tmp")?.is_empty() {
+            return Err(invalid(
+                "legacy adoption refused unresolved initialization-marker temporary artifacts",
+            ));
+        }
+        recover_interrupted_replace(&state_path)?;
+        if !regular_file_status(&state_path, "legacy authoritative raft log generation")? {
+            return Err(invalid(
+                "legacy raft log store has no authoritative generation",
+            ));
+        }
+        let state: PersistentLogState = read_json(&state_path, LOG_MAGIC)?;
+        state.validate()?;
+        discard_stale_previous_after_validation(&state_path)?;
+        persist_initialization_marker(root, LOG_DOMAIN, "raft-log.bin")?;
         Ok(Self {
             state_path,
             state: Arc::new(Mutex::new(state)),
@@ -510,18 +723,70 @@ pub struct DurableStateMachine {
 }
 
 impl DurableStateMachine {
-    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn create(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref();
-        fs::create_dir_all(root)?;
+        ensure_real_directory(root, "state-machine store root")?;
         let bundle_path = root.join("state-bundle.bin");
-        let bundle = if bundle_path.is_file() {
-            read_json(&bundle_path, STATE_BUNDLE_MAGIC)?
-        } else {
-            let initial = PersistentStateBundle::default();
-            write_json(&bundle_path, STATE_BUNDLE_MAGIC, &initial)?;
-            initial
-        };
+        ensure_create_location_is_fresh(root, &bundle_path)?;
+        let bundle = PersistentStateBundle::default();
+        write_json(&bundle_path, STATE_BUNDLE_MAGIC, &bundle)?;
+        persist_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?;
+        Ok(Self {
+            bundle_path,
+            bundle: Arc::new(Mutex::new(bundle)),
+        })
+    }
+
+    pub fn open_existing(root: impl AsRef<Path>) -> io::Result<Self> {
+        let root = root.as_ref();
+        require_real_directory(root, "state-machine store root")?;
+        let bundle_path = root.join("state-bundle.bin");
+        let marker =
+            read_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?;
+        if marker.is_none() {
+            return Err(invalid(
+                "state machine is not initialized; explicit legacy adoption is required",
+            ));
+        }
+        recover_interrupted_replace(&bundle_path)?;
+        if !regular_file_status(&bundle_path, "authoritative state-machine generation")? {
+            return Err(invalid(
+                "initialized state machine is missing its authoritative generation",
+            ));
+        }
+        let bundle: PersistentStateBundle = read_json(&bundle_path, STATE_BUNDLE_MAGIC)?;
         bundle.validate()?;
+        discard_stale_previous_after_validation(&bundle_path)?;
+        Ok(Self {
+            bundle_path,
+            bundle: Arc::new(Mutex::new(bundle)),
+        })
+    }
+
+    pub fn adopt_legacy(root: impl AsRef<Path>) -> io::Result<Self> {
+        let root = root.as_ref();
+        require_real_directory(root, "legacy state-machine store root")?;
+        let bundle_path = root.join("state-bundle.bin");
+        if read_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?.is_some() {
+            return Err(invalid(
+                "state machine already has an initialization marker; use open_existing",
+            ));
+        }
+        if !replacement_candidates(&initialization_marker_path(root), ".tmp")?.is_empty() {
+            return Err(invalid(
+                "legacy adoption refused unresolved initialization-marker temporary artifacts",
+            ));
+        }
+        recover_interrupted_replace(&bundle_path)?;
+        if !regular_file_status(&bundle_path, "legacy authoritative state-machine generation")? {
+            return Err(invalid(
+                "legacy state machine has no authoritative generation",
+            ));
+        }
+        let bundle: PersistentStateBundle = read_json(&bundle_path, STATE_BUNDLE_MAGIC)?;
+        bundle.validate()?;
+        discard_stale_previous_after_validation(&bundle_path)?;
+        persist_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?;
         Ok(Self {
             bundle_path,
             bundle: Arc::new(Mutex::new(bundle)),
@@ -705,11 +970,15 @@ pub fn flip_first_payload_byte(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableLogStore, DurableStateMachine, LOG_MAGIC, PersistentLogState, PersistentStateBundle,
-        RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, read_json, write_json,
+        DurableLogStore, DurableStateMachine, INITIALIZATION_MAGIC, INITIALIZATION_MARKER_FILE,
+        LOG_DOMAIN,
+        LOG_MAGIC, PersistentInitializationMarker, PersistentLogState, PersistentStateBundle,
+        RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, flip_first_payload_byte,
+        read_json, write_json,
     };
     use std::collections::BTreeMap;
     use std::fs;
+    use std::io;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio::sync::Mutex;
@@ -781,6 +1050,239 @@ mod tests {
         assert_eq!(recovered.generation, expected.generation);
         assert!(target.is_file());
         assert!(!previous.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_create_and_existing_reopen_are_explicit() {
+        let log_root = root("fresh-log-lifecycle");
+        let log = DurableLogStore::create(&log_root).expect("create log store");
+        assert!(log.state_path().is_file());
+        assert!(log_root.join(INITIALIZATION_MARKER_FILE).is_file());
+        DurableLogStore::open_existing(&log_root).expect("reopen log store");
+
+        let state_root = root("fresh-state-lifecycle");
+        let state = DurableStateMachine::create(&state_root).expect("create state machine");
+        assert!(state.state_path().is_file());
+        assert!(state_root.join(INITIALIZATION_MARKER_FILE).is_file());
+        DurableStateMachine::open_existing(&state_root).expect("reopen state machine");
+
+        let _ = fs::remove_dir_all(log_root);
+        let _ = fs::remove_dir_all(state_root);
+    }
+
+    #[test]
+    fn create_new_rejects_nonempty_directory() {
+        let root = root("create-nonempty");
+        fs::create_dir_all(&root).expect("test root");
+        fs::write(root.join("unexpected"), b"occupied").expect("occupy root");
+        let error = DurableLogStore::create(&root)
+            .expect_err("create-new must reject an occupied root");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_initialized_log_generation_fails_closed() {
+        let root = root("missing-log-generation");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        fs::remove_file(store.state_path()).expect("remove authoritative log generation");
+        let error = DurableLogStore::open_existing(&root)
+            .expect_err("initialized log store must reject missing generation");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_initialized_state_generation_fails_closed() {
+        let root = root("missing-state-generation");
+        let state = DurableStateMachine::create(&root).expect("create state machine");
+        fs::remove_file(state.state_path()).expect("remove authoritative state generation");
+        let error = DurableStateMachine::open_existing(&root)
+            .expect_err("initialized state machine must reject missing generation");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deleted_store_directory_is_not_silently_recreated_on_reopen() {
+        let root = root("deleted-store-directory");
+        DurableLogStore::create(&root).expect("create log store");
+        fs::remove_dir_all(&root).expect("remove store directory");
+        let error = DurableLogStore::open_existing(&root)
+            .expect_err("reopen must not recreate a deleted store");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn legacy_generation_requires_explicit_validated_adoption() {
+        let root = root("legacy-generation-adoption");
+        fs::create_dir_all(&root).expect("test root");
+        let path = root.join("raft-log.bin");
+        write_json(&path, LOG_MAGIC, &PersistentLogState::default()).expect("legacy state");
+        assert!(!root.join(INITIALIZATION_MARKER_FILE).exists());
+        assert!(DurableLogStore::open_existing(&root).is_err());
+
+        let store = DurableLogStore::adopt_legacy(&root).expect("adopt legacy generation");
+        assert!(store.state_path().is_file());
+        assert!(root.join(INITIALIZATION_MARKER_FILE).is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_legacy_generation_requires_explicit_validated_adoption() {
+        let root = root("legacy-state-generation-adoption");
+        fs::create_dir_all(&root).expect("test root");
+        let path = root.join("state-bundle.bin");
+        write_json(&path, STATE_BUNDLE_MAGIC, &PersistentStateBundle::default())
+            .expect("legacy state bundle");
+        assert!(DurableStateMachine::open_existing(&root).is_err());
+        DurableStateMachine::adopt_legacy(&root).expect("adopt legacy state bundle");
+        assert!(root.join(INITIALIZATION_MARKER_FILE).is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn valid_current_generation_discards_one_stale_previous() {
+        let root = root("stale-previous-cleanup");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        let previous = root.join(".raft-log.bin.1.1.previous");
+        fs::copy(store.state_path(), &previous).expect("copy stale previous");
+        DurableLogStore::open_existing(&root).expect("validate current generation");
+        assert!(!previous.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_current_generation_never_falls_back_to_previous() {
+        let root = root("corrupt-current-no-rollback");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        let previous = root.join(".raft-log.bin.1.1.previous");
+        fs::copy(store.state_path(), &previous).expect("copy previous generation");
+        flip_first_payload_byte(store.state_path()).expect("corrupt current generation");
+
+        assert!(DurableLogStore::open_existing(&root).is_err());
+        assert!(store.state_path().is_file());
+        assert!(previous.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn multiple_previous_generations_are_ambiguous_and_fail_closed() {
+        let root = root("ambiguous-previous-generations");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        let first = root.join(".raft-log.bin.1.1.previous");
+        let second = root.join(".raft-log.bin.1.2.previous");
+        fs::copy(store.state_path(), &first).expect("copy first previous");
+        fs::copy(store.state_path(), &second).expect("copy second previous");
+        fs::remove_file(store.state_path()).expect("remove current generation");
+
+        assert!(DurableLogStore::open_existing(&root).is_err());
+        assert!(first.is_file());
+        assert!(second.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_initialization_marker_fails_closed() {
+        let root = root("corrupt-initialization-marker");
+        DurableStateMachine::create(&root).expect("create state machine");
+        flip_first_payload_byte(&root.join(INITIALIZATION_MARKER_FILE))
+            .expect("corrupt initialization marker");
+        assert!(DurableStateMachine::open_existing(&root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn marker_domain_or_authoritative_file_drift_is_rejected() {
+        let root = root("marker-domain-drift");
+        fs::create_dir_all(&root).expect("test root");
+        write_json(
+            &root.join("raft-log.bin"),
+            LOG_MAGIC,
+            &PersistentLogState::default(),
+        )
+        .expect("write log generation");
+        write_json(
+            &root.join(INITIALIZATION_MARKER_FILE),
+            INITIALIZATION_MAGIC,
+            &PersistentInitializationMarker::new("state-machine", "state-bundle.bin"),
+        )
+        .expect("write wrong marker");
+        assert!(DurableLogStore::open_existing(&root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_marker_previous_file_is_recovered() {
+        let root = root("marker-replace-recovery");
+        fs::create_dir_all(&root).expect("test root");
+        write_json(
+            &root.join("raft-log.bin"),
+            LOG_MAGIC,
+            &PersistentLogState::default(),
+        )
+        .expect("write log generation");
+        let previous = root.join(format!(".{INITIALIZATION_MARKER_FILE}.1.1.previous"));
+        write_json(
+            &previous,
+            INITIALIZATION_MAGIC,
+            &PersistentInitializationMarker::new(LOG_DOMAIN, "raft-log.bin"),
+        )
+        .expect("write previous marker");
+        DurableLogStore::open_existing(&root).expect("recover marker previous file");
+        assert!(root.join(INITIALIZATION_MARKER_FILE).is_file());
+        assert!(!previous.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn non_regular_authoritative_generation_is_rejected() {
+        let root = root("non-regular-generation");
+        fs::create_dir_all(root.join("raft-log.bin")).expect("generation directory");
+        let error = DurableLogStore::adopt_legacy(&root)
+            .expect_err("directory cannot be an authoritative generation");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_storage_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let target = root("symlink-root-target");
+        let link = root("symlink-root-link");
+        fs::create_dir_all(&target).expect("target root");
+        symlink(&target, &link).expect("create root symlink");
+        assert!(DurableLogStore::create(&link).is_err());
+        let _ = fs::remove_file(link);
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_initialization_marker_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let root = root("symlink-marker");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        let marker = root.join(INITIALIZATION_MARKER_FILE);
+        fs::remove_file(&marker).expect("remove marker");
+        symlink(store.state_path(), &marker).expect("create marker symlink");
+        assert!(DurableLogStore::open_existing(&root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_authoritative_generation_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let root = root("symlink-generation");
+        let store = DurableLogStore::create(&root).expect("create log store");
+        let state_path = store.state_path().to_path_buf();
+        let saved = root.join("saved-generation.bin");
+        fs::rename(&state_path, &saved).expect("move generation");
+        symlink(&saved, &state_path).expect("create generation symlink");
+        assert!(DurableLogStore::open_existing(&root).is_err());
         let _ = fs::remove_dir_all(root);
     }
 

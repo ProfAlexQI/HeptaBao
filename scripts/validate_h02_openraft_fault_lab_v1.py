@@ -18,6 +18,7 @@ MANIFEST = ROOT / "probes/h02/openraft-tokio/Cargo.toml"
 LOCK = ROOT / "probes/h02/openraft-tokio/Cargo.lock"
 MAIN = ROOT / "probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs"
 CLUSTER = ROOT / "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs"
+HOSTILE_GUARD = ROOT / "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/hostile_snapshot_guard.rs"
 NETWORK = ROOT / "probes/h02/openraft-tokio/src/bin/inmemory_cluster/network.rs"
 CHECKER = ROOT / "scripts/h02_linearizability_checker_v1.py"
 COLLECTOR = ROOT / "scripts/h02_openraft_fault_lab_evidence_v1.py"
@@ -64,7 +65,21 @@ def require_tokens(path: Path, tokens: list[str]) -> None:
 
 def main() -> int:
     try:
-        required = [PLAN, QUEUE, MANIFEST, LOCK, MAIN, CLUSTER, NETWORK, CHECKER, COLLECTOR, WORKFLOW, *SCHEMAS, *TESTS]
+        required = [
+    PLAN,
+    QUEUE,
+    MANIFEST,
+    LOCK,
+    MAIN,
+    CLUSTER,
+    HOSTILE_GUARD,
+    NETWORK,
+    CHECKER,
+    COLLECTOR,
+    WORKFLOW,
+    *SCHEMAS,
+    *TESTS,
+]
         for path in required:
             require(path.is_file(), f"missing required file: {path.relative_to(ROOT)}")
 
@@ -126,7 +141,14 @@ def main() -> int:
             require(mutable_selector not in manifest, f"mutable source selector forbidden: {mutable_selector}")
         require(LOCK.stat().st_size > 0, "committed Cargo.lock is empty")
 
-        source = "\n".join([MAIN.read_text(encoding="utf-8"), CLUSTER.read_text(encoding="utf-8"), NETWORK.read_text(encoding="utf-8")])
+        source = "\n".join(
+    [
+        MAIN.read_text(encoding="utf-8"),
+        CLUSTER.read_text(encoding="utf-8"),
+        HOSTILE_GUARD.read_text(encoding="utf-8"),
+        NETWORK.read_text(encoding="utf-8"),
+    ]
+)
         for token in [
             "hostile-snapshot-child",
             "ABOUT_TO_INSTALL_STALE_COMMITTED_SNAPSHOT",
@@ -134,6 +156,10 @@ def main() -> int:
             "kill_on_drop",
             "install_full_snapshot",
             "snapshot.meta.last_log_id",
+            "execute_hostile_snapshot_child_guarded",
+            "guarded_state_unchanged",
+            "metrics_unchanged",
+            "state_machine_unchanged",
             "get_snapshot",
             "tokio::spawn",
             "ensure_linearizable(ReadPolicy::ReadIndex)",
@@ -145,6 +171,16 @@ def main() -> int:
             require(token in source, f"fault-lab source token missing: {token}")
         for marker in ["PRIVATE KEY", "root_token", "unseal_share"]:
             require(marker not in source, f"secret marker in source: {marker}")
+        cluster_source = CLUSTER.read_text(encoding="utf-8")
+        require(
+            "pub async fn execute_hostile_snapshot_child(" not in cluster_source,
+            "obsolete unguarded stale-snapshot helper must not remain compiled",
+        )
+        require(
+            'include!("openraft_fault_lab/hostile_snapshot_guard.rs")'
+            in MAIN.read_text(encoding="utf-8"),
+            "fault-lab main must compile the guarded stale-snapshot implementation",
+        )
 
         require_tokens(
             CHECKER,
