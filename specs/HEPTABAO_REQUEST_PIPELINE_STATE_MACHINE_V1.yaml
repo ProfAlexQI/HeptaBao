@@ -135,6 +135,7 @@ invariants:
   - No backend, plugin, cluster or external dispatch before operation classification, policy allow and request-audit success.
   - Required durable intent is physically committed before dispatch.
   - External effect response loss never transitions directly to success or automatic redispatch.
+  - No blind retry is permitted after dispatch unless non-send is proven and the operation contract explicitly allows a bounded retry.
   - Client cancellation after dispatch never rolls back committed authority and never creates retry authority.
   - Response audit failure never exposes a secret.
   - A stale owner epoch, authority epoch, generation or fencing token is rejected before dispatch.
