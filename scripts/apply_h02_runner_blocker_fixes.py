@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply the exact source fixes discovered by real H02 GitHub Runner executions.
 
-This is a one-shot maintenance helper.  The invoking workflow removes this file
+This is a one-shot maintenance helper. The invoking workflow removes this file
 and itself before committing the verified source changes.
 """
 
@@ -165,10 +165,13 @@ def patch_probe_fixture_copy() -> None:
         '          cp probes/h02/rustls-public-fixtures.rs '
         '"$RUNNER_TEMP/rustls-public-fixtures.rs"\n'
     )
-    marker = '          git rev-parse "$GITHUB_SHA" > "$RUNNER_TEMP/source-commit.txt"\n'
+    marker = (
+        '          cp -a "${{ matrix.probe_dir }}/." '
+        '"$RUNNER_TEMP/probe/"\n'
+    )
     if copy_line in text or text.count(marker) != 1:
         raise RuntimeError("probe workflow fixture-copy insertion point drift")
-    path.write_text(text.replace(marker, copy_line + marker), encoding="utf-8")
+    path.write_text(text.replace(marker, marker + copy_line), encoding="utf-8")
     print("patched probe workflow shared rustls fixture copy")
 
 
