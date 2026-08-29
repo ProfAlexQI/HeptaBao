@@ -1,0 +1,218 @@
+name: apply-h02-candidate-manifest-binding-fix
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-v1"]
+    paths:
+      - ".github/workflows/apply-h02-candidate-manifest-binding-fix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-h02-candidate-manifest-binding-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-validate-commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-final-gap-closure-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact event source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Apply fail-closed direct-dependency binding model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/h02_candidate_adapter_harness_v1.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              ('HARNESS_VERSION = "1.0.0"', 'HARNESS_VERSION = "1.1.0"'),
+              (
+                  '        "manifest": "probes/h02/tokio-minimal/Cargo.toml",\n        "adapter_scope":',
+                  '        "manifest": "probes/h02/tokio-minimal/Cargo.toml",\n        "candidate_package": "tokio",\n        "support_dependencies": [],\n        "adapter_scope":',
+              ),
+              (
+                  '        "manifest": "probes/h02/rustls-ring/Cargo.toml",\n        "adapter_scope":',
+                  '        "manifest": "probes/h02/rustls-ring/Cargo.toml",\n        "candidate_package": "rustls",\n        "support_dependencies": ["zeroize"],\n        "adapter_scope":',
+              ),
+              (
+                  '        "manifest": "probes/h02/rustls-aws-lc/Cargo.toml",\n        "adapter_scope":',
+                  '        "manifest": "probes/h02/rustls-aws-lc/Cargo.toml",\n        "candidate_package": "rustls",\n        "support_dependencies": ["jobserver", "zeroize"],\n        "adapter_scope":',
+              ),
+              (
+                  '        "manifest": "probes/h02/openraft-tokio/Cargo.toml",\n        "adapter_scope":',
+                  '        "manifest": "probes/h02/openraft-tokio/Cargo.toml",\n        "candidate_package": "openraft",\n        "support_dependencies": ["openraft-memstore", "serde_json", "tokio", "validit"],\n        "adapter_scope":',
+              ),
+          ]
+          for old, new in replacements:
+              observed = text.count(old)
+              if observed != 1:
+                  raise SystemExit(f"profile anchor drift: expected=1 observed={observed} anchor={old!r}")
+              text = text.replace(old, new, 1)
+
+          start = text.index("def manifest_binding(")
+          end = text.index("\n\ndef _blocked_rows", start)
+          new_function = '''def _direct_dependency_binding(path: Path, package: str, spec: Any) -> dict[str, Any]:
+              if isinstance(spec, str):
+                  version = spec
+                  default_features = True
+                  features: list[str] = []
+              elif isinstance(spec, dict):
+                  version = str(spec.get("version", ""))
+                  default_features = bool(spec.get("default-features", True))
+                  raw_features = spec.get("features", [])
+                  if not isinstance(raw_features, list):
+                      raise Failure(f"{path}: dependency {package!r} features must be a list")
+                  features = sorted(str(item) for item in raw_features)
+              else:
+                  raise Failure(f"{path}: dependency {package!r} must be a version string or inline table")
+              if not version.startswith("=") or len(version) <= 1:
+                  raise Failure(f"{path}: dependency {package!r} must use an exact =version pin")
+              return {
+                  "package": package,
+                  "version": version,
+                  "default_features": default_features,
+                  "features": features,
+              }
+
+
+          def manifest_binding(root: Path, profile: dict[str, Any], toolchain: str, target: str) -> dict[str, Any]:
+              path = root / profile["manifest"]
+              document = tomllib.loads(path.read_text(encoding="utf-8"))
+              dependencies = document.get("dependencies", {})
+              if not isinstance(dependencies, dict) or not dependencies:
+                  raise Failure(f"{path}: direct dependency table is missing or empty")
+
+              candidate_package = str(profile["candidate_package"])
+              support_dependencies = sorted(str(item) for item in profile.get("support_dependencies", []))
+              if candidate_package in support_dependencies:
+                  raise Failure(f"{path}: candidate dependency cannot also be a support dependency")
+              if len(support_dependencies) != len(set(support_dependencies)):
+                  raise Failure(f"{path}: duplicate support dependency declaration")
+
+              expected_packages = {candidate_package, *support_dependencies}
+              actual_packages = set(dependencies)
+              if actual_packages != expected_packages:
+                  missing = sorted(expected_packages - actual_packages)
+                  unexpected = sorted(actual_packages - expected_packages)
+                  raise Failure(f"{path}: direct dependency drift: missing={missing!r} unexpected={unexpected!r}")
+
+              dependency_profile = {
+                  package: _direct_dependency_binding(path, package, dependencies[package])
+                  for package in sorted(actual_packages)
+              }
+              candidate = dependency_profile[candidate_package]
+              if candidate["version"] != f"={profile['version']}":
+                  raise Failure(f"{path}: candidate version drift: {candidate['version']!r}")
+
+              binding = {
+                  "profile_id": profile["profile_id"],
+                  "candidate_id": profile["candidate_id"],
+                  "package": candidate_package,
+                  "version": profile["version"],
+                  "manifest_path": profile["manifest"],
+                  "manifest_sha256": file_sha256(path),
+                  "default_features": candidate["default_features"],
+                  "features": candidate["features"],
+                  "support_dependencies": support_dependencies,
+                  "direct_dependencies": dependency_profile,
+                  "toolchain": toolchain,
+                  "target": target,
+              }
+              binding["feature_profile_sha256"] = sha256(binding)
+              return binding
+          '''.replace("          ", "")
+          text = text[:start] + new_function + text[end:]
+          path.write_text(text, encoding="utf-8", newline="\n")
+
+          plan_path = Path("planning/HEPTABAO_H02_CANDIDATE_ADAPTERS_V1.yaml")
+          plan = plan_path.read_text(encoding="utf-8")
+          old_rule = "  - The feature_profile_sha256 includes the exact manifest, features, toolchain and target; it is not reusable across another toolchain."
+          new_rule = "  - The feature_profile_sha256 includes the exact manifest, candidate features, complete allowlisted direct-dependency profile, toolchain and target; it is not reusable across dependency, feature, toolchain or target drift."
+          if plan.count(old_rule) != 1:
+              raise SystemExit("candidate-plan dependency-binding rule anchor drift")
+          plan_path.write_text(plan.replace(old_rule, new_rule, 1), encoding="utf-8", newline="\n")
+          PY
+
+      - name: Validate exact dependency binding and negative drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python - <<'PY'
+          import importlib.util
+          import tempfile
+          from pathlib import Path
+
+          root = Path.cwd()
+          module_path = root / "scripts/h02_candidate_adapter_harness_v1.py"
+          spec = importlib.util.spec_from_file_location("candidate_harness", module_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit("unable to import candidate harness")
+          harness = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(harness)
+
+          expected = {
+              "tokio": {"tokio"},
+              "rustls-ring": {"rustls", "zeroize"},
+              "rustls-aws-lc": {"jobserver", "rustls", "zeroize"},
+              "openraft": {"openraft", "openraft-memstore", "serde_json", "tokio", "validit"},
+          }
+          for key, packages in expected.items():
+              binding = harness.manifest_binding(root, harness.PROFILES[key], "1.98.0", "x86_64-unknown-linux-gnu")
+              if set(binding["direct_dependencies"]) != packages:
+                  raise SystemExit(f"{key}: direct dependency binding mismatch")
+              if binding["package"] != harness.PROFILES[key]["candidate_package"]:
+                  raise SystemExit(f"{key}: candidate dependency identity mismatch")
+
+          with tempfile.TemporaryDirectory(dir=root) as temporary:
+              source = root / "probes/h02/rustls-ring/Cargo.toml"
+              altered = Path(temporary) / "Cargo.toml"
+              text = source.read_text(encoding="utf-8")
+              text = text.replace("\n[workspace]", "\nunexpected = \"=1.0.0\"\n\n[workspace]", 1)
+              altered.write_text(text, encoding="utf-8")
+              profile = dict(harness.PROFILES["rustls-ring"])
+              profile["manifest"] = altered.relative_to(root).as_posix()
+              try:
+                  harness.manifest_binding(root, profile, "1.98.0", "x86_64-unknown-linux-gnu")
+              except harness.Failure:
+                  pass
+              else:
+                  raise SystemExit("unexpected direct dependency drift was accepted")
+          print("candidate and support dependency bindings are exact and digest-bound")
+          PY
+          python -m unittest tests/platform/test_h02_candidate_adapter_harness_v1.py -v
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+
+      - name: Commit repair and retire one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-h02-candidate-manifest-binding-fix.yml
+          git diff --check
+          git config user.name "heptabao-maintenance-bot"
+          git config user.email "heptabao-maintenance-bot@users.noreply.github.com"
+          git add -A
+          test -n "$(git status --porcelain)"
+          git commit -m "fix(h02): bind candidate and support dependencies exactly"
+          git push origin HEAD:codex/h02-final-gap-closure-v1
