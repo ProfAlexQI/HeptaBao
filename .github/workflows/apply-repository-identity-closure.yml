@@ -103,31 +103,35 @@ jobs:
               )
 
           endpoint_path = Path("oracle/inventory/openbao-v2.6.2/endpoint-seed.yaml")
-          endpoint_data = endpoint_path.read_bytes()
+          endpoint_text = endpoint_path.read_text(encoding="utf-8")
           endpoint_old = (
-              b"  - id: HB-ENDPOINT-RAFT-SNAPSHOT-READ\n"
-              b"    path_template: /v1/sys/storage/raft/snapshot\n"
-              b"    methods: [GET]\n"
-              b"    operation_class: CLUSTER_OPERATION\n"
-              b"    exposure: PUBLIC_AUTHENTICATED\n"
-              b"    criticality: DATA_DURABILITY_CRITICAL\n"
-              b"    authentication_mode: TOKEN_REQUIRED\n"
-              b"    policy_capability: sudo\n"
-              b"    request_audit: REQUIRED\n"
-              b"    response_audit: REQUIRED\n"
-              b"    side_effects: [STORAGE, CLUSTER]\n"
-              b"    secret_response: true\n"
+              "  - id: HB-ENDPOINT-RAFT-SNAPSHOT-READ\n"
+              "    path_template: /v1/sys/storage/raft/snapshot\n"
+              "    methods: [GET]\n"
+              "    operation_class: CLUSTER_OPERATION\n"
+              "    exposure: PUBLIC_AUTHENTICATED\n"
+              "    criticality: DATA_DURABILITY_CRITICAL\n"
+              "    authentication_mode: TOKEN_REQUIRED\n"
+              "    policy_capability: sudo\n"
+              "    request_audit: REQUIRED\n"
+              "    response_audit: REQUIRED\n"
+              "    side_effects: [STORAGE, CLUSTER]\n"
+              "    secret_response: true\n"
           )
           endpoint_new = endpoint_old.replace(
-              b"    response_audit: REQUIRED\n",
-              b"    response_audit: REQUIRED_BEFORE_SECRET_RELEASE\n",
+              "    response_audit: REQUIRED\n",
+              "    response_audit: REQUIRED_BEFORE_SECRET_RELEASE\n",
           )
-          endpoint_count = endpoint_data.count(endpoint_old)
+          endpoint_count = endpoint_text.count(endpoint_old)
           if endpoint_count != 1:
               raise SystemExit(
                   f"snapshot-read audit anchor drift: expected=1 observed={endpoint_count}"
               )
-          endpoint_path.write_bytes(endpoint_data.replace(endpoint_old, endpoint_new, 1))
+          endpoint_path.write_text(
+              endpoint_text.replace(endpoint_old, endpoint_new, 1),
+              encoding="utf-8",
+              newline="\n",
+          )
           changed.append(endpoint_path.as_posix())
 
           evidence_paths = {
