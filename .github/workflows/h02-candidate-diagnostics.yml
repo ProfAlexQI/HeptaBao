@@ -1,0 +1,85 @@
+name: h02-candidate-diagnostics
+
+on:
+  push:
+    branches: ["codex/h02-candidate-diagnostics-v1"]
+    paths:
+      - ".github/workflows/h02-candidate-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cbaaadbdf9d7dbcb773625d62757db1368d07e64
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "cbaaadbdf9d7dbcb773625d62757db1368d07e64"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Install Rust 1.98.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup run 1.98.0 rustc --version --verbose
+          rustup run 1.98.0 cargo --version --verbose
+
+      - name: Compile and run Tokio candidate
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/diag-target-tokio
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/tokio-minimal/Cargo.toml
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/tokio-minimal/Cargo.toml
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/tokio-minimal/Cargo.toml -- --seed 0x5eed20260828cafe
+
+      - name: Compile and run rustls ring candidate
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/diag-target-rustls-ring
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/rustls-ring/Cargo.toml
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/rustls-ring/Cargo.toml
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/rustls-ring/Cargo.toml -- --seed 0x5eed20260828cafe
+
+      - name: Compile and run rustls aws-lc candidate
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/diag-target-rustls-aws-lc
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/rustls-aws-lc/Cargo.toml
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/rustls-aws-lc/Cargo.toml
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/rustls-aws-lc/Cargo.toml -- --seed 0x5eed20260828cafe
+
+      - name: Compile and run OpenRaft candidate
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/diag-target-openraft
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/openraft-tokio/Cargo.toml
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/openraft-tokio/Cargo.toml
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml -- --seed 0x5eed20260828cafe
+
+      - name: Confirm diagnostic authority is none
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'qualification=false selection_effect=NONE authority_effect=NONE'
