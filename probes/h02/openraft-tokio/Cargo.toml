@@ -2,7 +2,7 @@
 name = "heptabao-h02-probe-openraft-tokio"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 default-run = "heptabao-h02-probe-openraft-tokio"
 
@@ -42,8 +42,9 @@ tokio = { version = "=1.53.1", default-features = false, features = ["macros", "
 
 # OpenRaft alpha.33 was authored against validit 0.2.5. That package was later
 # yanked from crates.io and can no longer be selected by a fresh resolver. Use
-# the exact upstream BumpVer commit as an auditable, immutable source override;
-# do not silently resolve validit 0.2.6, whose declared MSRV is Rust 1.88.
+# the exact upstream BumpVer commit as an auditable, immutable source override.
+# The probe's effective Rust 1.88 floor is independently enforced by the
+# OpenRaft macro let-chain boundary gate; it is not a reason to drift to 0.2.6.
 [patch.crates-io]
 validit = { git = "https://github.com/drmingdrmer/validit.git", rev = "7016fa5e072a86092928144b3a3040381e6964e9" }
 
