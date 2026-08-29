@@ -1,0 +1,250 @@
+name: h02-apply-runner-blockers
+
+on:
+  push:
+    branches:
+      - "codex/h02-final-gap-closure-v1"
+    paths:
+      - ".github/workflows/h02-apply-runner-blockers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h02-apply-runner-blockers
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact closure branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-final-gap-closure-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install pinned validation dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Apply asserted source and workflow fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, expected: int = 1) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrences, found {actual}: {old!r}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+              print(f"patched {path}: {actual} replacement(s)")
+
+          registry = Path("specs/HEPTABAO_OPERATION_REGISTRY_V1.yaml")
+          registry_text = registry.read_text(encoding="utf-8")
+          operations = (
+              "sys.health.read",
+              "sys.mounts.update",
+              "secret.dynamic.read",
+              "auth.login",
+              "token.create",
+              "seal.unseal.submit-share",
+              "cluster.join",
+              "migration.cutover",
+          )
+          for operation_id in operations:
+              old = f"  {operation_id}:\n    operation_class:"
+              new = f"  {operation_id}:\n    operation_id: {operation_id}\n    operation_class:"
+              count = registry_text.count(old)
+              if count != 1:
+                  raise SystemExit(f"registry {operation_id}: expected one insertion point, found {count}")
+              registry_text = registry_text.replace(old, new)
+          registry.write_text(registry_text, encoding="utf-8")
+          print("patched operation registry: 8 explicit operation_id bindings")
+
+          replace(
+              "probes/h02/rustls-public-fixtures.rs",
+              "0xae, 0xbg, 0x4b",
+              "0xae, 0xb7, 0x4b",
+          )
+          replace(
+              "probes/h02/rustls-public-fixtures.rs",
+              "0x0f, 0x01, 0xff, 0x04, 0x04, 0x03",
+              "0x0f, 0x01, 0x01, 0xff, 0x04, 0x04, 0x03",
+          )
+
+          replace(
+              "Cargo.toml",
+              'all = "warn"',
+              'all = { level = "warn", priority = -1 }',
+          )
+          replace(
+              "crates/heptabao-platform-contracts/src/lib.rs",
+              """        if let Some(applied) = cursor.last_applied {
+            if self.last_included.index < applied.index {
+                return Err(ContractError::SnapshotRegression);
+            }
+        }
+""",
+              """        if let Some(applied) = cursor.last_applied
+            && self.last_included.index < applied.index
+        {
+            return Err(ContractError::SnapshotRegression);
+        }
+""",
+          )
+
+          replace(
+              "probes/h02/openraft-tokio/Cargo.toml",
+              'openraft-memstore = { version = "=0.10.0-alpha.33" }',
+              'openraft-memstore = { version = "=0.10.0-alpha.33" }\nvalidit = "=0.2.5"',
+          )
+          replace(
+              "probes/h02/rustls-ring/Cargo.toml",
+              'rustls = { version = "=0.23.43", default-features = false, features = ["logging", "ring", "std", "tls12"] }',
+              'rustls = { version = "=0.23.43", default-features = false, features = ["logging", "ring", "std", "tls12"] }\nzeroize = "=1.8.2"',
+          )
+          replace(
+              "probes/h02/rustls-aws-lc/Cargo.toml",
+              'rustls = { version = "=0.23.43", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"] }',
+              'rustls = { version = "=0.23.43", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"] }\nzeroize = "=1.8.2"\njobserver = "=0.1.32"',
+          )
+
+          for path in (
+              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs",
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs",
+          ):
+              replace(path, "enable_pre_vote: true,", "enable_pre_vote: Some(true),")
+          replace(
+              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
+              "!matches!(old_write, Ok(Ok(Ok(_))))",
+              "!matches!(old_write, Ok(Ok(_)))",
+          )
+          replace(
+              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
+              "!matches!(result, Ok(Ok(Ok(_))))",
+              "!matches!(result, Ok(Ok(_)))",
+          )
+          replace(
+              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs",
+              "use openraft::async_runtime::WatchReceiver;\n",
+              "",
+          )
+
+          replace(
+              "scripts/validate_h02_openraft_inmemory_cluster_v1.py",
+              '            "fail-fast: false",\n            "if: ${{ always() }}",',
+              '            "Execute all six entries serially and retain every outcome",\n            "exit 0",\n            "if: ${{ always() }}",',
+          )
+          replace(
+              "scripts/validate_h02_openraft_fault_lab_v1.py",
+              '            "fail-fast: false", "hostile-snapshot-parent", "linearizability-history",',
+              '            "Execute all six fault-lab entries and retain every outcome", "exit 0",\n            "hostile-snapshot-parent", "linearizability-history",',
+          )
+
+          replace(
+              ".github/workflows/h02-probe-sbom-msrv.yml",
+              '          cp -a "${{ matrix.probe_dir }}/." "$RUNNER_TEMP/probe/"\n          git rev-parse',
+              '          cp -a "${{ matrix.probe_dir }}/." "$RUNNER_TEMP/probe/"\n          cp probes/h02/rustls-public-fixtures.rs "$RUNNER_TEMP/rustls-public-fixtures.rs"\n          git rev-parse',
+          )
+
+          replace(
+              ".github/workflows/h02-openraft-blocker-closure.yml",
+              '      EVIDENCE_ROOT: ${{ runner.temp }}/h02-blocker-closure-evidence\n      PROBE_ROOT: ${{ runner.temp }}/h02-blocker-closure-probes\n',
+              '',
+          )
+          replace(
+              ".github/workflows/h02-openraft-blocker-closure.yml",
+              '      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n        with:\n          python-version: "3.13"\n      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt',
+              '      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n        with:\n          python-version: "3.13"\n      - name: Bind runner-local evidence roots\n        shell: bash\n        run: |\n          printf \'EVIDENCE_ROOT=%s\\n\' "$RUNNER_TEMP/h02-blocker-closure-evidence" >> "$GITHUB_ENV"\n          printf \'PROBE_ROOT=%s\\n\' "$RUNNER_TEMP/h02-blocker-closure-probes" >> "$GITHUB_ENV"\n      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt',
+          )
+          PY
+
+      - name: Remove one-shot maintenance workflow from final tree
+        run: rm .github/workflows/h02-apply-runner-blockers.yml
+
+      - name: Validate repaired governance and H02 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v3.py
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python scripts/validate_h02_blocker_closure_v1.py
+          python -m unittest \
+            tests/platform/test_h02_candidate_adapter_harness_v1.py \
+            tests/platform/test_h02_openraft_inmemory_cluster_v1.py \
+            tests/platform/test_h02_linearizability_checker_v1.py \
+            tests/platform/test_h02_openraft_fault_lab_evidence_v1.py \
+            tests/platform/test_h02_blocker_closure_evidence_v1.py \
+            -v
+
+      - name: Install exact Rust verification toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup toolchain install 1.71.0 --profile minimal
+
+      - name: Verify workspace formatting, tests and strict Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --workspace --all-targets
+          cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
+
+      - name: Verify OpenRaft exact-toolchain build seams
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.85.0 1.98.0; do
+            work="$RUNNER_TEMP/openraft-$toolchain"
+            mkdir -p "$work"
+            cp -a probes/h02/openraft-tokio/. "$work/"
+            cargo +"$toolchain" generate-lockfile --manifest-path "$work/Cargo.toml"
+            cargo +"$toolchain" test --locked --all-targets --manifest-path "$work/Cargo.toml"
+          done
+
+      - name: Verify rustls MSRV dependency resolution and compile seams
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp probes/h02/rustls-public-fixtures.rs "$RUNNER_TEMP/rustls-public-fixtures.rs"
+          for profile in rustls-ring rustls-aws-lc; do
+            for toolchain in 1.71.0 1.98.0; do
+              work="$RUNNER_TEMP/$profile-$toolchain/probe"
+              mkdir -p "$work"
+              cp -a "probes/h02/$profile/." "$work/"
+              cargo +"$toolchain" generate-lockfile --manifest-path "$work/Cargo.toml"
+              cargo +"$toolchain" test --locked --all-targets --manifest-path "$work/Cargo.toml"
+            done
+          done
+
+      - name: Commit verified blocker closure batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(h02): close runner-discovered validation blockers"
+          git push origin HEAD:codex/h02-final-gap-closure-v1
