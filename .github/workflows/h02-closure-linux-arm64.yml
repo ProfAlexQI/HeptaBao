@@ -1,0 +1,105 @@
+name: h02-closure-linux-arm64
+
+on:
+  push:
+    branches: ["exec/h02-closure-linux-arm64-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-closure-linux-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  os-suspend-and-durable:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Install Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Prepare complete probe tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/h02-probes"
+          mkdir -p "$RUNNER_TEMP/h02-probes"
+          cp -a probes/h02/. "$RUNNER_TEMP/h02-probes/"
+          manifest="$RUNNER_TEMP/h02-probes/openraft-tokio/Cargo.toml"
+          echo "OPENRAFT_MANIFEST=$manifest" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/h02-target-openraft" >> "$GITHUB_ENV"
+
+      - name: Compile OpenRaft probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile --manifest-path "$OPENRAFT_MANIFEST"
+          cargo test --locked --all-targets --manifest-path "$OPENRAFT_MANIFEST"
+
+      - name: Execute OS SIGSTOP SIGCONT, durable and clock closure
+        shell: bash
+        env:
+          SEED: "0x5eed20260828cafe"
+        run: |
+          set +e
+          cargo run --quiet --locked --manifest-path "$OPENRAFT_MANIFEST" \
+            --bin heptabao-h02-openraft-blocker-closure-lab -- \
+            --mode all --seed "$SEED" >"$RUNNER_TEMP/blocker-closure-result.json" 2>"$RUNNER_TEMP/blocker-closure-stderr.log"
+          rc=$?
+          echo "$rc" >"$RUNNER_TEMP/blocker-closure-exit.txt"
+          cat "$RUNNER_TEMP/blocker-closure-result.json" || true
+          exit "$rc"
+
+      - name: Verify technical result and authority closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          p = os.path.join(os.environ['RUNNER_TEMP'], 'blocker-closure-result.json')
+          value = json.load(open(p, encoding='utf-8'))
+          assert value['status'] == 'EXECUTED_PASS', value
+          assert value['components']['os_suspend']['status'] == 'EXECUTED_PASS'
+          assert value['components']['durable_faults']['status'] == 'EXECUTED_PASS'
+          assert value['components']['clock_faults']['status'] == 'EXECUTED_PASS'
+          assert value['qualification'] is False
+          assert value['selection_effect'] == 'NONE'
+          assert value['authority_effect'] == 'NONE'
+          print('Linux ARM64 closure lab passed; authority remains closed')
+          PY
+
+      - name: Upload exact diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-linux-arm64-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/blocker-closure-result.json
+            ${{ runner.temp }}/blocker-closure-stderr.log
+            ${{ runner.temp }}/blocker-closure-exit.txt
+            ${{ runner.temp }}/h02-probes/openraft-tokio/Cargo.lock
+          if-no-files-found: error
+          retention-days: 30
