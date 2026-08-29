@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Extract and execute the canonical patch program
+      - name: Execute canonical patch and repair its terminal YAML transform
         shell: bash
         run: |
           set -euo pipefail
@@ -42,7 +42,175 @@ jobs:
           compile(program, '/tmp/apply_h02_remaining_blockers.py', 'exec')
           print(f'extracted canonical patch program: {len(program)} bytes')
           PY
+
+          set +e
           python /tmp/apply_h02_remaining_blockers.py
+          patch_rc=$?
+          set -e
+          if [ "$patch_rc" -ne 0 ] && [ "$patch_rc" -ne 1 ]; then
+            echo "unexpected canonical patch exit: $patch_rc" >&2
+            exit "$patch_rc"
+          fi
+
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          # The canonical program intentionally stopped at its final exact-match
+          # transform. All preceding source changes remain in this worktree.
+          # Correct an indentation defect in the new matrix validation block.
+          dependency = Path('scripts/h02_dependency_probe_v1.py')
+          text = dependency.read_text(encoding='utf-8')
+          marker = 'if profile_id == "HB-H02-PROBE-OPENRAFT-TOKIO":'
+          position = text.index(marker)
+          line_start = text.rfind('\n', 0, position) + 1
+          return_start = text.index('    return len(found)', position)
+          prefix = text[:line_start]
+          block = text[line_start:return_start]
+          current_indent = len(block.splitlines()[0]) - len(block.splitlines()[0].lstrip())
+          if current_indent == 4:
+              block = '\n'.join(('    ' + line if line else line) for line in block.split('\n'))
+          elif current_indent != 8:
+              raise SystemExit(f'unexpected OpenRaft validation indentation: {current_indent}')
+          dependency.write_text(prefix + block + text[return_start:], encoding='utf-8')
+
+          # Rebuild the SBOM/MSRV workflow from the clean HEAD version so its
+          # inserted evidence step has valid YAML indentation.
+          sbom = Path('.github/workflows/h02-probe-sbom-msrv.yml')
+          subprocess.run(['git', 'checkout', 'HEAD', '--', str(sbom)], check=True)
+          text = sbom.read_text(encoding='utf-8')
+          old_rows = (
+              '          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.85.0, target: x86_64-unknown-linux-gnu}\n'
+              '          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}\n'
+          )
+          new_rows = (
+              '          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.85.0, target: x86_64-unknown-linux-gnu}\n'
+              '          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.88.0, target: x86_64-unknown-linux-gnu}\n'
+              '          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}\n'
+          )
+          if text.count(old_rows) != 1:
+              raise SystemExit('OpenRaft SBOM matrix rows drifted')
+          text = text.replace(old_rows, new_rows)
+
+          classification_lines = [
+              '      - name: Classify required pass or expected MSRV boundary',
+              '        shell: bash',
+              '        env: {PROFILE_ID: "${{ matrix.profile }}", TOOLCHAIN: "${{ matrix.toolchain }}"}',
+              '        run: |',
+              '          set -euo pipefail',
+              '          ev="$RUNNER_TEMP/evidence"',
+              '          python - "$ev" "$PROFILE_ID" "$TOOLCHAIN" <<\'PY\'',
+              '          import json',
+              '          import pathlib',
+              '          import sys',
+              '          root = pathlib.Path(sys.argv[1])',
+              '          profile = sys.argv[2]',
+              '          toolchain = sys.argv[3]',
+              '          status = {}',
+              '          for line in (root / "status.env").read_text(encoding="utf-8").splitlines():',
+              '              if "=" in line:',
+              '                  key, value = line.split("=", 1)',
+              '                  status[key] = value',
+              '          evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))',
+              '          marker = "validit@0.2.6 requires rustc 1.88"',
+              '          logs = "\\n".join(',
+              '              (root / name).read_text(encoding="utf-8", errors="replace")',
+              '              for name in ("build.log", "test.log")',
+              '              if (root / name).is_file()',
+              '          )',
+              '          base_bound = (',
+              '              status.get("LOCK_STATUS") == "PASS"',
+              '              and status.get("METADATA_STATUS") == "PASS"',
+              '              and status.get("PACKAGE_CHECKSUM_MATCH") == "true"',
+              '              and status.get("PACKAGE_VCS_COMMIT_MATCH") == "true"',
+              '          )',
+              '          boundary = profile == "HB-H02-PROBE-OPENRAFT-TOKIO" and toolchain == "1.85.0"',
+              '          expected = "EXPECTED_FAIL_MSRV_BOUNDARY" if boundary else "REQUIRED_PASS"',
+              '          if boundary:',
+              '              matched = (',
+              '                  base_bound',
+              '                  and status.get("BUILD_STATUS") == "FAIL"',
+              '                  and status.get("TEST_STATUS") == "FAIL"',
+              '                  and marker in logs',
+              '                  and evidence.get("status") == "EXECUTED_FAIL"',
+              '              )',
+              '              observed = "EXPECTED_FAIL_MSRV_BOUNDARY" if matched else "UNEXPECTED_BOUNDARY_RESULT"',
+              '          else:',
+              '              matched = (',
+              '                  base_bound',
+              '                  and status.get("BUILD_STATUS") == "PASS"',
+              '                  and status.get("TEST_STATUS") == "PASS"',
+              '              )',
+              '              observed = "REQUIRED_PASS" if matched else "UNEXPECTED_MECHANICAL_FAILURE"',
+              '          value = {',
+              '              "schema": "heptabao.h02-msrv-boundary-evidence.v1",',
+              '              "profile_id": profile,',
+              '              "toolchain": toolchain,',
+              '              "expected_outcome": expected,',
+              '              "observed_outcome": observed,',
+              '              "status": status,',
+              '              "required_error_marker": marker if boundary else None,',
+              '              "error_marker_observed": marker in logs if boundary else None,',
+              '              "dependency_probe_status": evidence.get("status"),',
+              '              "qualification": False,',
+              '              "selection_effect": "NONE",',
+              '              "authority_effect": "NONE",',
+              '          }',
+              '          (root / "expected-outcome.json").write_text(',
+              '              json.dumps(value, indent=2, sort_keys=True) + "\\n", encoding="utf-8"',
+              '          )',
+              '          print(json.dumps(value, sort_keys=True))',
+              '          PY',
+              '',
+          ]
+          classification = '\n'.join(classification_lines)
+          upload = '      - name: Upload non-authoritative probe evidence\n'
+          if text.count(upload) != 1:
+              raise SystemExit('SBOM upload marker drifted')
+          text = text.replace(upload, classification + upload)
+
+          final_marker = '      - name: Fail mechanical lane without discarding evidence\n'
+          final_start = text.index(final_marker)
+          final_lines = [
+              '      - name: Enforce required pass or expected MSRV boundary',
+              '        shell: bash',
+              '        run: |',
+              '          set -euo pipefail',
+              '          python - "$RUNNER_TEMP/evidence/expected-outcome.json" <<\'PY\'',
+              '          import json',
+              '          import sys',
+              '          value = json.load(open(sys.argv[1], encoding="utf-8"))',
+              '          assert value["observed_outcome"] == value["expected_outcome"], value',
+              '          assert value["qualification"] is False',
+              '          assert value["selection_effect"] == "NONE"',
+              '          assert value["authority_effect"] == "NONE"',
+              '          print(f"{value[\'profile_id\']} {value[\'toolchain\']}: {value[\'observed_outcome\']}; authority=NONE")',
+              '          PY',
+              '',
+          ]
+          text = text[:final_start] + '\n'.join(final_lines)
+          sbom.write_text(text, encoding='utf-8')
+
+          # Mechanical consistency checks before the expensive compile stage.
+          forbidden = {
+              '.github/workflows/h02-candidate-adapters.yml': ['openraft-1_85', 'toolchain=1.85.0; subdir=openraft-tokio'],
+              '.github/workflows/h02-openraft-inmemory-cluster.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+              '.github/workflows/h02-openraft-fault-lab.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+              '.github/workflows/h02-openraft-blocker-closure.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+          }
+          for path, markers in forbidden.items():
+              body = Path(path).read_text(encoding='utf-8')
+              for forbidden_marker in markers:
+                  if forbidden_marker in body:
+                      raise SystemExit(f'{path}: retained positive-lane marker {forbidden_marker}')
+
+          import yaml
+          parsed = yaml.safe_load(sbom.read_text(encoding='utf-8'))
+          if not isinstance(parsed, dict) or 'jobs' not in parsed:
+              raise SystemExit('rebuilt SBOM workflow is not valid YAML')
+          compile(dependency.read_text(encoding='utf-8'), str(dependency), 'exec')
+          print('terminal YAML transform repaired and validated')
+          PY
 
       - name: Validate plans, schemas and Python semantics
         shell: bash
