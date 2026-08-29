@@ -1,0 +1,198 @@
+name: h02-candidate-msrv-macos
+
+on:
+  push:
+    branches: ["codex/h02-candidate-msrv-macos-v1"]
+    paths:
+      - ".github/workflows/h02-candidate-msrv-macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-candidate-msrv-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate-msrv:
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Validate candidate binding contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python -m unittest tests/platform/test_h02_candidate_adapter_harness_v1.py -v
+
+      - name: Install declared Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.71.0 1.85.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal
+            rustup run "$toolchain" rustc --version --verbose
+            rustup run "$toolchain" cargo --version --verbose
+          done
+
+      - name: Resolve, build and execute all exact profiles
+        id: execute
+        shell: bash
+        env:
+          FIXED_SOURCE: cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/h02-msrv"
+          evidence="$GITHUB_WORKSPACE/evidence/h02-msrv-macos"
+          rm -rf "$root" "$evidence"
+          mkdir -p "$root" "$evidence"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+
+          cat > "$root/variants.tsv" <<'EOF'
+          tokio-1_71	tokio	1.71.0	tokio-minimal	runtime	FULL_REFERENCE_CASE_SET
+          tokio-1_98	tokio	1.98.0	tokio-minimal	runtime	FULL_REFERENCE_CASE_SET
+          rustls-ring-1_71	rustls-ring	1.71.0	rustls-ring	tls	FULL_REFERENCE_CASE_SET
+          rustls-ring-1_98	rustls-ring	1.98.0	rustls-ring	tls	FULL_REFERENCE_CASE_SET
+          rustls-aws-lc-1_71	rustls-aws-lc	1.71.0	rustls-aws-lc	tls	FULL_REFERENCE_CASE_SET
+          rustls-aws-lc-1_98	rustls-aws-lc	1.98.0	rustls-aws-lc	tls	FULL_REFERENCE_CASE_SET
+          openraft-1_85	openraft	1.85.0	openraft-tokio	raft	API_SEAM_AND_FAILURE_MODEL_PARTIAL
+          openraft-1_98	openraft	1.98.0	openraft-tokio	raft	API_SEAM_AND_FAILURE_MODEL_PARTIAL
+          EOF
+
+          while IFS=$'\t' read -r variant profile toolchain subdir domain scope; do
+            work="$root/$variant"
+            entry_root="$evidence/$variant"
+            mkdir -p "$work" "$entry_root"
+            cp -a "probes/h02/$subdir/." "$work/"
+            rm -f "$work/Cargo.lock"
+            manifest="$work/Cargo.toml"
+            export CARGO_TARGET_DIR="$root/target-$variant"
+
+            rustup run "$toolchain" cargo generate-lockfile --manifest-path "$manifest" \
+              >"$entry_root/cargo-generate-lockfile.log" 2>&1
+            cp "$work/Cargo.lock" "$entry_root/Cargo.lock"
+            rustup run "$toolchain" cargo test --locked --all-targets --manifest-path "$manifest" \
+              >"$entry_root/cargo-test.log" 2>&1
+
+            for seed in 0x5eed20260828cafe 0x8badf00d12345678 0xd15ea5e5cafef00d; do
+              seed_name="${seed#0x}"
+              entry="$entry_root/$seed_name"
+              mkdir -p "$entry/reference"
+              rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" -- \
+                --seed "$seed" >"$entry/adapter-output.jsonl" 2>"$entry/adapter-stderr.log"
+              rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" -- \
+                --seed "$seed" >"$entry/adapter-replay.jsonl" 2>"$entry/adapter-replay-stderr.log"
+              cmp "$entry/adapter-output.jsonl" "$entry/adapter-replay.jsonl"
+
+              python scripts/h02_seeded_behavior_harness_v1.py run \
+                --domain "$domain" \
+                --seed "$seed" \
+                --source-commit "$FIXED_SOURCE" \
+                --source-tree "$source_tree" \
+                --branch codex/h02-final-gap-closure-v1 \
+                --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${variant}-${seed}-reference" \
+                --executor-kind github-hosted \
+                --runner-id github-api-enrichment-pending \
+                --runner-name "$RUNNER_NAME" \
+                --output-dir "$entry/reference"
+              reference="$(find "$entry/reference" -maxdepth 1 -name "${domain}-*.json" -print -quit)"
+              test -n "$reference"
+
+              python scripts/h02_candidate_adapter_harness_v1.py collect \
+                --profile "$profile" \
+                --adapter-output "$entry/adapter-output.jsonl" \
+                --replay-output "$entry/adapter-replay.jsonl" \
+                --execution-exit-code 0 \
+                --seed "$seed" \
+                --toolchain "$toolchain" \
+                --target "$host" \
+                --source-commit "$FIXED_SOURCE" \
+                --source-tree "$source_tree" \
+                --branch codex/h02-final-gap-closure-v1 \
+                --clean-tree \
+                --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${variant}-${seed}-candidate" \
+                --executor-kind github-hosted \
+                --runner-id github-api-enrichment-pending \
+                --runner-name "$RUNNER_NAME" \
+                --output "$entry/candidate.json" \
+                --binding-output "$entry/feature-profile-binding.json"
+              python scripts/h02_candidate_adapter_harness_v1.py compare \
+                --reference "$reference" \
+                --candidate "$entry/candidate.json" \
+                --adapter-scope "$scope" \
+                --output "$entry/comparison.json"
+            done
+          done < "$root/variants.tsv"
+
+          printf 'evidence=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Require all 24 executions while preserving authority closure
+        shell: bash
+        env:
+          EVIDENCE: ${{ steps.execute.outputs.evidence }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['EVIDENCE'])
+          variants = sorted(path for path in root.iterdir() if path.is_dir())
+          assert len(variants) == 8, variants
+          executions = 0
+          for variant in variants:
+              expected = (
+                  'PARTIAL_ADAPTER_SCOPE_BLOCKS_PROMOTION'
+                  if variant.name.startswith('openraft-')
+                  else 'INVARIANT_EQUIVALENT_UNREVIEWED'
+              )
+              entries = sorted(path for path in variant.iterdir() if path.is_dir())
+              assert len(entries) == 3, (variant, entries)
+              for entry in entries:
+                  executions += 1
+                  candidate = json.load((entry / 'candidate.json').open(encoding='utf-8'))
+                  comparison = json.load((entry / 'comparison.json').open(encoding='utf-8'))
+                  assert candidate['status'] == 'EXECUTED_PASS', (entry, candidate['status'])
+                  assert comparison['result'] == expected, (entry, comparison['result'])
+                  assert candidate['qualification'] is False
+                  assert comparison['qualification'] is False
+                  assert candidate['selection_effect'] == comparison['selection_effect'] == 'NONE'
+                  assert candidate['authority_effect'] == comparison['authority_effect'] == 'NONE'
+          assert executions == 24
+          print('all 24 macOS ARM64 candidate/MSRV executions passed; authority remains closed')
+          PY
+
+      - name: Upload bounded candidate/MSRV evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-candidate-msrv-macos-${{ github.run_id }}
+          path: evidence/h02-msrv-macos/
+          if-no-files-found: error
+          retention-days: 30
