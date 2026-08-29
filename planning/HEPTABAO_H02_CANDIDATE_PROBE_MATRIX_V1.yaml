@@ -12,7 +12,7 @@ rules:
   - A probe may download public dependencies but may not read production credentials or secret fixtures.
   - Generated lockfiles, metadata, feature trees, source scans and logs are evidence; none of them select a candidate.
   - A successful build on a declared toolchain is evidence for that exact profile only, not a general MSRV claim.
-  - OpenRaft has no declared rust-version in the captured workspace manifest; its effective MSRV remains pending until a bounded search and independent review are complete.
+  - OpenRaft has no declared rust-version in the captured upstream workspace manifest; alpha.33 macros use Rust-2024 let chains, so the probe enforces an effective Rust 1.88 floor and separately requires bounded 1.85-1.87 failures plus 1.88/1.98 passes.
   - Rustls crypto-provider variants are compared separately; defining a variant does not select either provider.
   - Candidate source code is scanned heuristically for unsafe, FFI, native links and build scripts; heuristic counts require human review.
   - Failed, skipped, network-blocked or unknown critical steps block promotion and remain visible in the evidence object.
@@ -101,7 +101,7 @@ profiles:
     default_features: false
     features: [serde, tokio-rt, type-alias]
     declared_rust_version: null
-    probe_toolchains: ['1.85.0', '1.98.0']
+    probe_toolchains: ['1.88.0', '1.98.0']
     targets: [x86_64-unknown-linux-gnu]
     expected_registry_checksum_sha256: ba6e911fb3c97faeecb8324b803a37d77a7387d02ee7019fc2a9777569e7f7b8
     expected_release_commit_sha: 2be3f99a23c0ec734aefc18d1c8e756b35567c35
