@@ -1,0 +1,366 @@
+name: apply-h02-deterministic-contract-closure
+
+on:
+  push:
+    branches: ["codex/h02-durable-multiprocess-closure-v2"]
+    paths: [".github/workflows/apply-h02-deterministic-contract-closure.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-h02-deterministic-contract-closure
+  cancel-in-progress: false
+
+jobs:
+  regenerate-test-and-commit:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-durable-multiprocess-closure-v2
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+      - name: Install effective Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Apply deterministic source-override and matcher patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              assert count == 1, f"{label}: expected one match, found {count}"
+              return text.replace(old, new, 1)
+
+          harness_path = Path("scripts/h02_candidate_adapter_harness_v1.py")
+          harness = harness_path.read_text(encoding="utf-8")
+          harness = replace_once(
+              harness,
+              '        "support_dependencies": ["openraft-memstore", "serde_json", "tokio", "validit"],\n',
+              '''        "support_dependencies": [
+                      "futures",
+                      "openraft-macros",
+                      "openraft-memstore",
+                      "openraft-rt",
+                      "openraft-rt-tokio",
+                      "serde",
+                      "serde_json",
+                      "tokio",
+                  ],
+                  "source_overrides": {
+                      "validit": {
+                          "git": "https://github.com/drmingdrmer/validit.git",
+                          "rev": "7016fa5e072a86092928144b3a3040381e6964e9",
+                      },
+                  },
+          ''',
+              "openraft profile",
+          )
+          helper = '''def _source_override_binding(path: Path, package: str, spec: Any) -> dict[str, Any]:
+              if not isinstance(spec, dict):
+                  raise Failure(f"{path}: source override {package!r} must be an inline table")
+              allowed_keys = {"git", "rev"}
+              unexpected_keys = sorted(set(spec) - allowed_keys)
+              if unexpected_keys:
+                  raise Failure(
+                      f"{path}: source override {package!r} has unapproved keys: {unexpected_keys!r}"
+                  )
+              git = str(spec.get("git", ""))
+              rev = str(spec.get("rev", ""))
+              if not git.startswith("https://") or git.endswith("/"):
+                  raise Failure(f"{path}: source override {package!r} must use an exact HTTPS Git URL")
+              if len(rev) != 40 or any(character not in "0123456789abcdef" for character in rev):
+                  raise Failure(f"{path}: source override {package!r} must use a full lowercase commit SHA")
+              return {"package": package, "git": git, "rev": rev}
+
+
+          '''
+          harness = replace_once(
+              harness,
+              "def manifest_binding(\n",
+              helper + "def manifest_binding(\n",
+              "source override helper insertion",
+          )
+          harness = replace_once(
+              harness,
+              '''    expected_packages = {candidate_package, *support_dependencies}
+              actual_packages = set(dependencies)
+          ''',
+              '''    expected_overrides_raw = profile.get("source_overrides", {})
+              if not isinstance(expected_overrides_raw, dict):
+                  raise Failure(f"{path}: expected source override profile must be a mapping")
+              expected_overrides = {
+                  str(package): _source_override_binding(path, str(package), spec)
+                  for package, spec in sorted(expected_overrides_raw.items())
+              }
+              patch_tables = document.get("patch", {})
+              if not isinstance(patch_tables, dict):
+                  raise Failure(f"{path}: patch tables must be a mapping")
+              if expected_overrides:
+                  if set(patch_tables) != {"crates-io"}:
+                      raise Failure(
+                          f"{path}: source override registry drift: {sorted(patch_tables)!r}"
+                      )
+                  crates_io = patch_tables.get("crates-io", {})
+                  if not isinstance(crates_io, dict):
+                      raise Failure(f"{path}: patch.crates-io must be a mapping")
+                  if set(crates_io) != set(expected_overrides):
+                      missing = sorted(set(expected_overrides) - set(crates_io))
+                      unexpected = sorted(set(crates_io) - set(expected_overrides))
+                      raise Failure(
+                          f"{path}: source override drift: missing={missing!r} unexpected={unexpected!r}"
+                      )
+                  source_overrides = {
+                      str(package): _source_override_binding(path, str(package), spec)
+                      for package, spec in sorted(crates_io.items())
+                  }
+                  for package, expected in expected_overrides.items():
+                      if source_overrides[package] != expected:
+                          raise Failure(
+                              f"{path}: source override {package!r} drift: "
+                              f"{source_overrides[package]!r} != {expected!r}"
+                          )
+              else:
+                  if patch_tables:
+                      raise Failure(f"{path}: unbound patch tables are forbidden")
+                  source_overrides = {}
+
+              expected_packages = {candidate_package, *support_dependencies}
+              actual_packages = set(dependencies)
+          ''',
+              "manifest override binding",
+          )
+          harness = replace_once(
+              harness,
+              '        "direct_dependencies": dependency_profile,\n        "toolchain": toolchain,\n',
+              '        "direct_dependencies": dependency_profile,\n        "source_overrides": source_overrides,\n        "toolchain": toolchain,\n',
+              "binding digest source overrides",
+          )
+          harness_path.write_text(harness, encoding="utf-8")
+
+          tests_path = Path("tests/platform/test_h02_candidate_adapter_harness_v1.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          tests = replace_once(
+              tests,
+              '''SUPPORT_DEPENDENCY_SPECS = {
+              "jobserver": 'jobserver = "=0.1.32"',
+              "openraft-memstore": 'openraft-memstore = "=0.10.0-alpha.33"',
+              "serde_json": 'serde_json = "=1.0.145"',
+              "tokio": (
+                  'tokio = { version = "=1.53.1", default-features = false, '
+                  'features = ["macros", "process", "rt-multi-thread", "sync", "time"] }'
+              ),
+              "validit": 'validit = "=0.2.6"',
+              "zeroize": 'zeroize = "=1.8.2"',
+          }
+          ''',
+              '''SUPPORT_DEPENDENCY_SPECS = {
+              "futures": 'futures = "=0.3.34"',
+              "jobserver": 'jobserver = "=0.1.32"',
+              "openraft-macros": 'openraft-macros = "=0.10.0-alpha.33"',
+              "openraft-memstore": 'openraft-memstore = "=0.10.0-alpha.33"',
+              "openraft-rt": 'openraft-rt = "=0.10.0-alpha.33"',
+              "openraft-rt-tokio": 'openraft-rt-tokio = "=0.10.0-alpha.33"',
+              "serde": 'serde = { version = "=1.0.229", features = ["derive"] }',
+              "serde_json": 'serde_json = "=1.0.145"',
+              "tokio": (
+                  'tokio = { version = "=1.53.1", default-features = false, '
+                  'features = ["macros", "process", "rt-multi-thread", "sync", "time"] }'
+              ),
+              "zeroize": 'zeroize = "=1.8.2"',
+          }
+          ''',
+              "support dependency specs",
+          )
+          tests = replace_once(
+              tests,
+              '''    for dependency in profile["support_dependencies"]:
+                  lines.append(SUPPORT_DEPENDENCY_SPECS[dependency])
+              lines.extend(["", "[workspace]", ""])
+          ''',
+              '''    for dependency in profile["support_dependencies"]:
+                  lines.append(SUPPORT_DEPENDENCY_SPECS[dependency])
+              source_overrides = profile.get("source_overrides", {})
+              if source_overrides:
+                  lines.extend(["", "[patch.crates-io]"])
+                  for dependency, spec in sorted(source_overrides.items()):
+                      lines.append(
+                          f'{dependency} = {{ git = {json.dumps(spec["git"])}, '
+                          f'rev = {json.dumps(spec["rev"])} }}'
+                      )
+              lines.extend(["", "[workspace]", ""])
+          ''',
+              "synthetic source override",
+          )
+          tests = replace_once(
+              tests,
+              "    def test_meta_mismatch_rejected(self):\n",
+              '''    def test_source_override_drift_rejected(self):
+                  with tempfile.TemporaryDirectory() as temporary:
+                      root = Path(temporary)
+                      manifest = make_repo(root, "openraft")
+                      expected = mod.PROFILES["openraft"]["source_overrides"]["validit"]["rev"]
+                      manifest.write_text(
+                          manifest.read_text(encoding="utf-8").replace(expected, "0" * 40, 1),
+                          encoding="utf-8",
+                      )
+                      with self.assertRaises(mod.Failure):
+                          mod.manifest_binding(
+                              root,
+                              mod.PROFILES["openraft"],
+                              "1.88.0",
+                              "x86_64-unknown-linux-gnu",
+                          )
+
+              ''' + "    def test_meta_mismatch_rejected(self):\n",
+              "source override negative test",
+          )
+          tests_path.write_text(tests, encoding="utf-8")
+
+          linux = Path(".github/workflows/h02-durable-store-v2.yml")
+          linux.write_text(
+              replace_once(
+                  linux.read_text(encoding="utf-8"),
+                  "grep -F 'let expressions in this position are unstable' \"$log\"",
+                  "grep -F 'expressions in this position are unstable' \"$log\"",
+                  "Linux MSRV diagnostic matcher",
+              ),
+              encoding="utf-8",
+          )
+
+          validator = Path("scripts/validate_h02_blocker_closure_v1.py")
+          value = validator.read_text(encoding="utf-8")
+          value = replace_once(
+              value,
+              '            "let expressions in this position are unstable",\n',
+              '            "expressions in this position are unstable",\n',
+              "Linux validator matcher",
+          )
+          value = replace_once(
+              value,
+              '        ["1.85.0 1.86.0 1.87.0 1.88.0 1.98.0", \'"effective_msrv": "1.88.0"\'],\n',
+              '        [\n            \'BOUNDARY_TOOLCHAINS: "1.85.0 1.86.0 1.87.0"\',\n            \'EFFECTIVE_TOOLCHAINS: "1.88.0 1.98.0"\',\n            \'"effective_msrv": "1.88.0"\',\n        ],\n',
+              "split MSRV validator tokens",
+          )
+          validator.write_text(value, encoding="utf-8")
+          PY
+          python -m py_compile \
+            scripts/h02_candidate_adapter_harness_v1.py \
+            tests/platform/test_h02_candidate_adapter_harness_v1.py \
+            scripts/validate_h02_blocker_closure_v1.py
+          git diff --check
+      - name: Regenerate and fail-closed compare the Cargo lock graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          lock=probes/h02/openraft-tokio/Cargo.lock
+          cp "$lock" "$RUNNER_TEMP/Cargo.lock.before"
+          rm "$lock"
+          rustup run 1.88.0 cargo generate-lockfile --manifest-path "$manifest"
+          rustup run 1.88.0 cargo metadata --locked --format-version 1 \
+            --manifest-path "$manifest" >"$RUNNER_TEMP/metadata.json"
+          python3 - "$RUNNER_TEMP/Cargo.lock.before" "$lock" "$RUNNER_TEMP/metadata.json" <<'PY'
+          import json
+          import sys
+          import tomllib
+
+          before = tomllib.loads(open(sys.argv[1], encoding="utf-8").read())
+          after = tomllib.loads(open(sys.argv[2], encoding="utf-8").read())
+          metadata = json.load(open(sys.argv[3], encoding="utf-8"))
+
+          def identities(document):
+              return {
+                  (package["name"], package["version"], package.get("source", ""))
+                  for package in document.get("package", [])
+                  if package["name"] != "validit"
+              }
+
+          assert identities(before) == identities(after), {
+              "removed": sorted(identities(before) - identities(after)),
+              "added": sorted(identities(after) - identities(before)),
+          }
+          before_validit = [package for package in before["package"] if package["name"] == "validit"]
+          after_validit = [package for package in after["package"] if package["name"] == "validit"]
+          assert len(before_validit) == len(after_validit) == 1
+          assert before_validit[0]["version"] == "0.2.6"
+          assert after_validit[0]["version"] == "0.2.5"
+          assert after_validit[0]["source"] == (
+              "git+https://github.com/drmingdrmer/validit.git?"
+              "rev=7016fa5e072a86092928144b3a3040381e6964e9#"
+              "7016fa5e072a86092928144b3a3040381e6964e9"
+          )
+
+          packages = metadata["packages"]
+          exact = {
+              "openraft": "0.10.0-alpha.33",
+              "openraft-macros": "0.10.0-alpha.33",
+              "openraft-memstore": "0.10.0-alpha.33",
+              "openraft-rt": "0.10.0-alpha.33",
+              "openraft-rt-tokio": "0.10.0-alpha.33",
+              "validit": "0.2.5",
+          }
+          for name, version in exact.items():
+              matches = [package for package in packages if package["name"] == name]
+              assert len(matches) == 1, (name, matches)
+              assert matches[0]["version"] == version, matches[0]
+          validit = next(package for package in packages if package["name"] == "validit")
+          assert validit["source"] == (
+              "git+https://github.com/drmingdrmer/validit.git?"
+              "rev=7016fa5e072a86092928144b3a3040381e6964e9#"
+              "7016fa5e072a86092928144b3a3040381e6964e9"
+          )
+          print("lock graph changed only at the audited validit source override")
+          PY
+          rustup run 1.88.0 cargo check --locked --all-targets --manifest-path "$manifest"
+      - name: Run active plan, evidence and negative-test gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python scripts/validate_h02_blocker_closure_v1.py
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python scripts/h02_dependency_probe_v1.py validate-matrix
+          python -m unittest \
+            tests/platform/test_h02_candidate_adapter_harness_v1.py \
+            tests/platform/test_h02_blocker_closure_evidence_v1.py \
+            tests/platform/test_h02_openraft_inmemory_cluster_v1.py \
+            tests/platform/test_h02_linearizability_checker_v1.py \
+            tests/platform/test_h02_openraft_fault_lab_evidence_v1.py \
+            tests/platform/test_h02_dependency_probe_v1.py \
+            -v
+          git diff --check
+      - name: Commit atomically and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-h02-validit-lock-binding.yml \
+            .github/workflows/apply-h02-candidate-binding-contract.yml \
+            .github/workflows/apply-h02-deterministic-contract-closure.yml
+          git add \
+            scripts/h02_candidate_adapter_harness_v1.py \
+            tests/platform/test_h02_candidate_adapter_harness_v1.py \
+            scripts/validate_h02_blocker_closure_v1.py \
+            .github/workflows/h02-durable-store-v2.yml \
+            probes/h02/openraft-tokio/Cargo.lock \
+            .github/workflows/apply-h02-validit-lock-binding.yml \
+            .github/workflows/apply-h02-candidate-binding-contract.yml \
+            .github/workflows/apply-h02-deterministic-contract-closure.yml
+          git config user.name "heptabao-closure-bot"
+          git config user.email "102159240+ProfHepta@users.noreply.github.com"
+          git commit -m "fix(h02): close deterministic lock and binding contracts"
+          git fetch origin codex/h02-durable-multiprocess-closure-v2
+          git rebase origin/codex/h02-durable-multiprocess-closure-v2
+          git push origin HEAD:codex/h02-durable-multiprocess-closure-v2
