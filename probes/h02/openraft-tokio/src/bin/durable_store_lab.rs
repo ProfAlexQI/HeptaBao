@@ -63,7 +63,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
     fs::create_dir_all(&root)?;
 
     let result = async {
-        let mut serials = vec![seed ^ 11, seed.rotate_left(7) ^ 12, seed.rotate_left(19) ^ 13];
+        let mut serials = [seed ^ 11, seed.rotate_left(7) ^ 12, seed.rotate_left(19) ^ 13];
         serials.sort_unstable();
 
         let mut first = DurableCluster::new(&root)?;

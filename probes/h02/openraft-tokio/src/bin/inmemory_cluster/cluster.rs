@@ -386,7 +386,7 @@ pub async fn execute(seed: u64) -> AnyResult<Vec<Value>> {
     cluster.bootstrap_three_voters().await?;
 
     let mut serials = vec![11_u64, 12, 13, 14];
-    SplitMix64::new(seed ^ 0x4150_504c_59).shuffle(&mut serials);
+    SplitMix64::new(seed ^ 0x0041_5050_4c59).shuffle(&mut serials);
     let mut baseline_index = 0;
     for serial in serials {
         baseline_index = cluster.write(1, serial, format!("seeded-{serial}")).await?;
@@ -439,7 +439,7 @@ pub async fn execute(seed: u64) -> AnyResult<Vec<Value>> {
     let quorum_case = quorum_rejected && committed_not_advanced;
 
     let mut fault_plan = vec![1_u64, 2, 3, 4, 5, 6];
-    SplitMix64::new(seed ^ 0x4348_414f_53).shuffle(&mut fault_plan);
+    SplitMix64::new(seed ^ 0x0043_4841_4f53).shuffle(&mut fault_plan);
     let replay_index = (seed as usize) % fault_plan.len();
     let replay_case = replay_index < fault_plan.len();
 

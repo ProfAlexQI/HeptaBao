@@ -268,7 +268,7 @@ impl RaftLogReader<TypeConfig> for DurableLogStore {
     }
 
     async fn read_vote(&mut self) -> Result<Option<VoteOf<TypeConfig>>, io::Error> {
-        Ok(self.state.lock().await.vote.clone())
+        Ok(self.state.lock().await.vote)
     }
 }
 
@@ -297,7 +297,7 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
 
     async fn save_vote(&mut self, vote: &VoteOf<TypeConfig>) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
-        state.vote = Some(vote.clone());
+        state.vote = Some(*vote);
         self.persist(&state)
     }
 
