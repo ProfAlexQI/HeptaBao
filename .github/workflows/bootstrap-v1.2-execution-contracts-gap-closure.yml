@@ -11,12 +11,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: export-tested-v1-2-deepened-blocker-closure
+  group: export-tested-v1-2-deepened-blocker-closure-ubuntu
   cancel-in-progress: false
 
 jobs:
   materialize-validate-and-export:
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout exact transport head without write credentials
@@ -224,7 +224,8 @@ jobs:
           pathlib.Path(output.parent / 'manifest.sha256').write_text(
               f'{digest}  {output.name}\n', encoding='utf-8'
           )
-          subprocess.run(['git', 'diff', '--binary', 'HEAD'], check=True, stdout=open(output.parent / 'final-tree.patch', 'wb'))
+          with open(output.parent / 'final-tree.patch', 'wb') as patch:
+              subprocess.run(['git', 'diff', '--binary', 'HEAD'], check=True, stdout=patch)
           print(f'exported entries={len(entries)} manifest_sha256={digest}')
           PY
 
