@@ -29,8 +29,8 @@ def digest(value: str) -> str:
 def valid_receipt(result: str = "EXACT_HEAD_EXECUTED") -> dict:
     return {
         "schema": "heptabao.blocker-closure-receipt.v1",
-        "receipt_id": "HB-BCR-REPO-008-TEST-0001",
-        "blocker_id": "HB-BLK-REPO-008",
+        "receipt_id": "HB-BCR-REPO-012-TEST-0001",
+        "blocker_id": "HB-BLK-REPO-012",
         "blocker_class": "REPOSITORY_CONTROLLED",
         "source_binding": {
             "repository": "ProfHepta/HeptaBao",
@@ -118,7 +118,7 @@ class PlanV121Tests(unittest.TestCase):
     def test_checked_in_v121_contract_passes(self):
         result = validator.run_all()
         self.assertEqual(result["work_packages"], 301)
-        self.assertEqual(result["blockers"], 17)
+        self.assertEqual(result["blockers"], 21)
         self.assertEqual(result["external_action_packages"], 8)
         self.assertFalse(result["qualification"])
         self.assertEqual(result["authority_effect"], "NONE")
