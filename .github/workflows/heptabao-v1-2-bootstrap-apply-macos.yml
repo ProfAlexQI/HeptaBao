@@ -1,0 +1,96 @@
+name: heptabao-v1-2-bootstrap-apply-macos
+
+on:
+  push:
+    branches: ["codex/heptabao-plan-v1-2-closure"]
+    paths:
+      - ".github/workflows/heptabao-v1-2-bootstrap-apply-macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: heptabao-v1-2-bootstrap-apply-macos
+  cancel-in-progress: false
+
+jobs:
+  apply-validated-transition:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact bootstrap head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact source and assemble audited bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, zipfile, os
+          root = pathlib.Path('bootstrap/v1.2')
+          encoded = b''.join(path.read_bytes() for path in sorted(root.glob('closure.b64.part*')))
+          payload = base64.b64decode(encoded, validate=True)
+          digest = hashlib.sha256(payload).hexdigest()
+          expected = '0f1b0a564b2c3ffced4e0f96661af8817b8fd57a38d0206dd0fbbbafe40ded1f'
+          assert digest == expected, (digest, expected)
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'closure'
+          target.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(pathlib.Path(os.environ['RUNNER_TEMP']) / 'heptabao_v1_2_closure.zip', 'w') as sink:
+              pass
+          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'heptabao_v1_2_closure.zip'
+          archive.write_bytes(payload)
+          with zipfile.ZipFile(archive) as source:
+              source.extractall(target)
+          assert (target / 'heptabao_v1_2_closure' / 'apply_heptabao_v1_2_closure.py').is_file()
+          PY
+
+      - name: Install plan validation dependencies
+        run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Apply exact-base V1.2 transition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/closure/heptabao_v1_2_closure/apply_heptabao_v1_2_closure.py" . --allow-compatible-drift
+
+      - name: Remove one-shot bootstrap surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf bootstrap/v1.2
+          rm -f .github/workflows/heptabao-v1-2-bootstrap-apply.yml
+          rm -f .github/workflows/heptabao-v1-2-bootstrap-apply-macos.yml
+          rm -f .github/workflows/heptabao-source-export-v1.yml
+
+      - name: Validate final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_h02_candidate_adapters_v1.py
+          python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python3 scripts/validate_h02_openraft_fault_lab_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 -m unittest \
+            tests.plan.test_validate_plan_v1_2 \
+            tests.platform.test_h02_candidate_adapter_harness_v1 \
+            -v
+          git diff --check
+
+      - name: Commit deterministic transition
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "docs(plan): deepen V1.2 and close deterministic H02 blockers"
+          git push origin HEAD:codex/heptabao-plan-v1-2-closure
