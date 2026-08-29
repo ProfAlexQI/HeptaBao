@@ -361,11 +361,7 @@ pub async fn execute_hostile_snapshot_child(seed: u64) -> AnyResult<Value> {
     let original_snapshot_log_id = snapshot.meta.last_log_id;
     snapshot.meta.last_log_id = Some(stale_log_id);
 
-    let leader_vote = cluster.nodes[&1]
-        .raft
-        .metrics()
-        .borrow_watched()
-        .vote;
+    let leader_vote = cluster.nodes[&1].raft.metrics().borrow_watched().vote;
     let target_committed = cluster.nodes[&2]
         .raft
         .metrics()
