@@ -134,12 +134,19 @@ blockers:
 - id: HB-BLK-REPO-007
   class: REPOSITORY_CONTROLLED
   severity: CRITICAL
-  title: state machine and snapshot can cross generations
+  title: durable generations can cross, disappear, or roll back through ambiguous reopen semantics
   owner_role: storage-distributed-systems
   state: REMEDIATION_IMPLEMENTED
   closure_criteria:
   - state and snapshot are stored in one atomic versioned bundle or manifest
+  - bootstrap create-new and recovery reopen-existing are distinct operations
+  - versioned domain-bound initialization markers are persisted after first authoritative publication
+  - missing initialized log or state generations fail closed
+  - legacy generations require explicit validation and adoption
   - interrupted replacement recovery is explicit
+  - a valid current generation retires stale previous state only after validation
+  - corrupt current state never silently falls back to an older previous generation
+  - multiple previous generations fail closed as ambiguous
   - corruption and reopen fail closed
   - exact-head durable matrix passes across required toolchains and seeds
   required_execution:

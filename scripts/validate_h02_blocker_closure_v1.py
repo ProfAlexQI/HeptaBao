@@ -23,6 +23,7 @@ RESULT_SCHEMA_PATH = ROOT / "schemas/heptabao_h02_blocker_closure_result_v1.sche
 EVIDENCE_SCHEMA_PATH = ROOT / "schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json"
 DURABLE_MAIN = ROOT / "probes/h02/openraft-tokio/src/bin/durable_store_lab.rs"
 DURABLE_STORE = ROOT / "probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs"
+DURABLE_CLUSTER = ROOT / "probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs"
 
 REQUIRED_FILES = [
     PLAN_PATH,
@@ -42,6 +43,7 @@ REQUIRED_FILES = [
     ROOT / "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs",
     DURABLE_MAIN,
     DURABLE_STORE,
+    DURABLE_CLUSTER,
 ]
 
 
@@ -149,7 +151,35 @@ def validate_manifest_and_lock() -> None:
 def validate_integrated_store() -> None:
     require_tokens(
         DURABLE_STORE,
-        ["RaftLogStorage", "RaftStateMachine", "RaftSnapshotBuilder", "sync_all", "IOFlushed"],
+        [
+            "RaftLogStorage",
+            "RaftStateMachine",
+            "RaftSnapshotBuilder",
+            "sync_all",
+            "IOFlushed",
+            "INITIALIZATION_MARKER_FILE",
+            "pub fn create(",
+            "pub fn open_existing(",
+            "pub fn adopt_legacy(",
+            "discard_stale_previous_after_validation",
+            "missing_initialized_log_generation_fails_closed",
+            "missing_initialized_state_generation_fails_closed",
+            "deleted_store_directory_is_not_silently_recreated_on_reopen",
+            "legacy_generation_requires_explicit_validated_adoption",
+            "corrupt_current_generation_never_falls_back_to_previous",
+            "multiple_previous_generations_are_ambiguous_and_fail_closed",
+        ],
+    )
+    require_tokens(
+        DURABLE_CLUSTER,
+        [
+            "StoreLifecycle::CreateNew",
+            "StoreLifecycle::ReopenExisting",
+            "DurableLogStore::create",
+            "DurableStateMachine::create",
+            "DurableLogStore::open_existing",
+            "DurableStateMachine::open_existing",
+        ],
     )
     require_tokens(
         DURABLE_MAIN,
@@ -159,6 +189,8 @@ def validate_integrated_store() -> None:
             '"full_cluster_disk_restart"',
             '"kernel_power_loss"',
             '"production_selected"',
+            "DurableStateMachine::open_existing",
+            "DurableLogStore::open_existing",
         ],
     )
 
