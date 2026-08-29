@@ -1,0 +1,174 @@
+name: h02-openraft-pinned-family-v3
+
+on:
+  push:
+    branches: ["exec/h02-openraft-pinned-family-v3"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-openraft-pinned-family-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  msrv-macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.85.0", "1.98.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Install Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install '${{ matrix.toolchain }}' --profile minimal
+          rustup override set '${{ matrix.toolchain }}'
+          rustc --version --verbose
+          cargo --version --verbose
+      - name: Prepare exact probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/h02-probes"
+          mkdir -p "$RUNNER_TEMP/h02-probes"
+          cp -a probes/h02/. "$RUNNER_TEMP/h02-probes/"
+          echo "MANIFEST=$RUNNER_TEMP/h02-probes/openraft-tokio/Cargo.toml" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/openraft-target-${{ matrix.toolchain }}" >> "$GITHUB_ENV"
+      - name: Generate lock and prove exact family/source pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile --manifest-path "$MANIFEST"
+          cargo tree --locked --manifest-path "$MANIFEST" > "$RUNNER_TEMP/cargo-tree.txt"
+          python3 - <<'PY'
+          import os, pathlib, re
+          text = pathlib.Path(os.environ['RUNNER_TEMP'], 'cargo-tree.txt').read_text()
+          family = {
+              name: sorted(set(re.findall(rf'{re.escape(name)} v([^\s]+)', text)))
+              for name in ('openraft', 'openraft-memstore', 'openraft-rt', 'openraft-rt-tokio', 'openraft-macros')
+          }
+          bad = {k: v for k, v in family.items() if v != ['0.10.0-alpha.33']}
+          if bad:
+              raise SystemExit(f'mixed OpenRaft family: {bad}')
+          if 'validit v0.2.5' not in text or '7016fa5e072a86092928144b3a3040381e6964e9' not in pathlib.Path(os.environ['MANIFEST']).read_text():
+              raise SystemExit('validit 0.2.5 exact source override missing')
+          lock = pathlib.Path(os.environ['RUNNER_TEMP'], 'h02-probes/openraft-tokio/Cargo.lock').read_text()
+          if 'git+https://github.com/drmingdrmer/validit.git?rev=7016fa5e072a86092928144b3a3040381e6964e9#' not in lock:
+              raise SystemExit('Cargo.lock does not bind validit exact git revision')
+          print('exact OpenRaft alpha.33 family and validit source pin verified')
+          PY
+      - name: Compile, test and run candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --all-targets --manifest-path "$MANIFEST"
+          cargo run --quiet --locked --manifest-path "$MANIFEST" -- --seed 0x5eed20260828cafe > "$RUNNER_TEMP/openraft-candidate.jsonl"
+          test -s "$RUNNER_TEMP/openraft-candidate.jsonl"
+      - name: Run real three-node cluster twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked --manifest-path "$MANIFEST" \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > "$RUNNER_TEMP/cluster-a.jsonl" 2> "$RUNNER_TEMP/cluster-a.stderr"
+          cargo run --quiet --locked --manifest-path "$MANIFEST" \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > "$RUNNER_TEMP/cluster-b.jsonl" 2> "$RUNNER_TEMP/cluster-b.stderr"
+          cmp "$RUNNER_TEMP/cluster-a.jsonl" "$RUNNER_TEMP/cluster-b.jsonl"
+      - name: Upload evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-openraft-pinned-v3-macos-${{ matrix.toolchain }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/h02-probes/openraft-tokio/Cargo.lock
+            ${{ runner.temp }}/cargo-tree.txt
+            ${{ runner.temp }}/openraft-candidate.jsonl
+            ${{ runner.temp }}/cluster-a.jsonl
+            ${{ runner.temp }}/cluster-b.jsonl
+            ${{ runner.temp }}/cluster-a.stderr
+            ${{ runner.temp }}/cluster-b.stderr
+          if-no-files-found: ignore
+          retention-days: 30
+
+  linux-arm64-faults:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Install Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+      - name: Prepare exact probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/h02-probes"
+          mkdir -p "$RUNNER_TEMP/h02-probes"
+          cp -a probes/h02/. "$RUNNER_TEMP/h02-probes/"
+          echo "MANIFEST=$RUNNER_TEMP/h02-probes/openraft-tokio/Cargo.toml" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/openraft-target-linux-arm64" >> "$GITHUB_ENV"
+      - name: Compile and execute all closure components
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile --manifest-path "$MANIFEST"
+          cargo test --locked --all-targets --manifest-path "$MANIFEST"
+          cargo run --quiet --locked --manifest-path "$MANIFEST" \
+            --bin heptabao-h02-openraft-blocker-closure-lab -- \
+            --mode all --seed 0x5eed20260828cafe \
+            > "$RUNNER_TEMP/blocker-closure-result.json" 2> "$RUNNER_TEMP/blocker-closure.stderr"
+          python3 - <<'PY'
+          import json, os
+          v = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'blocker-closure-result.json')))
+          assert v['status'] == 'EXECUTED_PASS', v
+          assert all(v['components'][k]['status'] == 'EXECUTED_PASS' for k in ('os_suspend','durable_faults','clock_faults'))
+          assert v['qualification'] is False
+          assert v['selection_effect'] == 'NONE'
+          assert v['authority_effect'] == 'NONE'
+          print('Linux closure components passed without authority')
+          PY
+      - name: Upload evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-openraft-pinned-v3-linux-arm64-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/h02-probes/openraft-tokio/Cargo.lock
+            ${{ runner.temp }}/blocker-closure-result.json
+            ${{ runner.temp }}/blocker-closure.stderr
+          if-no-files-found: ignore
+          retention-days: 30
