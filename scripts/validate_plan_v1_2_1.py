@@ -35,7 +35,7 @@ EXPECTED_EXTERNAL = {
     "HB-BLK-EXT-006": ("HB-EAP-EXT-006", "EXTERNAL_STORAGE_LAB"),
     "HB-BLK-EXT-007": ("HB-EAP-EXT-007", "EXTERNAL_REPRODUCTION"),
 }
-EXPECTED_REPOSITORY = {f"HB-BLK-REPO-{value:03d}" for value in range(1, 10)}
+EXPECTED_REPOSITORY = {f"HB-BLK-REPO-{value:03d}" for value in range(1, 14)}
 REQUIRED_NORMATIVE_PATHS = {
     "docs/plan/HEPTABAO_PLAN_V1_2_1_EXECUTION_DEEPENING.md",
     "docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md",
@@ -220,8 +220,13 @@ def validate_closure_receipt_schema(
         if properties.get(field, {}).get("const") != expected:
             fail(f"blocker closure receipt {field} is not fail-closed")
     closed_rule = json.dumps(schema.get("allOf", []), sort_keys=True)
-    for token in ('"CLOSED"', '"failed": {"const": 0}', '"blocked": {"const": 0}',
-                  '"unknown": {"const": 0}', '"unexecuted": {"const": 0}'):
+    for token in (
+        '"CLOSED"',
+        '"failed": {"const": 0}',
+        '"blocked": {"const": 0}',
+        '"unknown": {"const": 0}',
+        '"unexecuted": {"const": 0}',
+    ):
         if token not in closed_rule:
             fail(f"blocker closure CLOSED condition missing: {token}")
     return schema
