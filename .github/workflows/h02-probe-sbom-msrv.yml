@@ -90,7 +90,7 @@ jobs:
           - {profile: HB-H02-PROBE-RUSTLS-RING, probe_dir: probes/h02/rustls-ring, package: rustls, version: 0.23.43, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}
           - {profile: HB-H02-PROBE-RUSTLS-AWS-LC, probe_dir: probes/h02/rustls-aws-lc, package: rustls, version: 0.23.43, toolchain: 1.71.0, target: x86_64-unknown-linux-gnu}
           - {profile: HB-H02-PROBE-RUSTLS-AWS-LC, probe_dir: probes/h02/rustls-aws-lc, package: rustls, version: 0.23.43, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}
-          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.85.0, target: x86_64-unknown-linux-gnu}
+          - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.88.0, target: x86_64-unknown-linux-gnu}
           - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}
     steps:
       - name: Checkout exact source
