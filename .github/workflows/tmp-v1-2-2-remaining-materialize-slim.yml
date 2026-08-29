@@ -1,8 +1,8 @@
-name: tmp-v1-2-2-remaining-materialize-slim
+name: tmp-v1-2-2-remaining-materialize-macos
 
 on:
   push:
-    branches: ["codex/tmp-v1.2.2-remaining-materialize-slim"]
+    branches: ["codex/tmp-v1.2.2-remaining-materialize-macos"]
     paths:
       - ".github/workflows/tmp-v1-2-2-remaining-materialize-slim.yml"
       - ".github/workflows/tmp-v1-2-2-remaining-slim.trigger"
@@ -12,19 +12,19 @@ permissions:
   contents: write
 
 concurrency:
-  group: tmp-v1-2-2-remaining-materialize-slim
+  group: tmp-v1-2-2-remaining-materialize-macos
   cancel-in-progress: true
 
 jobs:
   materialize:
-    runs-on: ubuntu-slim
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - name: Checkout exact transition commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: true
       - name: Extract, verify and self-remove
         shell: bash
@@ -34,10 +34,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          git merge-base --is-ancestor "$EXACT_PARENT" HEAD
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           cat bootstrap/v122-remchunk-* > "$RUNNER_TEMP/remaining-overlay.tar.gz"
-          printf '%s  %s\n' "$ARCHIVE_SHA256" "$RUNNER_TEMP/remaining-overlay.tar.gz" | sha256sum -c -
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$RUNNER_TEMP/remaining-overlay.tar.gz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/remaining-overlay.tar.gz" -C .
           verify_blob() {
             path="$1"
@@ -59,6 +59,13 @@ jobs:
           git diff --cached --check
           git diff --cached --name-only | sort > "$RUNNER_TEMP/actual-paths"
           cat > "$RUNNER_TEMP/expected-paths" <<'PATHS'
+          .github/workflows/tmp-v1-2-2-remaining-materialize-slim.yml
+          .github/workflows/tmp-v1-2-2-remaining-slim.trigger
+          bootstrap/v122-remchunk-00
+          bootstrap/v122-remchunk-01
+          bootstrap/v122-remchunk-02
+          bootstrap/v122-remchunk-03
+          bootstrap/v122-remchunk-04
           probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
           probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
           probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs
@@ -72,4 +79,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(h02): materialize unified Rust and validator blobs"
-          git push origin HEAD:codex/tmp-v1.2.2-remaining-materialize-slim
+          git push origin HEAD:codex/tmp-v1.2.2-remaining-materialize-macos
