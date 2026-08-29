@@ -147,6 +147,73 @@ blockers:
   closure_receipt_required: true
 - id: HB-BLK-REPO-008
   class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: stale snapshot protocol acknowledgement was conflated with state installation
+  owner_role: storage-distributed-systems
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - successful stale-snapshot response is followed by bounded state observation
+  - log committed applied snapshot purged membership and application state remain unchanged
+  - any guarded state change is EXECUTED_FAIL
+  - exact-head hostile-snapshot and linearizability matrices PASS
+  required_execution:
+  - plan-integrity-v4/openraft-exact-graph-and-runtime
+  - h02-openraft-fault-lab
+  evidence:
+  - probes/h02/openraft-tokio/src/bin/openraft_fault_lab/hostile_snapshot_guard.rs
+  - probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
+  - .github/workflows/h02-openraft-fault-lab.yml
+  closure_receipt_required: true
+- id: HB-BLK-REPO-009
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: in-memory evidence collector rejected the declared effective Rust floor
+  owner_role: platform
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - collector accepts Rust 1.88.0 and 1.98.0 only
+  - Rust 1.85.0 cannot be represented as an effective execution
+  - exact-head six-entry in-memory evidence matrix PASS
+  required_execution:
+  - plan-integrity-v4/plan-and-python
+  - h02-openraft-inmemory-cluster
+  evidence:
+  - scripts/h02_openraft_inmemory_cluster_evidence_v1.py
+  - tests/platform/test_h02_openraft_inmemory_cluster_v1.py
+  closure_receipt_required: true
+- id: HB-BLK-REPO-010
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: durable-store source was not normalized by the enforced formatter
+  owner_role: storage-distributed-systems
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - cargo fmt check passes on the exact OpenRaft manifest
+  - Rust 1.88.0 and 1.98.0 tests and Clippy execute after the format gate
+  required_execution:
+  - plan-integrity-v4/openraft-exact-graph-and-runtime
+  evidence:
+  - probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
+  - .github/workflows/plan-integrity-v4.yml
+  closure_receipt_required: true
+- id: HB-BLK-REPO-011
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: blocker-closure shell aborted before preserving every matrix outcome
+  owner_role: qualification-platform
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - every build and candidate exit code is written for all six entries
+  - nonzero candidate exits do not terminate evidence collection prematurely
+  - final gate still fails closed unless every technical entry passes
+  required_execution:
+  - h02-openraft-blocker-closure
+  evidence:
+  - .github/workflows/h02-openraft-blocker-closure.yml
+  - scripts/h02_blocker_closure_evidence_v1.py
+  closure_receipt_required: true
+- id: HB-BLK-REPO-012
+  class: REPOSITORY_CONTROLLED
   severity: HIGH
   title: external blockers lacked executable one-to-one action packages
   owner_role: program-governance
@@ -165,7 +232,7 @@ blockers:
   - scripts/validate_plan_v1_2_1.py
   - tests/plan/test_plan_v1_2_1.py
   closure_receipt_required: true
-- id: HB-BLK-REPO-009
+- id: HB-BLK-REPO-013
   class: REPOSITORY_CONTROLLED
   severity: HIGH
   title: blocker closure lacked an exact-source receipt and retry/base-drift contract
