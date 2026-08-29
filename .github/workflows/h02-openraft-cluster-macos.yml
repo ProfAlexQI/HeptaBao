@@ -1,0 +1,160 @@
+name: h02-openraft-cluster-macos
+
+on:
+  push:
+    branches: ["codex/h02-openraft-cluster-macos-v1"]
+    paths:
+      - ".github/workflows/h02-openraft-cluster-macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-openraft-cluster-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cluster:
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Validate cluster evidence contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python -m unittest tests/platform/test_h02_openraft_inmemory_cluster_v1.py -v
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.85.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal
+            rustup run "$toolchain" rustc --version --verbose
+            rustup run "$toolchain" cargo --version --verbose
+          done
+
+      - name: Execute six real three-node cluster entries
+        id: execute
+        shell: bash
+        env:
+          FIXED_SOURCE: cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397
+          TOOLCHAINS: "1.85.0 1.98.0"
+          SEEDS: "0x5eed20260828cafe 0x8badf00d12345678 0xd15ea5e5cafef00d"
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/h02-openraft-cluster"
+          evidence="$GITHUB_WORKSPACE/evidence/h02-openraft-cluster-macos"
+          rm -rf "$root" "$evidence"
+          mkdir -p "$root" "$evidence"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+
+          for toolchain in $TOOLCHAINS; do
+            work="$root/$toolchain"
+            mkdir -p "$work"
+            cp -a probes/h02/openraft-tokio/. "$work/"
+            rm -f "$work/Cargo.lock"
+            manifest="$work/Cargo.toml"
+            export CARGO_TARGET_DIR="$root/target-$toolchain"
+            rustup run "$toolchain" cargo generate-lockfile --manifest-path "$manifest" \
+              >"$evidence/cargo-generate-lockfile-$toolchain.log" 2>&1
+            rustup run "$toolchain" cargo test --locked --all-targets --manifest-path "$manifest" \
+              >"$evidence/cargo-test-$toolchain.log" 2>&1
+
+            for seed in $SEEDS; do
+              seed_name="${seed#0x}"
+              entry="$evidence/$toolchain-$seed_name"
+              mkdir -p "$entry"
+              rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" \
+                --bin heptabao-h02-openraft-inmemory-cluster -- --seed "$seed" \
+                >"$entry/cluster-output.jsonl" 2>"$entry/cluster-stderr.log"
+              rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" \
+                --bin heptabao-h02-openraft-inmemory-cluster -- --seed "$seed" \
+                >"$entry/cluster-replay.jsonl" 2>"$entry/cluster-replay-stderr.log"
+              cmp "$entry/cluster-output.jsonl" "$entry/cluster-replay.jsonl"
+              cp "$manifest" "$entry/Cargo.toml"
+              cp "$work/Cargo.lock" "$entry/Cargo.lock"
+              environment_id="github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${toolchain}-${seed}"
+              python scripts/h02_openraft_inmemory_cluster_evidence_v1.py collect \
+                --adapter-output "$entry/cluster-output.jsonl" \
+                --replay-output "$entry/cluster-replay.jsonl" \
+                --execution-exit-code 0 \
+                --seed "$seed" \
+                --toolchain "$toolchain" \
+                --manifest "$entry/Cargo.toml" \
+                --cargo-lock "$entry/Cargo.lock" \
+                --source-commit "$FIXED_SOURCE" \
+                --source-tree "$source_tree" \
+                --branch codex/h02-final-gap-closure-v1 \
+                --clean-tree \
+                --environment-id "$environment_id" \
+                --executor-kind github-hosted \
+                --runner-id github-api-enrichment-pending \
+                --runner-name "$RUNNER_NAME" \
+                --output "$entry/cluster-evidence.json"
+            done
+          done
+          printf 'evidence=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Require all six cluster entries without authority
+        shell: bash
+        env:
+          EVIDENCE: ${{ steps.execute.outputs.evidence }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+
+          root = Path(os.environ['EVIDENCE'])
+          schema = json.load(open('schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json', encoding='utf-8'))
+          paths = sorted(root.glob('*-*/cluster-evidence.json'))
+          assert len(paths) == 6, paths
+          for path in paths:
+              value = json.load(path.open(encoding='utf-8'))
+              errors = list(Draft202012Validator(schema).iter_errors(value))
+              assert not errors, (path, [error.message for error in errors])
+              assert value['status'] == 'EXECUTED_PASS', (path, value['status'])
+              assert value['scope']['real_full_snapshot_rpc'] is True
+              assert value['qualification'] is False
+              assert value['selection_effect'] == 'NONE'
+              assert value['promotion_effect'].startswith('BLOCK_')
+              assert value['authority_effect'] == 'NONE'
+          print('six real OpenRaft cluster entries passed on macOS ARM64; authority remains closed')
+          PY
+
+      - name: Upload bounded cluster evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-openraft-cluster-macos-${{ github.run_id }}
+          path: evidence/h02-openraft-cluster-macos/
+          if-no-files-found: error
+          retention-days: 30
