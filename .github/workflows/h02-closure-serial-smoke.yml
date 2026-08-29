@@ -85,17 +85,21 @@ jobs:
           cargo test --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Compile and test exact candidate probes on Rust 1.98
+      - name: Copy complete shared probe tree
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/h02-probes"
           mkdir -p "$RUNNER_TEMP/h02-probes"
+          cp -a probes/h02/. "$RUNNER_TEMP/h02-probes/"
+          test -f "$RUNNER_TEMP/h02-probes/rustls-public-fixtures.rs"
+
+      - name: Compile and test exact candidate probes on Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
           for subdir in tokio-minimal rustls-ring rustls-aws-lc openraft-tokio; do
-            probe="$RUNNER_TEMP/h02-probes/$subdir"
-            mkdir -p "$probe"
-            cp -a "probes/h02/$subdir/." "$probe/"
-            manifest="$probe/Cargo.toml"
+            manifest="$RUNNER_TEMP/h02-probes/$subdir/Cargo.toml"
             export CARGO_TARGET_DIR="$RUNNER_TEMP/h02-target-$subdir"
             cargo generate-lockfile --manifest-path "$manifest"
             cargo test --locked --all-targets --manifest-path "$manifest"
