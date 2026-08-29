@@ -1,0 +1,89 @@
+name: apply-h02-remaining-blocker-fixes-v3-macos-intel
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-v1"]
+    paths: [".github/workflows/apply-h02-remaining-blocker-fixes-v3-macos-intel.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-h02-remaining-blocker-fixes-v3
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify-intel:
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact closure branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-final-gap-closure-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Materialize audited repair scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          workflow = yaml.safe_load(
+              Path('.github/workflows/apply-h02-remaining-blocker-fixes-v3-macos.yml').read_text(encoding='utf-8')
+          )
+          steps = workflow['jobs']['apply-and-verify-macos']['steps']
+          wanted = {
+              'Execute canonical patch and repair its terminal YAML transform': '/tmp/h02-repair-apply.sh',
+              'Validate plans, schemas and Python semantics': '/tmp/h02-repair-validate.sh',
+              'Compile and execute platform-neutral repaired probes': '/tmp/h02-repair-rust.sh',
+          }
+          found = set()
+          for step in steps:
+              name = step.get('name')
+              if name not in wanted:
+                  continue
+              script = step.get('run')
+              if not isinstance(script, str) or not script.strip():
+                  raise SystemExit(f'missing run script for {name}')
+              path = Path(wanted[name])
+              path.write_text(script + '\n', encoding='utf-8')
+              path.chmod(0o755)
+              found.add(name)
+              print(f'materialized {name}: {len(script)} bytes')
+          missing = set(wanted) - found
+          if missing:
+              raise SystemExit(f'missing audited steps: {sorted(missing)}')
+          PY
+
+      - name: Apply source, plan and evidence-semantic fixes
+        shell: bash
+        run: /tmp/h02-repair-apply.sh
+
+      - name: Validate plans, schemas and Python semantics
+        shell: bash
+        run: /tmp/h02-repair-validate.sh
+
+      - name: Compile and execute repaired OpenRaft probes
+        shell: bash
+        run: /tmp/h02-repair-rust.sh
+
+      - name: Commit repairs and remove one-shot workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-h02-remaining-blocker-fixes-v3.yml \
+            .github/workflows/apply-h02-remaining-blocker-fixes-v3-macos.yml \
+            .github/workflows/apply-h02-remaining-blocker-fixes-v3-macos-intel.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(h02): close OpenRaft execution and MSRV blockers"
+          git push origin HEAD:codex/h02-final-gap-closure-v1
