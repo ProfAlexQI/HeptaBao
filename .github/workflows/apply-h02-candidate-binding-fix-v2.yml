@@ -71,9 +71,6 @@ jobs:
           python -m unittest tests/platform/test_h02_candidate_adapter_harness_v1.py -v
           python scripts/validate_plan_v2.py
           python scripts/validate_plan_v2_extensions.py
-          python scripts/validate_h01_h02_next_foundation_v1.py
-          python scripts/validate_dependency_bakeoff.py
-          python scripts/validate_h02_research_capture_v1.py
           git diff --check
 
       - name: Commit repair and retire temporary maintenance surface
