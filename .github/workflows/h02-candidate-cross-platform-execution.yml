@@ -15,22 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  candidate-profile:
+  candidate-platform:
     strategy:
       fail-fast: false
       matrix:
         runner: [windows-2025, macos-15]
-        variant:
-          - tokio-1_71
-          - tokio-1_98
-          - rustls-ring-1_71
-          - rustls-ring-1_98
-          - rustls-aws-lc-1_71
-          - rustls-aws-lc-1_98
-          - openraft-1_85
-          - openraft-1_98
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 75
+    timeout-minutes: 240
     steps:
       - name: Checkout exact technical source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,49 +47,6 @@ jobs:
         shell: bash
         run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
 
-      - name: Resolve exact candidate profile
-        id: profile
-        shell: bash
-        env:
-          VARIANT: ${{ matrix.variant }}
-        run: |
-          set -euo pipefail
-          case "$VARIANT" in
-            tokio-1_71)
-              profile=tokio; toolchain=1.71.0; subdir=tokio-minimal; domain=runtime; scope=FULL_REFERENCE_CASE_SET ;;
-            tokio-1_98)
-              profile=tokio; toolchain=1.98.0; subdir=tokio-minimal; domain=runtime; scope=FULL_REFERENCE_CASE_SET ;;
-            rustls-ring-1_71)
-              profile=rustls-ring; toolchain=1.71.0; subdir=rustls-ring; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
-            rustls-ring-1_98)
-              profile=rustls-ring; toolchain=1.98.0; subdir=rustls-ring; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
-            rustls-aws-lc-1_71)
-              profile=rustls-aws-lc; toolchain=1.71.0; subdir=rustls-aws-lc; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
-            rustls-aws-lc-1_98)
-              profile=rustls-aws-lc; toolchain=1.98.0; subdir=rustls-aws-lc; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
-            openraft-1_85)
-              profile=openraft; toolchain=1.85.0; subdir=openraft-tokio; domain=raft; scope=API_SEAM_AND_FAILURE_MODEL_PARTIAL ;;
-            openraft-1_98)
-              profile=openraft; toolchain=1.98.0; subdir=openraft-tokio; domain=raft; scope=API_SEAM_AND_FAILURE_MODEL_PARTIAL ;;
-            *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
-          esac
-          printf 'profile=%s\ntoolchain=%s\nsubdir=%s\ndomain=%s\nscope=%s\n' \
-            "$profile" "$toolchain" "$subdir" "$domain" "$scope" >> "$GITHUB_OUTPUT"
-
-      - name: Install exact Rust toolchain
-        shell: bash
-        env:
-          TOOLCHAIN: ${{ steps.profile.outputs.toolchain }}
-        run: |
-          set -euo pipefail
-          rustup toolchain install "$TOOLCHAIN" --profile minimal
-          host="$(rustup run "$TOOLCHAIN" rustc -vV | sed -n 's/^host: //p')"
-          test -n "$host"
-          echo "host=$host" >> "$GITHUB_OUTPUT"
-          rustup run "$TOOLCHAIN" rustc --version --verbose
-          rustup run "$TOOLCHAIN" cargo --version --verbose
-        id: rust
-
       - name: Validate repaired candidate binding
         shell: bash
         run: |
@@ -106,95 +54,121 @@ jobs:
           python scripts/validate_h02_candidate_adapters_v1.py
           python -m unittest tests/platform/test_h02_candidate_adapter_harness_v1.py -v
 
-      - name: Build once and execute all three deterministic seeds
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.71.0 1.85.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal
+            rustup run "$toolchain" rustc --version --verbose
+            rustup run "$toolchain" cargo --version --verbose
+          done
+
+      - name: Build eight exact profiles and execute three seeds each
         id: execute
         shell: bash
         env:
-          PROFILE: ${{ steps.profile.outputs.profile }}
-          SUBDIR: ${{ steps.profile.outputs.subdir }}
-          TOOLCHAIN: ${{ steps.profile.outputs.toolchain }}
-          HOST: ${{ steps.rust.outputs.host }}
-          SCOPE: ${{ steps.profile.outputs.scope }}
-          DOMAIN: ${{ steps.profile.outputs.domain }}
-          VARIANT: ${{ matrix.variant }}
           FIXED_SOURCE: cbaaadbdf9d7dbcb773625d62757db1368d07e64
         run: |
           set -u
           evidence="$RUNNER_TEMP/h02-candidate-evidence"
-          probe_root="$RUNNER_TEMP/h02-candidate-probes"
-          target_root="$RUNNER_TEMP/h02-candidate-target"
-          rm -rf "$evidence" "$probe_root" "$target_root"
-          mkdir -p "$evidence" "$probe_root"
-          cp -a probes/h02/. "$probe_root/"
-          manifest="$probe_root/$SUBDIR/Cargo.toml"
-          export CARGO_TARGET_DIR="$target_root"
+          probes="$RUNNER_TEMP/h02-candidate-probes"
+          rm -rf "$evidence" "$probes"
+          mkdir -p "$evidence" "$probes"
+          cp -a probes/h02/. "$probes/"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
 
-          build_status=0
-          rustup run "$TOOLCHAIN" cargo generate-lockfile --manifest-path "$manifest" \
-            >"$evidence/cargo-generate-lockfile.log" 2>&1 || build_status=$?
-          if [ "$build_status" -eq 0 ]; then
-            rustup run "$TOOLCHAIN" cargo test --locked --all-targets --manifest-path "$manifest" \
-              >"$evidence/cargo-test.log" 2>&1 || build_status=$?
-          fi
-          printf '%s\n' "$build_status" > "$evidence/build-exit-code.txt"
+          cat > "$RUNNER_TEMP/variants.tsv" <<'EOF'
+          tokio-1_71	tokio	1.71.0	tokio-minimal	runtime	FULL_REFERENCE_CASE_SET
+          tokio-1_98	tokio	1.98.0	tokio-minimal	runtime	FULL_REFERENCE_CASE_SET
+          rustls-ring-1_71	rustls-ring	1.71.0	rustls-ring	tls	FULL_REFERENCE_CASE_SET
+          rustls-ring-1_98	rustls-ring	1.98.0	rustls-ring	tls	FULL_REFERENCE_CASE_SET
+          rustls-aws-lc-1_71	rustls-aws-lc	1.71.0	rustls-aws-lc	tls	FULL_REFERENCE_CASE_SET
+          rustls-aws-lc-1_98	rustls-aws-lc	1.98.0	rustls-aws-lc	tls	FULL_REFERENCE_CASE_SET
+          openraft-1_85	openraft	1.85.0	openraft-tokio	raft	API_SEAM_AND_FAILURE_MODEL_PARTIAL
+          openraft-1_98	openraft	1.98.0	openraft-tokio	raft	API_SEAM_AND_FAILURE_MODEL_PARTIAL
+          EOF
 
-          for seed in 0x5eed20260828cafe 0x8badf00d12345678 0xd15ea5e5cafef00d; do
-            seed_name="${seed#0x}"
-            entry="$evidence/$seed_name"
-            mkdir -p "$entry/reference"
-            execution_status="$build_status"
-            if [ "$execution_status" -eq 0 ]; then
-              rustup run "$TOOLCHAIN" cargo run --quiet --locked --manifest-path "$manifest" -- \
-                --seed "$seed" >"$entry/adapter-output.jsonl" 2>"$entry/adapter-stderr.log" || execution_status=$?
+          while IFS=$'\t' read -r variant profile toolchain subdir domain scope; do
+            variant_root="$evidence/$variant"
+            mkdir -p "$variant_root"
+            manifest="$probes/$subdir/Cargo.toml"
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/h02-target-$variant"
+            host="$(rustup run "$toolchain" rustc -vV | sed -n 's/^host: //p')"
+            printf '%s\n' "$host" > "$variant_root/host-target.txt"
+
+            build_status=0
+            rustup run "$toolchain" cargo generate-lockfile --manifest-path "$manifest" \
+              >"$variant_root/cargo-generate-lockfile.log" 2>&1 || build_status=$?
+            if [ "$build_status" -eq 0 ]; then
+              rustup run "$toolchain" cargo test --locked --all-targets --manifest-path "$manifest" \
+                >"$variant_root/cargo-test.log" 2>&1 || build_status=$?
             fi
-            if [ "$execution_status" -eq 0 ]; then
-              rustup run "$TOOLCHAIN" cargo run --quiet --locked --manifest-path "$manifest" -- \
-                --seed "$seed" >"$entry/adapter-replay.jsonl" 2>"$entry/adapter-replay-stderr.log" || execution_status=$?
-            fi
-            printf '%s\n' "$execution_status" > "$entry/execution-exit-code.txt"
+            printf '%s\n' "$build_status" > "$variant_root/build-exit-code.txt"
 
-            python scripts/h02_seeded_behavior_harness_v1.py run \
-              --domain "$DOMAIN" \
-              --seed "$seed" \
-              --source-commit "$FIXED_SOURCE" \
-              --source-tree "$(git rev-parse 'HEAD^{tree}')" \
-              --branch codex/h02-final-gap-closure-v1 \
-              --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${VARIANT}-${seed}-reference" \
-              --executor-kind github-hosted \
-              --runner-id github-api-enrichment-pending \
-              --runner-name "$RUNNER_NAME" \
-              --output-dir "$entry/reference"
-            reference="$(find "$entry/reference" -maxdepth 1 -name "${DOMAIN}-*.json" -print -quit)"
-            test -n "$reference"
+            for seed in 0x5eed20260828cafe 0x8badf00d12345678 0xd15ea5e5cafef00d; do
+              seed_name="${seed#0x}"
+              entry="$variant_root/$seed_name"
+              mkdir -p "$entry/reference"
+              : > "$entry/adapter-output.jsonl"
+              : > "$entry/adapter-replay.jsonl"
+              : > "$entry/adapter-stderr.log"
+              : > "$entry/adapter-replay-stderr.log"
+              execution_status="$build_status"
+              if [ "$execution_status" -eq 0 ]; then
+                rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" -- \
+                  --seed "$seed" >"$entry/adapter-output.jsonl" 2>"$entry/adapter-stderr.log" || execution_status=$?
+              fi
+              if [ "$execution_status" -eq 0 ]; then
+                rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" -- \
+                  --seed "$seed" >"$entry/adapter-replay.jsonl" 2>"$entry/adapter-replay-stderr.log" || execution_status=$?
+              fi
+              printf '%s\n' "$execution_status" > "$entry/execution-exit-code.txt"
 
-            replay_arg=()
-            if [ -f "$entry/adapter-replay.jsonl" ]; then
-              replay_arg=(--replay-output "$entry/adapter-replay.jsonl")
-            fi
-            python scripts/h02_candidate_adapter_harness_v1.py collect \
-              --profile "$PROFILE" \
-              --adapter-output "$entry/adapter-output.jsonl" \
-              "${replay_arg[@]}" \
-              --execution-exit-code "$execution_status" \
-              --seed "$seed" \
-              --toolchain "$TOOLCHAIN" \
-              --target "$HOST" \
-              --source-commit "$FIXED_SOURCE" \
-              --source-tree "$(git rev-parse 'HEAD^{tree}')" \
-              --branch codex/h02-final-gap-closure-v1 \
-              --clean-tree \
-              --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${VARIANT}-${seed}-candidate" \
-              --executor-kind github-hosted \
-              --runner-id github-api-enrichment-pending \
-              --runner-name "$RUNNER_NAME" \
-              --output "$entry/candidate.json" \
-              --binding-output "$entry/feature-profile-binding.json"
-            python scripts/h02_candidate_adapter_harness_v1.py compare \
-              --reference "$reference" \
-              --candidate "$entry/candidate.json" \
-              --adapter-scope "$SCOPE" \
-              --output "$entry/comparison.json"
-          done
+              python scripts/h02_seeded_behavior_harness_v1.py run \
+                --domain "$domain" \
+                --seed "$seed" \
+                --source-commit "$FIXED_SOURCE" \
+                --source-tree "$source_tree" \
+                --branch codex/h02-final-gap-closure-v1 \
+                --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${variant}-${seed}-reference" \
+                --executor-kind github-hosted \
+                --runner-id github-api-enrichment-pending \
+                --runner-name "$RUNNER_NAME" \
+                --output-dir "$entry/reference"
+              reference="$(find "$entry/reference" -maxdepth 1 -name "${domain}-*.json" -print -quit)"
+              test -n "$reference"
+
+              replay_arg=()
+              if [ "$execution_status" -eq 0 ]; then
+                replay_arg=(--replay-output "$entry/adapter-replay.jsonl")
+              fi
+              python scripts/h02_candidate_adapter_harness_v1.py collect \
+                --profile "$profile" \
+                --adapter-output "$entry/adapter-output.jsonl" \
+                "${replay_arg[@]}" \
+                --execution-exit-code "$execution_status" \
+                --seed "$seed" \
+                --toolchain "$toolchain" \
+                --target "$host" \
+                --source-commit "$FIXED_SOURCE" \
+                --source-tree "$source_tree" \
+                --branch codex/h02-final-gap-closure-v1 \
+                --clean-tree \
+                --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUNNER_NAME}-${variant}-${seed}-candidate" \
+                --executor-kind github-hosted \
+                --runner-id github-api-enrichment-pending \
+                --runner-name "$RUNNER_NAME" \
+                --output "$entry/candidate.json" \
+                --binding-output "$entry/feature-profile-binding.json"
+              python scripts/h02_candidate_adapter_harness_v1.py compare \
+                --reference "$reference" \
+                --candidate "$entry/candidate.json" \
+                --adapter-scope "$scope" \
+                --output "$entry/comparison.json"
+            done
+          done < "$RUNNER_TEMP/variants.tsv"
+
           printf 'evidence=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -202,15 +176,14 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: h02-candidate-${{ matrix.runner }}-${{ matrix.variant }}-${{ github.run_id }}
+          name: h02-candidate-${{ matrix.runner }}-${{ github.run_id }}
           path: ${{ steps.execute.outputs.evidence }}/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Require three exact passes without qualification or authority
+      - name: Require all 24 exact executions without authority
         shell: bash
         env:
-          PROFILE: ${{ steps.profile.outputs.profile }}
           EVIDENCE: ${{ steps.execute.outputs.evidence }}
         run: |
           set -euo pipefail
@@ -220,21 +193,27 @@ jobs:
           from pathlib import Path
 
           root = Path(os.environ['EVIDENCE'])
-          entries = sorted(path for path in root.iterdir() if path.is_dir())
-          assert len(entries) == 3, entries
-          expected = (
-              'PARTIAL_ADAPTER_SCOPE_BLOCKS_PROMOTION'
-              if os.environ['PROFILE'] == 'openraft'
-              else 'INVARIANT_EQUIVALENT_UNREVIEWED'
-          )
-          for entry in entries:
-              candidate = json.load((entry / 'candidate.json').open(encoding='utf-8'))
-              comparison = json.load((entry / 'comparison.json').open(encoding='utf-8'))
-              assert candidate['status'] == 'EXECUTED_PASS', (entry, candidate['status'])
-              assert comparison['result'] == expected, (entry, comparison['result'], expected)
-              assert candidate['qualification'] is False
-              assert comparison['qualification'] is False
-              assert candidate['selection_effect'] == comparison['selection_effect'] == 'NONE'
-              assert candidate['authority_effect'] == comparison['authority_effect'] == 'NONE'
-          print(f'three candidate seeds passed as {expected}; qualification and authority remain closed')
+          variants = sorted(path for path in root.iterdir() if path.is_dir())
+          assert len(variants) == 8, variants
+          executions = 0
+          for variant in variants:
+              entries = sorted(path for path in variant.iterdir() if path.is_dir())
+              assert len(entries) == 3, (variant, entries)
+              expected = (
+                  'PARTIAL_ADAPTER_SCOPE_BLOCKS_PROMOTION'
+                  if variant.name.startswith('openraft-')
+                  else 'INVARIANT_EQUIVALENT_UNREVIEWED'
+              )
+              for entry in entries:
+                  executions += 1
+                  candidate = json.load((entry / 'candidate.json').open(encoding='utf-8'))
+                  comparison = json.load((entry / 'comparison.json').open(encoding='utf-8'))
+                  assert candidate['status'] == 'EXECUTED_PASS', (entry, candidate['status'])
+                  assert comparison['result'] == expected, (entry, comparison['result'], expected)
+                  assert candidate['qualification'] is False
+                  assert comparison['qualification'] is False
+                  assert candidate['selection_effect'] == comparison['selection_effect'] == 'NONE'
+                  assert candidate['authority_effect'] == comparison['authority_effect'] == 'NONE'
+          assert executions == 24
+          print('all 24 platform executions passed; qualification, selection and authority remain closed')
           PY
