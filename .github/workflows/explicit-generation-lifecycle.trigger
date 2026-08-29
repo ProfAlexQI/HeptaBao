@@ -1,5 +1,7 @@
 exact_head_parent=a7924398c2e2b2496c2fc08f3403b7c6258fcc92
+transition_definition_head=e10de279606ba3d828cdcb9444f8e1ecae65fa86
 purpose=materialize-explicit-create-reopen-adopt-lifecycle
+retry=2
 qualification=false
 selection_effect=NONE
 authority_effect=NONE
