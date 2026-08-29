@@ -2,7 +2,7 @@
   "schema": "heptabao.h00-implementation-status.v1",
   "plan_id": "HEPTABAO-PLAN-2026-08-28",
   "revision": "1.1",
-  "source_repository": "ProfAlexQI/HeptaBao",
+  "source_repository": "ProfHepta/HeptaBao",
   "source_branch": "codex/plan-v1.1-h00-execution",
   "active_authority_gate": "H00",
   "implemented_work_packages": [

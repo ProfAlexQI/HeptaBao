@@ -85,7 +85,7 @@
     "branch": "codex/h02-seeded-behavior-harnesses",
     "clean_tree": true,
     "commit_sha": "dc5f18bea2e039e2897cd89a3e502e96c4580b8d",
-    "repository": "ProfAlexQI/HeptaBao",
+    "repository": "ProfHepta/HeptaBao",
     "tree_sha": "52cd4c67cda5984183bef11bae31e230512cd35a"
   },
   "status": "EXECUTED_PASS",

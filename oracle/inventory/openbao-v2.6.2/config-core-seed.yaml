@@ -107,7 +107,7 @@ entries:
     observation_status: IDENTIFIED
     fixture_status: PLANNED
     notes: Raw storage diagnostics require explicit profile and strict protection.
-  - id: HB-CONFIG-ITEM-UI
+  - id: HB-CONFIG-ITEM-UI-ROOT
     key_path: ui
     surface: TOP_LEVEL
     value_shape: BOOLEAN

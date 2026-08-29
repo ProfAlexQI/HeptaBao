@@ -1,16 +1,16 @@
 # Bootstrap ownership only. This file does not satisfy independent-review
 # requirements until real, resolvable reviewer teams are assigned in
 # planning/HEPTABAO_REVIEW_ROLE_REGISTRY_V1.yaml.
-* @ProfAlexQI
+* @ProfHepta
 
 # Critical governance and evidence surfaces.
-/docs/plan/ @ProfAlexQI
-/planning/ @ProfAlexQI
-/schemas/ @ProfAlexQI
-/specs/ @ProfAlexQI
-/qualifications/ @ProfAlexQI
-/.github/workflows/ @ProfAlexQI
-/scripts/ @ProfAlexQI
-/crates/heptabao-governance/ @ProfAlexQI
-/SECURITY.md @ProfAlexQI
-/LICENSE-PLANNING.md @ProfAlexQI
+/docs/plan/ @ProfHepta
+/planning/ @ProfHepta
+/schemas/ @ProfHepta
+/specs/ @ProfHepta
+/qualifications/ @ProfHepta
+/.github/workflows/ @ProfHepta
+/scripts/ @ProfHepta
+/crates/heptabao-governance/ @ProfHepta
+/SECURITY.md @ProfHepta
+/LICENSE-PLANNING.md @ProfHepta

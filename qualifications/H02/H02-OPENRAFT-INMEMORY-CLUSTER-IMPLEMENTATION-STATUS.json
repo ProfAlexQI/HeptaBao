@@ -2,7 +2,7 @@
   "schema": "heptabao.h02-openraft-inmemory-cluster-implementation-status.v1",
   "plan_id": "HEPTABAO-PLAN-2026-08-28",
   "revision": "1.1",
-  "source_repository": "ProfAlexQI/HeptaBao",
+  "source_repository": "ProfHepta/HeptaBao",
   "source_branch": "codex/h02-openraft-inmemory-cluster-v1",
   "stack_base_branch": "codex/h02-candidate-adapters-v1",
   "implementation_commit": "cdc6b1155a26d300bd8914764dba880bb1fb902e",

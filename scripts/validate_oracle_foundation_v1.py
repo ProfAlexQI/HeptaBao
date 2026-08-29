@@ -371,14 +371,18 @@ def validate_fixture_schema_semantics() -> None:
 
 def validate_status(surface_count: int, endpoint_count: int) -> None:
     status = json_map("qualifications/H01/H01-IMPLEMENTATION-STATUS.json")
-    if status.get("work_status") != "SAFE_PUBLIC_FOUNDATION_ACTIVE":
+    if status.get("work_status") != "SAFE_PUBLIC_AND_SYNTHETIC_FOUNDATION_ACTIVE":
         fail("unexpected H01 work status")
     delivered = status.get("delivered", {})
     if delivered.get("surface_catalog_items") != surface_count or delivered.get("endpoint_seed_items") != endpoint_count:
         fail("H01 implementation status count mismatch")
+    if delivered.get("synthetic_side_effect_contracts") != 1:
+        fail("H01 status must bind exactly one synthetic side-effect contract")
     capture = status.get("capture_evidence", {})
-    if any(capture.get(key) != 0 for key in ("raw_restricted_fixtures", "sanitized_repository_fixtures", "signed_provenance_transfers", "reviewed_normalization_rules", "qualified_fixtures")):
+    if any(capture.get(key) != 0 for key in ("raw_restricted_fixtures", "black_box_sanitized_fixtures", "signed_provenance_transfers", "reviewed_normalization_rules", "qualified_fixtures")):
         fail("H01 status falsely claims capture/review/qualification evidence")
+    if capture.get("synthetic_contract_fixtures") != 1:
+        fail("H01 status must bind exactly one synthetic contract fixture")
     if status.get("qualification", {}).get("status") != "NOT_QUALIFIED":
         fail("H01 must remain NOT_QUALIFIED")
     if status.get("authority_effect") != "NONE":

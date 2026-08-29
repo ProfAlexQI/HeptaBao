@@ -6,7 +6,7 @@ Plan: `HEPTABAO-PLAN-2026-08-28` revision `1.1`
 ## 1. Source binding
 
 ```text
-Repository:            ProfAlexQI/HeptaBao
+Repository:            ProfHepta/HeptaBao
 Branch:                codex/h02-openraft-inmemory-cluster-v1
 Stack base:            codex/h02-candidate-adapters-v1
 Implementation commit: cdc6b1155a26d300bd8914764dba880bb1fb902e

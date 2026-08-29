@@ -2,7 +2,7 @@
   "schema": "heptabao.h02-candidate-adapters-implementation-status.v1",
   "plan_id": "HEPTABAO-PLAN-2026-08-28",
   "revision": "1.1",
-  "source_repository": "ProfAlexQI/HeptaBao",
+  "source_repository": "ProfHepta/HeptaBao",
   "source_branch": "codex/h02-candidate-adapters-v1",
   "stack_base_branch": "codex/h02-seeded-behavior-harnesses",
   "implementation_commit": "279796d728c04966f538d71aea77eaf57befea98",

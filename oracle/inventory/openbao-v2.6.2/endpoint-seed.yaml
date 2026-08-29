@@ -867,7 +867,7 @@ entries:
     authentication_mode: TOKEN_REQUIRED
     policy_capability: sudo
     request_audit: REQUIRED
-    response_audit: REQUIRED
+    response_audit: REQUIRED_BEFORE_SECRET_RELEASE
     side_effects: [STORAGE, CLUSTER]
     secret_response: true
     active_required: true

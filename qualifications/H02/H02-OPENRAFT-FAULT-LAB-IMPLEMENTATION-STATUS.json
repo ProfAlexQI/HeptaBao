@@ -148,7 +148,7 @@
   ],
   "selection_effect": "NONE",
   "source_branch": "codex/h02-openraft-hostile-faults-linearizability-v1",
-  "source_repository": "ProfAlexQI/HeptaBao",
+  "source_repository": "ProfHepta/HeptaBao",
   "stack_base_branch": "codex/h02-openraft-inmemory-cluster-v1",
   "status": "HOSTILE_SNAPSHOT_AND_LINEARIZABILITY_IMPLEMENTED_REMOTE_UNEXECUTED_NOT_QUALIFIED"
 }

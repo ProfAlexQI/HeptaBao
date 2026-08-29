@@ -293,7 +293,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         "profile_id": profile["profile_id"],
         "domain": profile["domain"],
         "source": {
-            "repository": "ProfAlexQI/HeptaBao",
+            "repository": "ProfHepta/HeptaBao",
             "commit_sha": args.source_commit,
             "tree_sha": args.source_tree,
             "branch": args.branch,

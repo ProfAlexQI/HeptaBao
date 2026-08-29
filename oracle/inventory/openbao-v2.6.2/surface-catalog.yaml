@@ -575,7 +575,7 @@ categories:
         fixture_status: PLANNED
         support_profiles: [HB-P10-CLIENT-OPS, HB-P12-FULL-C5]
         notes: Smuggling, limits, CORS, Host, forwarded certificate, redirect and HTTP/2.
-      - id: HB-SURFACE-CLI
+      - id: HB-SURFACE-CLI-ROOT
         name: Bao-compatible CLI
         kind: CLIENT_OPERATOR
         criticality: OPERATOR_CRITICAL

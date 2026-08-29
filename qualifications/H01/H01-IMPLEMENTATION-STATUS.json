@@ -2,7 +2,7 @@
   "schema": "heptabao.h01-implementation-status.v1",
   "plan_id": "HEPTABAO-PLAN-2026-08-28",
   "revision": "1.1",
-  "source_repository": "ProfAlexQI/HeptaBao",
+  "source_repository": "ProfHepta/HeptaBao",
   "source_branch": "codex/h01-h02-next-foundation",
   "program_authority_gate": "H00",
   "work_status": "SAFE_PUBLIC_AND_SYNTHETIC_FOUNDATION_ACTIVE",

@@ -335,7 +335,7 @@
           "$ref": "#/$defs/sha40"
         },
         "repository": {
-          "const": "ProfAlexQI/HeptaBao"
+          "const": "ProfHepta/HeptaBao"
         },
         "tree_sha": {
           "$ref": "#/$defs/sha40"
