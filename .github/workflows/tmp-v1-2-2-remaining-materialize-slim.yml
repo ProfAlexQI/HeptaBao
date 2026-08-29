@@ -1,8 +1,8 @@
-name: tmp-v1-2-2-remaining-materialize-slim
+name: tmp-v1-2-2-remaining-materialize-arm
 
 on:
   push:
-    branches: ["codex/tmp-v1.2.2-remaining-materialize-slim"]
+    branches: ["codex/tmp-v1.2.2-remaining-materialize-arm"]
     paths:
       - ".github/workflows/tmp-v1-2-2-remaining-materialize-slim.yml"
       - ".github/workflows/tmp-v1-2-2-remaining-slim.trigger"
@@ -12,12 +12,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: tmp-v1-2-2-remaining-materialize-slim
+  group: tmp-v1-2-2-remaining-materialize-arm
   cancel-in-progress: true
 
 jobs:
   materialize:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - name: Checkout exact transition commit
@@ -59,6 +59,13 @@ jobs:
           git diff --cached --check
           git diff --cached --name-only | sort > "$RUNNER_TEMP/actual-paths"
           cat > "$RUNNER_TEMP/expected-paths" <<'PATHS'
+          .github/workflows/tmp-v1-2-2-remaining-materialize-slim.yml
+          .github/workflows/tmp-v1-2-2-remaining-slim.trigger
+          bootstrap/v122-remchunk-00
+          bootstrap/v122-remchunk-01
+          bootstrap/v122-remchunk-02
+          bootstrap/v122-remchunk-03
+          bootstrap/v122-remchunk-04
           probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
           probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
           probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs
@@ -72,4 +79,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(h02): materialize unified Rust and validator blobs"
-          git push origin HEAD:codex/tmp-v1.2.2-remaining-materialize-slim
+          git push origin HEAD:codex/tmp-v1.2.2-remaining-materialize-arm
