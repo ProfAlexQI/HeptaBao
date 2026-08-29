@@ -64,3 +64,36 @@ Windows/其他平台如不能证明 replace + directory durability，profile 必
 ## 6. Raft 特定要求
 
 vote、committed index、log append/truncate/purge、state apply、snapshot 与 membership 都有独立 crash point。`IOFlushed` 只能在所声明 durable point 后完成；state-machine responder 只能在 state generation durable publish 后发送。snapshot install 不允许 state/snapshot 交叉 generation。
+
+## 7. Initialized-store lifecycle and rollback-safe replacement
+
+A durable store has three explicit caller-selected operations:
+
+1. `create-new` creates the first authoritative generation and only then publishes a
+   versioned, domain-bound initialization marker;
+2. `reopen-existing` requires both a valid marker and a valid authoritative generation;
+3. `adopt-legacy` is an explicit migration operation that validates the complete legacy
+   envelope, schema and invariants before publishing a marker.
+
+The ordinary reopen path MUST NOT create directories, initialize defaults, adopt legacy
+state, or infer that missing files mean a fresh store. Deleting both a marker and its
+authoritative generation remains data loss; it does not become an implicit bootstrap
+because the caller must still select `reopen-existing`.
+
+Interrupted replacement recovery follows these rules:
+
+- a missing current file plus exactly one `.previous` candidate may recover that candidate;
+- multiple previous candidates are ambiguous and fail closed;
+- a present current file is validated before any stale previous candidate is removed;
+- a corrupt current file never falls back silently to a previous generation;
+- one stale previous file may be retired only after current envelope, schema and domain
+  invariants validate and the parent directory is synchronized where supported;
+- orphan temporary files cannot authorize create-new or legacy adoption.
+
+Tests MUST cover fresh create/reopen, missing generation, deleted directory, explicit
+legacy adoption, corrupted marker, stale previous cleanup, corrupt-current no-rollback,
+and multiple-previous ambiguity.
+
+These repository-level guarantees do not establish storage-controller cache persistence,
+kernel power-cut safety, or filesystem-specific crash consistency. Those require the
+separately operated laboratory evidence defined by the external action package.

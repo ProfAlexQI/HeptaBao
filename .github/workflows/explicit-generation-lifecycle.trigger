@@ -1,9 +1,0 @@
-exact_head_parent=a7924398c2e2b2496c2fc08f3403b7c6258fcc92
-transition_definition_head=0d2c41a9dd102068330f8007c2f3bb40cfffef36
-purpose=materialize-explicit-create-reopen-adopt-lifecycle
-retry=4
-runner_pools=ubuntu-24.04-arm,macos-15
-cancel_superseded=true
-qualification=false
-selection_effect=NONE
-authority_effect=NONE
