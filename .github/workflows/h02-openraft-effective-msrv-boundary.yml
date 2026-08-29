@@ -3,7 +3,10 @@ name: h02-openraft-effective-msrv-boundary
 on:
   push:
     branches: ["codex/h02-durable-multiprocess-closure-v2"]
-    paths: [".github/workflows/h02-openraft-effective-msrv-boundary.yml"]
+    paths:
+      - ".github/workflows/h02-openraft-effective-msrv-boundary.yml"
+      - "probes/h02/openraft-tokio/Cargo.toml"
+      - "probes/h02/openraft-tokio/Cargo.lock"
   workflow_dispatch:
 
 permissions:
@@ -14,7 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TOOLCHAINS: "1.85.0 1.86.0 1.87.0 1.88.0 1.98.0"
+  BOUNDARY_TOOLCHAINS: "1.85.0 1.86.0 1.87.0"
+  EFFECTIVE_TOOLCHAINS: "1.88.0 1.98.0"
   VALIDIT_REV: "7016fa5e072a86092928144b3a3040381e6964e9"
 
 jobs:
@@ -40,35 +44,30 @@ jobs:
             "$actual_head" "$actual_tree" "${RUNNER_TRACKING_ID:-unavailable}" "$RUNNER_NAME" \
             "$RUNNER_OS" "$RUNNER_ARCH" \
             | tee "$RUNNER_TEMP/results/source-binding.txt"
-      - name: Install bounded Rust toolchains
+      - name: Install exact boundary and effective Rust toolchains
         shell: bash
         run: |
           set -euo pipefail
-          for toolchain in $TOOLCHAINS; do
+          for toolchain in $BOUNDARY_TOOLCHAINS $EFFECTIVE_TOOLCHAINS; do
             rustup toolchain install "$toolchain" --profile minimal
             rustup run "$toolchain" rustc --version --verbose \
               | tee "$RUNNER_TEMP/results/rustc-$toolchain.txt"
             rustup run "$toolchain" cargo --version --verbose \
               | tee "$RUNNER_TEMP/results/cargo-$toolchain.txt"
           done
-      - name: Prove the effective OpenRaft MSRV boundary
+      - name: Bind the committed immutable dependency graph
         shell: bash
         run: |
           set -euo pipefail
           probe="$RUNNER_TEMP/openraft-msrv"
           cp -a probes/h02/openraft-tokio "$probe"
           manifest="$probe/Cargo.toml"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/target"
+          lock="$probe/Cargo.lock"
+          test -s "$lock"
+          grep -F 'rust-version = "1.88"' "$manifest"
           sha256sum "$manifest" | tee "$RUNNER_TEMP/results/manifest.sha256"
-
-          # Resolve one Rust-1.85-compatible graph, then hold that graph fixed
-          # while testing the compiler boundary. This prevents dependency drift
-          # from being mistaken for the candidate package's effective MSRV.
-          rm -f "$probe/Cargo.lock"
-          rustup run 1.85.0 cargo generate-lockfile --manifest-path "$manifest" \
-            2>&1 | tee "$RUNNER_TEMP/results/generate-lock-1.85.0.log"
-          sha256sum "$probe/Cargo.lock" | tee "$RUNNER_TEMP/results/Cargo.lock.sha256"
-          rustup run 1.85.0 cargo metadata --locked --format-version 1 \
+          sha256sum "$lock" | tee "$RUNNER_TEMP/results/Cargo.lock.sha256"
+          rustup run 1.88.0 cargo metadata --locked --format-version 1 \
             --manifest-path "$manifest" >"$RUNNER_TEMP/results/metadata.json"
           python3 - "$RUNNER_TEMP/results/metadata.json" "$VALIDIT_REV" <<'PY'
           import json
@@ -78,47 +77,49 @@ jobs:
           revision = sys.argv[2]
           packages = [package for package in metadata["packages"] if package["name"] == "validit"]
           assert len(packages) == 1, packages
-          source = packages[0].get("source") or ""
-          assert source.startswith("git+https://github.com/drmingdrmer/validit.git?"), source
-          assert f"rev={revision}" in source, source
-          assert source.endswith(f"#{revision}"), source
+          package = packages[0]
+          assert package["version"] == "0.2.5", package
+          source = package.get("source") or ""
+          assert source == f"git+https://github.com/drmingdrmer/validit.git?rev={revision}#{revision}", source
           PY
-
-          first_pass=""
+      - name: Prove the exact effective OpenRaft MSRV boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/openraft-msrv"
+          manifest="$probe/Cargo.toml"
           : >"$RUNNER_TEMP/results/msrv-boundary.tsv"
-          for toolchain in 1.85.0 1.86.0 1.87.0 1.88.0; do
-            log="$RUNNER_TEMP/results/check-$toolchain.log"
-            rm -rf "$CARGO_TARGET_DIR"
+
+          for toolchain in $BOUNDARY_TOOLCHAINS; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/target-boundary-$toolchain"
+            log="$RUNNER_TEMP/results/check-ignore-rust-version-$toolchain.log"
             set +e
-            rustup run "$toolchain" cargo check --locked --all-targets \
+            rustup run "$toolchain" cargo check --locked --all-targets --ignore-rust-version \
               --manifest-path "$manifest" >"$log" 2>&1
             rc=$?
             set -e
-            if [[ $rc -eq 0 ]]; then
-              outcome=PASS
-              if [[ -z "$first_pass" ]]; then
-                first_pass="$toolchain"
-              fi
-            else
-              outcome=EXPECTED_FAIL_MSRV_BOUNDARY
-              grep -F 'error[E0658]' "$log"
-              grep -F 'openraft-macros-0.10.0-alpha.33/src/expand.rs' "$log"
-              grep -F 'let expressions in this position are unstable' "$log"
-            fi
-            printf '%s\t%s\t%s\n' "$toolchain" "$outcome" "$rc" \
+            test "$rc" -ne 0
+            grep -F 'error[E0658]' "$log"
+            grep -F 'openraft-macros-0.10.0-alpha.33/src/expand.rs' "$log"
+            grep -F 'expressions in this position are unstable' "$log"
+            printf '%s\tEXPECTED_FAIL_MSRV_BOUNDARY\t%s\n' "$toolchain" "$rc" \
               | tee -a "$RUNNER_TEMP/results/msrv-boundary.tsv"
           done
 
-          test "$first_pass" = "1.88.0"
+          for toolchain in $EFFECTIVE_TOOLCHAINS; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/target-effective-$toolchain"
+            log="$RUNNER_TEMP/results/check-$toolchain.log"
+            rustup run "$toolchain" cargo check --locked --all-targets \
+              --manifest-path "$manifest" >"$log" 2>&1
+            printf '%s\tPASS\t0\n' "$toolchain" \
+              | tee -a "$RUNNER_TEMP/results/msrv-boundary.tsv"
+          done
+
           grep -F $'1.85.0\tEXPECTED_FAIL_MSRV_BOUNDARY' "$RUNNER_TEMP/results/msrv-boundary.tsv"
           grep -F $'1.86.0\tEXPECTED_FAIL_MSRV_BOUNDARY' "$RUNNER_TEMP/results/msrv-boundary.tsv"
           grep -F $'1.87.0\tEXPECTED_FAIL_MSRV_BOUNDARY' "$RUNNER_TEMP/results/msrv-boundary.tsv"
-          grep -F $'1.88.0\tPASS' "$RUNNER_TEMP/results/msrv-boundary.tsv"
-
-          rm -rf "$CARGO_TARGET_DIR"
-          rustup run 1.98.0 cargo check --locked --all-targets \
-            --manifest-path "$manifest" \
-            2>&1 | tee "$RUNNER_TEMP/results/check-1.98.0.log"
+          grep -F $'1.88.0\tPASS\t0' "$RUNNER_TEMP/results/msrv-boundary.tsv"
+          grep -F $'1.98.0\tPASS\t0' "$RUNNER_TEMP/results/msrv-boundary.tsv"
 
           python3 - "$RUNNER_TEMP/results/msrv-boundary.json" "$GITHUB_SHA" <<'PY'
           import json
@@ -132,10 +133,10 @@ jobs:
               "effective_msrv": "1.88.0",
               "bounded_failures": ["1.85.0", "1.86.0", "1.87.0"],
               "required_passes": ["1.88.0", "1.98.0"],
+              "status": "EXECUTED_PASS",
               "qualification": False,
               "selection_effect": "NONE",
               "authority_effect": "NONE",
-              "status": "EXECUTED_PASS",
           }
           with open(sys.argv[1], "w", encoding="utf-8") as handle:
               json.dump(result, handle, sort_keys=True, indent=2)
