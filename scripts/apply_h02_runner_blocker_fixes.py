@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Apply the exact source fixes discovered by real H02 GitHub Runner executions.
+"""Apply exact, idempotent source fixes discovered by real H02 Runner executions.
 
-This is a one-shot maintenance helper. The invoking workflow removes this file
-and itself before committing the verified source changes.
+This is a one-shot maintenance helper. It is deliberately fail-closed: every
+transformation must find either the unique pre-fix form or the unique verified
+post-fix form. Any third state is rejected as drift.
 """
 
 from __future__ import annotations
@@ -15,13 +16,19 @@ ROOT = Path(__file__).resolve().parents[1]
 def replace_once(relative: str, old: str, new: str) -> None:
     path = ROOT / relative
     text = path.read_text(encoding="utf-8")
-    actual = text.count(old)
-    if actual != 1:
-        raise RuntimeError(
-            f"{relative}: expected exactly one occurrence, found {actual}: {old!r}"
-        )
-    path.write_text(text.replace(old, new), encoding="utf-8")
-    print(f"patched {relative}")
+    old_count = text.count(old)
+    new_count = text.count(new)
+    if old_count == 1 and new_count == 0:
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        print(f"patched {relative}")
+        return
+    if old_count == 0 and new_count == 1:
+        print(f"already patched {relative}")
+        return
+    raise RuntimeError(
+        f"{relative}: expected one pre-fix or one post-fix form; "
+        f"old={old_count} new={new_count}"
+    )
 
 
 def patch_operation_registry() -> None:
@@ -37,6 +44,7 @@ def patch_operation_registry() -> None:
         "cluster.join",
         "migration.cutover",
     )
+    changed = False
     for operation_id in operations:
         old = f"  {operation_id}:\n    operation_class:"
         new = (
@@ -44,15 +52,23 @@ def patch_operation_registry() -> None:
             f"    operation_id: {operation_id}\n"
             "    operation_class:"
         )
-        actual = text.count(old)
-        if actual != 1:
+        old_count = text.count(old)
+        new_count = text.count(new)
+        if old_count == 1 and new_count == 0:
+            text = text.replace(old, new)
+            changed = True
+        elif old_count == 0 and new_count == 1:
+            continue
+        else:
             raise RuntimeError(
-                f"operation registry {operation_id}: expected one insertion point, "
-                f"found {actual}"
+                f"operation registry {operation_id}: expected one pre-fix or "
+                f"one post-fix form; old={old_count} new={new_count}"
             )
-        text = text.replace(old, new)
-    path.write_text(text, encoding="utf-8")
-    print("patched operation registry explicit identities")
+    if changed:
+        path.write_text(text, encoding="utf-8")
+        print("patched operation registry explicit identities")
+    else:
+        print("operation registry identities already patched")
 
 
 def patch_rustls_fixtures() -> None:
@@ -169,10 +185,18 @@ def patch_probe_fixture_copy() -> None:
         '          cp -a "${{ matrix.probe_dir }}/." '
         '"$RUNNER_TEMP/probe/"\n'
     )
-    if copy_line in text or text.count(marker) != 1:
-        raise RuntimeError("probe workflow fixture-copy insertion point drift")
-    path.write_text(text.replace(marker, marker + copy_line), encoding="utf-8")
-    print("patched probe workflow shared rustls fixture copy")
+    copy_count = text.count(copy_line)
+    marker_count = text.count(marker)
+    if copy_count == 0 and marker_count == 1:
+        path.write_text(text.replace(marker, marker + copy_line), encoding="utf-8")
+        print("patched probe workflow shared rustls fixture copy")
+        return
+    if copy_count == 1 and marker_count == 1:
+        print("probe workflow fixture copy already patched")
+        return
+    raise RuntimeError(
+        f"probe workflow fixture-copy drift: copy={copy_count} marker={marker_count}"
+    )
 
 
 def patch_blocker_closure_runner_context() -> None:
@@ -186,26 +210,42 @@ def patch_blocker_closure_runner_context() -> None:
             removed += 1
             continue
         filtered.append(line)
-    if removed != 2:
+    if removed not in (0, 2):
         raise RuntimeError(
-            f"blocker closure workflow: expected two invalid runner.temp env lines, "
-            f"removed {removed}"
+            f"blocker closure workflow: expected zero or two invalid runner.temp "
+            f"env lines, removed {removed}"
         )
     text = "".join(filtered)
-    pip_step = (
-        "      - run: python -m pip install --disable-pip-version-check "
-        "--requirement requirements-plan.txt\n"
+
+    anchor = (
+        "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
+        "        with:\n"
+        "          python-version: \"3.13\"\n"
+        "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
     )
-    bind_step = """      - name: Bind runner-local evidence roots
-        shell: bash
-        run: |
-          printf 'EVIDENCE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-evidence" >> "$GITHUB_ENV"
-          printf 'PROBE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-probes" >> "$GITHUB_ENV"
-"""
-    if text.count(pip_step) != 1:
-        raise RuntimeError("blocker closure workflow pip insertion point drift")
-    path.write_text(text.replace(pip_step, bind_step + pip_step), encoding="utf-8")
-    print("patched blocker closure runner-local environment binding")
+    bind_step = (
+        "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
+        "        with:\n"
+        "          python-version: \"3.13\"\n"
+        "      - name: Bind runner-local evidence roots\n"
+        "        shell: bash\n"
+        "        run: |\n"
+        "          printf 'EVIDENCE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-evidence\" >> \"$GITHUB_ENV\"\n"
+        "          printf 'PROBE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-probes\" >> \"$GITHUB_ENV\"\n"
+        "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
+    )
+    anchor_count = text.count(anchor)
+    bind_count = text.count(bind_step)
+    if anchor_count == 1 and bind_count == 0:
+        path.write_text(text.replace(anchor, bind_step), encoding="utf-8")
+        print("patched blocker closure runner-local environment binding")
+        return
+    if anchor_count == 0 and bind_count == 1 and removed == 0:
+        print("blocker closure runner context already patched")
+        return
+    raise RuntimeError(
+        f"blocker closure workflow anchor drift: anchor={anchor_count} bind={bind_count}"
+    )
 
 
 def main() -> int:
@@ -217,7 +257,7 @@ def main() -> int:
     patch_serial_validator_contracts()
     patch_probe_fixture_copy()
     patch_blocker_closure_runner_context()
-    print("all runner-discovered H02 source patches applied")
+    print("all runner-discovered H02 source patches are applied")
     return 0
 
 
