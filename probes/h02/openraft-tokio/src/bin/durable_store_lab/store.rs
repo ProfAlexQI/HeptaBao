@@ -428,7 +428,10 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
     async fn purge(&mut self, log_id: LogIdOf<TypeConfig>) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
         let mut candidate = state.clone();
-        if candidate.last_purged_log_id.is_some_and(|last| last > log_id) {
+        if candidate
+            .last_purged_log_id
+            .is_some_and(|last| last > log_id)
+        {
             return Err(invalid("purge log id regressed"));
         }
         let remove = candidate
@@ -702,9 +705,8 @@ pub fn flip_first_payload_byte(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableLogStore, DurableStateMachine, LOG_MAGIC, PersistentLogState,
-        PersistentStateBundle, RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, read_json,
-        write_json,
+        DurableLogStore, DurableStateMachine, LOG_MAGIC, PersistentLogState, PersistentStateBundle,
+        RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, read_json, write_json,
     };
     use std::collections::BTreeMap;
     use std::fs;
