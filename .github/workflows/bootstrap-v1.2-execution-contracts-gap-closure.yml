@@ -1,4 +1,4 @@
-name: bootstrap-v1-2-deepened-blocker-closure
+name: bootstrap-v1-2-deepened-blocker-closure-macos
 
 on:
   push:
@@ -11,12 +11,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-v1-2-deepened-blocker-closure-arm64
+  group: bootstrap-v1-2-deepened-blocker-closure-macos
   cancel-in-progress: false
 
 jobs:
   materialize-validate-and-commit:
-    runs-on: ubuntu-24.04-arm
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Checkout exact transport head
@@ -59,27 +59,32 @@ jobs:
           PAYLOAD_SHA256: 27785a193b8b354e87c4736458b2a5763575946c98b4cfe438ac79122a8042b1
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          parts=(.github/bootstrap-payload/heptabao-part-*)
-          test "${#parts[@]}" -eq 14
-          cat "${parts[@]}" | base64 --decode > "$RUNNER_TEMP/heptabao-v1.2-payload.tar.gz"
-          printf '%s  %s\n' "$PAYLOAD_SHA256" "$RUNNER_TEMP/heptabao-v1.2-payload.tar.gz" \
-            | sha256sum --check --strict
-          python3 - "$RUNNER_TEMP/heptabao-v1.2-payload.tar.gz" <<'PY'
+          python3 - "$RUNNER_TEMP/heptabao-v1.2-payload.tar.gz" "$PAYLOAD_SHA256" <<'PY'
+          import base64
+          import hashlib
           import pathlib
           import sys
           import tarfile
 
-          archive = pathlib.Path(sys.argv[1])
-          with tarfile.open(archive, "r:gz") as payload:
+          output = pathlib.Path(sys.argv[1])
+          expected = sys.argv[2]
+          parts = sorted(pathlib.Path('.github/bootstrap-payload').glob('heptabao-part-*'))
+          assert len(parts) == 14, len(parts)
+          encoded = b''.join(part.read_bytes() for part in parts)
+          payload_bytes = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(payload_bytes).hexdigest()
+          assert actual == expected, (actual, expected)
+          output.write_bytes(payload_bytes)
+          with tarfile.open(output, 'r:gz') as payload:
               members = payload.getmembers()
-              assert members, "empty payload"
+              assert members, 'empty payload'
               for member in members:
                   path = pathlib.PurePosixPath(member.name)
                   assert not path.is_absolute(), member.name
-                  assert ".." not in path.parts, member.name
+                  assert '..' not in path.parts, member.name
                   assert not member.issym() and not member.islnk(), member.name
-              payload.extractall(path=".", filter="data")
+              payload.extractall(path='.', filter='data')
+          print(f'materialized {len(members)} payload members sha256={actual}')
           PY
           python3 - <<'PY'
           from pathlib import Path
