@@ -1,0 +1,230 @@
+name: h02-byte-rehash-cross-platform
+
+on:
+  push:
+    branches: ["codex/h02-byte-rehash-execution-v1"]
+    paths:
+      - ".github/workflows/h02-byte-rehash-cross-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rehash:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 540fc788697a3a195ab51225f59e55bb4ba1f298
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "540fc788697a3a195ab51225f59e55bb4ba1f298"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Download, bound, rehash and verify public packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import platform
+          import tarfile
+          import urllib.request
+          from pathlib import Path
+
+          SOURCE_COMMIT = "540fc788697a3a195ab51225f59e55bb4ba1f298"
+          rows = [
+              {
+                  "candidate_id": "HB-DEP-ASYNC-TOKIO",
+                  "package": "tokio",
+                  "version": "1.53.1",
+                  "source_url": "https://api.github.com/repos/tokio-rs/tokio/tarball/tokio-1.53.1",
+                  "crate_url": "https://static.crates.io/crates/tokio/tokio-1.53.1.crate",
+                  "registry_checksum": "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed",
+                  "release_commit": "75fef53d0a8590c2d1dbb63672aa7b7d1ef51155",
+              },
+              {
+                  "candidate_id": "HB-DEP-TLS-RUSTLS",
+                  "package": "rustls",
+                  "version": "0.23.43",
+                  "source_url": "https://api.github.com/repos/rustls/rustls/tarball/v/0.23.43",
+                  "crate_url": "https://static.crates.io/crates/rustls/rustls-0.23.43.crate",
+                  "registry_checksum": "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06",
+                  "release_commit": "fcf61cdbba30913cfd5b40aefa83989c6233812d",
+              },
+              {
+                  "candidate_id": "HB-DEP-RAFT-OPENRAFT",
+                  "package": "openraft",
+                  "version": "0.10.0-alpha.33",
+                  "source_url": "https://api.github.com/repos/databendlabs/openraft/tarball/v0.10.0-alpha.33",
+                  "crate_url": "https://static.crates.io/crates/openraft/openraft-0.10.0-alpha.33.crate",
+                  "registry_checksum": "ba6e911fb3c97faeecb8324b803a37d77a7387d02ee7019fc2a9777569e7f7b8",
+                  "release_commit": "2be3f99a23c0ec734aefc18d1c8e756b35567c35",
+              },
+          ]
+
+          def download(url: str, destination: Path, maximum: int) -> tuple[str, int, str]:
+              request = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "HeptaBao-H02-byte-rehash/1"},
+              )
+              digest = hashlib.sha256()
+              total = 0
+              final_url = url
+              try:
+                  with urllib.request.urlopen(request, timeout=180) as response, destination.open("wb") as output:
+                      final_url = response.geturl()
+                      if not final_url.startswith("https://"):
+                          raise RuntimeError(f"non-HTTPS final URL: {final_url}")
+                      while True:
+                          chunk = response.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          total += len(chunk)
+                          if total > maximum:
+                              raise RuntimeError(f"artifact exceeded bound: {total} > {maximum}")
+                          digest.update(chunk)
+                          output.write(chunk)
+              except Exception:
+                  destination.unlink(missing_ok=True)
+                  raise
+              if total == 0:
+                  destination.unlink(missing_ok=True)
+                  raise RuntimeError("empty artifact")
+              return digest.hexdigest(), total, final_url
+
+          root = Path("evidence")
+          root.mkdir(exist_ok=True)
+          results = []
+          for row in rows:
+              stem = f"{row['package']}-{row['version']}"
+              source = root / f"{stem}.source.tar.gz"
+              package = root / f"{stem}.crate"
+              source_sha, source_size, source_final = download(
+                  row["source_url"], source, 100 * 1024 * 1024
+              )
+              package_sha, package_size, crate_final = download(
+                  row["crate_url"], package, 50 * 1024 * 1024
+              )
+              if package_sha != row["registry_checksum"]:
+                  raise RuntimeError(
+                      f"{stem}: package checksum mismatch {package_sha} != {row['registry_checksum']}"
+                  )
+              with tarfile.open(package, mode="r:gz") as archive:
+                  matches = [
+                      member
+                      for member in archive.getmembers()
+                      if member.isfile() and member.name.endswith("/.cargo_vcs_info.json")
+                  ]
+                  if len(matches) != 1:
+                      raise RuntimeError(f"{stem}: expected one .cargo_vcs_info.json, got {len(matches)}")
+                  handle = archive.extractfile(matches[0])
+                  if handle is None:
+                      raise RuntimeError(f"{stem}: VCS record unreadable")
+                  vcs = json.loads(handle.read().decode("utf-8"))
+              vcs_commit = vcs.get("git", {}).get("sha1")
+              if vcs_commit != row["release_commit"]:
+                  raise RuntimeError(
+                      f"{stem}: VCS commit mismatch {vcs_commit!r} != {row['release_commit']}"
+                  )
+              value = {
+                  "schema": "heptabao.dependency-byte-rehash.v1",
+                  "candidate_id": row["candidate_id"],
+                  "package": row["package"],
+                  "version": row["version"],
+                  "source_archive_sha256": source_sha,
+                  "source_archive_size_bytes": source_size,
+                  "source_archive_digest_kind": "OBSERVED_GITHUB_GENERATED_ARCHIVE",
+                  "source_final_url": source_final,
+                  "crate_download_sha256": package_sha,
+                  "crate_size_bytes": package_size,
+                  "crate_final_url": crate_final,
+                  "registry_checksum_sha256": row["registry_checksum"],
+                  "matches_registry_checksum": True,
+                  "package_vcs_commit_sha": vcs_commit,
+                  "matches_release_commit": True,
+                  "source_commit": SOURCE_COMMIT,
+                  "runner_name": os.environ.get("RUNNER_NAME"),
+                  "runner_os": os.environ.get("RUNNER_OS"),
+                  "runner_arch": os.environ.get("RUNNER_ARCH"),
+                  "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+                  "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+                  "python": platform.python_version(),
+                  "review_status": "PENDING",
+                  "qualification": False,
+                  "selection_effect": "NONE",
+                  "authority_effect": "NONE",
+              }
+              output = root / f"{stem}.rehash.json"
+              output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              results.append(value)
+              source.unlink()
+              package.unlink()
+
+          summary = {
+              "schema": "heptabao.dependency-byte-rehash-summary.v1",
+              "source_commit": SOURCE_COMMIT,
+              "runner_name": os.environ.get("RUNNER_NAME"),
+              "runner_os": os.environ.get("RUNNER_OS"),
+              "runner_arch": os.environ.get("RUNNER_ARCH"),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "entries": len(results),
+              "all_registry_checksums_match": all(item["matches_registry_checksum"] for item in results),
+              "all_vcs_commits_match": all(item["matches_release_commit"] for item in results),
+              "qualification": False,
+              "selection_effect": "NONE",
+              "authority_effect": "NONE",
+          }
+          (root / "summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, sort_keys=True))
+          PY
+
+      - name: Verify authority remains closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          values = [json.loads(path.read_text(encoding="utf-8")) for path in Path("evidence").glob("*.rehash.json")]
+          assert len(values) == 3
+          assert all(value["matches_registry_checksum"] for value in values)
+          assert all(value["matches_release_commit"] for value in values)
+          assert all(value["qualification"] is False for value in values)
+          assert all(value["selection_effect"] == "NONE" for value in values)
+          assert all(value["authority_effect"] == "NONE" for value in values)
+          print("three bounded public packages rehashed; qualification and authority remain closed")
+          PY
+
+      - name: Upload unreviewed cross-platform rehash evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-byte-rehash-${{ matrix.runner }}-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
