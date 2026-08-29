@@ -6,11 +6,13 @@ on:
       - "codex/h02-os-durable-clock-supplychain-v1"
     paths:
       - ".github/workflows/h02-apply-runner-blockers.yml"
+      - "scripts/apply_h02_runner_blocker_fixes.py"
   push:
     branches:
       - "codex/h02-final-gap-closure-v1"
     paths:
       - ".github/workflows/h02-apply-runner-blockers.yml"
+      - "scripts/apply_h02_runner_blocker_fixes.py"
   workflow_dispatch:
 
 permissions:
@@ -18,7 +20,7 @@ permissions:
 
 concurrency:
   group: h02-apply-runner-blockers
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-and-verify:
@@ -43,61 +45,8 @@ jobs:
       - name: Install pinned validation dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
 
-      - name: Apply exact runner-discovered fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          apply_log="$RUNNER_TEMP/h02-runner-blocker-apply.log"
-          set +e
-          python scripts/apply_h02_runner_blocker_fixes.py >"$apply_log" 2>&1
-          apply_status=$?
-          set -e
-          cat "$apply_log"
-          test "$apply_status" -ne 0
-          grep -F "RuntimeError: blocker closure workflow pip insertion point drift" "$apply_log"
-
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path(".github/workflows/h02-openraft-blocker-closure.yml")
-          text = path.read_text(encoding="utf-8")
-          filtered = []
-          removed = 0
-          for line in text.splitlines(keepends=True):
-              stripped = line.strip()
-              if stripped.startswith(("EVIDENCE_ROOT:", "PROBE_ROOT:")) and "runner.temp" in stripped:
-                  removed += 1
-                  continue
-              filtered.append(line)
-          if removed != 2:
-              raise SystemExit(
-                  f"expected two invalid runner.temp job-env lines, removed {removed}"
-              )
-          text = "".join(filtered)
-
-          anchor = (
-              "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
-              "        with:\n"
-              "          python-version: \"3.13\"\n"
-              "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
-          )
-          replacement = (
-              "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
-              "        with:\n"
-              "          python-version: \"3.13\"\n"
-              "      - name: Bind runner-local evidence roots\n"
-              "        shell: bash\n"
-              "        run: |\n"
-              "          printf 'EVIDENCE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-evidence\" >> \"$GITHUB_ENV\"\n"
-              "          printf 'PROBE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-probes\" >> \"$GITHUB_ENV\"\n"
-              "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
-          )
-          count = text.count(anchor)
-          if count != 1:
-              raise SystemExit(f"closure-sequential setup-python anchor count={count}")
-          path.write_text(text.replace(anchor, replacement), encoding="utf-8")
-          print("patched blocker-closure runner-local environment binding")
-          PY
+      - name: Apply exact idempotent Runner-discovered fixes
+        run: python scripts/apply_h02_runner_blocker_fixes.py
 
       - name: Validate full governance, plan, Oracle and H02 contracts
         shell: bash
@@ -175,5 +124,9 @@ jobs:
           git add -A
           git diff --cached --check
           git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo "all source fixes were already present"
+            exit 0
+          fi
           git commit -m "fix(h02): close runner-discovered validation blockers"
           git push origin HEAD:codex/h02-final-gap-closure-v1
