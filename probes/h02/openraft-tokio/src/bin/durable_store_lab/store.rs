@@ -217,14 +217,14 @@ impl PersistentLogState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DurableLogStore {
     state_path: PathBuf,
-    state: Mutex<PersistentLogState>,
+    state: Arc<Mutex<PersistentLogState>>,
 }
 
 impl DurableLogStore {
-    pub fn open(root: impl AsRef<Path>) -> io::Result<Arc<Self>> {
+    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref();
         fs::create_dir_all(root)?;
         let state_path = root.join("raft-log.bin");
@@ -234,10 +234,10 @@ impl DurableLogStore {
             PersistentLogState::default()
         };
         state.validate()?;
-        Ok(Arc::new(Self {
+        Ok(Self {
             state_path,
-            state: Mutex::new(state),
-        }))
+            state: Arc::new(Mutex::new(state)),
+        })
     }
 
     fn persist(&self, state: &PersistentLogState) -> io::Result<()> {
@@ -250,7 +250,7 @@ impl DurableLogStore {
     }
 }
 
-impl RaftLogReader<TypeConfig> for Arc<DurableLogStore> {
+impl RaftLogReader<TypeConfig> for DurableLogStore {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
@@ -272,7 +272,7 @@ impl RaftLogReader<TypeConfig> for Arc<DurableLogStore> {
     }
 }
 
-impl RaftLogStorage<TypeConfig> for Arc<DurableLogStore> {
+impl RaftLogStorage<TypeConfig> for DurableLogStore {
     type LogReader = Self;
 
     async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
@@ -400,16 +400,16 @@ struct PersistentSnapshot {
     data: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DurableStateMachine {
     state_path: PathBuf,
     snapshot_path: PathBuf,
-    state: Mutex<MemStoreStateMachine>,
-    current_snapshot: Mutex<Option<PersistentSnapshot>>,
+    state: Arc<Mutex<MemStoreStateMachine>>,
+    current_snapshot: Arc<Mutex<Option<PersistentSnapshot>>>,
 }
 
 impl DurableStateMachine {
-    pub fn open(root: impl AsRef<Path>) -> io::Result<Arc<Self>> {
+    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref();
         fs::create_dir_all(root)?;
         let state_path = root.join("state-machine.bin");
@@ -429,17 +429,15 @@ impl DurableStateMachine {
         } else {
             MemStoreStateMachine::default()
         };
-        let machine = Arc::new(Self {
+        if !state_path.is_file() {
+            write_json(&state_path, STATE_MAGIC, &state)?;
+        }
+        Ok(Self {
             state_path,
             snapshot_path,
-            state: Mutex::new(state),
-            current_snapshot: Mutex::new(snapshot),
-        });
-        if !machine.state_path.is_file() {
-            let state = machine.state.blocking_lock();
-            machine.persist_state(&state)?;
-        }
-        Ok(machine)
+            state: Arc::new(Mutex::new(state)),
+            current_snapshot: Arc::new(Mutex::new(snapshot)),
+        })
     }
 
     fn persist_state(&self, state: &MemStoreStateMachine) -> io::Result<()> {
@@ -463,7 +461,7 @@ impl DurableStateMachine {
     }
 }
 
-impl RaftSnapshotBuilder<TypeConfig> for Arc<DurableStateMachine> {
+impl RaftSnapshotBuilder<TypeConfig> for DurableStateMachine {
     type SnapshotData = Cursor<Vec<u8>>;
 
     async fn build_snapshot(
@@ -488,7 +486,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<DurableStateMachine> {
     }
 }
 
-impl RaftStateMachine<TypeConfig> for Arc<DurableStateMachine> {
+impl RaftStateMachine<TypeConfig> for DurableStateMachine {
     type SnapshotData = Cursor<Vec<u8>>;
     type SnapshotBuilder = Self;
 
