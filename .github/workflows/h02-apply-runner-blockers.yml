@@ -37,166 +37,13 @@ jobs:
       - name: Install pinned validation dependencies
         run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
 
-      - name: Apply asserted source and workflow fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
+      - name: Apply exact runner-discovered fixes
+        run: python scripts/apply_h02_runner_blocker_fixes.py
 
-          def replace(path: str, old: str, new: str, expected: int = 1) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              actual = text.count(old)
-              if actual != expected:
-                  raise SystemExit(f"{path}: expected {expected} occurrences, found {actual}: {old!r}")
-              target.write_text(text.replace(old, new), encoding="utf-8")
-              print(f"patched {path}: {actual} replacement(s)")
+      - name: Remove one-shot maintenance files
+        run: rm scripts/apply_h02_runner_blocker_fixes.py .github/workflows/h02-apply-runner-blockers.yml
 
-          registry = Path("specs/HEPTABAO_OPERATION_REGISTRY_V1.yaml")
-          registry_text = registry.read_text(encoding="utf-8")
-          operations = (
-              "sys.health.read",
-              "sys.mounts.update",
-              "secret.dynamic.read",
-              "auth.login",
-              "token.create",
-              "seal.unseal.submit-share",
-              "cluster.join",
-              "migration.cutover",
-          )
-          for operation_id in operations:
-              old = f"  {operation_id}:\n    operation_class:"
-              new = f"  {operation_id}:\n    operation_id: {operation_id}\n    operation_class:"
-              actual = registry_text.count(old)
-              if actual != 1:
-                  raise SystemExit(f"registry {operation_id}: expected one insertion point, found {actual}")
-              registry_text = registry_text.replace(old, new)
-          registry.write_text(registry_text, encoding="utf-8")
-          print("patched operation registry: 8 explicit operation_id bindings")
-
-          replace(
-              "probes/h02/rustls-public-fixtures.rs",
-              "0xae, 0xbg, 0x4b",
-              "0xae, 0xb7, 0x4b",
-          )
-          replace(
-              "probes/h02/rustls-public-fixtures.rs",
-              "0x0f, 0x01, 0xff, 0x04, 0x04, 0x03",
-              "0x0f, 0x01, 0x01, 0xff, 0x04, 0x04, 0x03",
-          )
-
-          replace(
-              "Cargo.toml",
-              'all = "warn"',
-              'all = { level = "warn", priority = -1 }',
-          )
-          replace(
-              "crates/heptabao-platform-contracts/src/lib.rs",
-              """        if let Some(applied) = cursor.last_applied {
-            if self.last_included.index < applied.index {
-                return Err(ContractError::SnapshotRegression);
-            }
-        }
-""",
-              """        if let Some(applied) = cursor.last_applied
-            && self.last_included.index < applied.index
-        {
-            return Err(ContractError::SnapshotRegression);
-        }
-""",
-          )
-
-          replace(
-              "probes/h02/openraft-tokio/Cargo.toml",
-              'openraft-memstore = { version = "=0.10.0-alpha.33" }',
-              'openraft-memstore = { version = "=0.10.0-alpha.33" }\nvalidit = "=0.2.5"',
-          )
-          replace(
-              "probes/h02/rustls-ring/Cargo.toml",
-              'rustls = { version = "=0.23.43", default-features = false, features = ["logging", "ring", "std", "tls12"] }',
-              'rustls = { version = "=0.23.43", default-features = false, features = ["logging", "ring", "std", "tls12"] }\nzeroize = "=1.8.2"',
-          )
-          replace(
-              "probes/h02/rustls-aws-lc/Cargo.toml",
-              'rustls = { version = "=0.23.43", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"] }',
-              'rustls = { version = "=0.23.43", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"] }\nzeroize = "=1.8.2"\njobserver = "=0.1.32"',
-          )
-
-          for path in (
-              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
-              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs",
-              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs",
-          ):
-              replace(path, "enable_pre_vote: true,", "enable_pre_vote: Some(true),")
-          replace(
-              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
-              "!matches!(old_write, Ok(Ok(Ok(_))))",
-              "!matches!(old_write, Ok(Ok(_)))",
-          )
-          replace(
-              "probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs",
-              "!matches!(result, Ok(Ok(Ok(_))))",
-              "!matches!(result, Ok(Ok(_)))",
-          )
-          replace(
-              "probes/h02/openraft-tokio/src/bin/openraft_fault_lab/os_clock_cluster.rs",
-              "use openraft::async_runtime::WatchReceiver;\n",
-              "",
-          )
-
-          replace(
-              "scripts/validate_h02_openraft_inmemory_cluster_v1.py",
-              '            "fail-fast: false",',
-              '            "Execute all six entries serially and retain every outcome",\n            "exit 0",',
-          )
-          replace(
-              "scripts/validate_h02_openraft_fault_lab_v1.py",
-              '            "fail-fast: false",',
-              '            "Execute all six fault-lab entries and retain every outcome", "exit 0",',
-          )
-
-          probe_workflow = Path(".github/workflows/h02-probe-sbom-msrv.yml")
-          probe_text = probe_workflow.read_text(encoding="utf-8")
-          fixture_copy = '          cp probes/h02/rustls-public-fixtures.rs "$RUNNER_TEMP/rustls-public-fixtures.rs"\n'
-          marker = '          git rev-parse "$GITHUB_SHA" > "$RUNNER_TEMP/source-commit.txt"\n'
-          if probe_text.count(marker) != 1 or fixture_copy in probe_text:
-              raise SystemExit("probe workflow fixture-copy insertion point drift")
-          probe_workflow.write_text(probe_text.replace(marker, fixture_copy + marker), encoding="utf-8")
-          print("patched probe workflow shared rustls fixture copy")
-
-          closure = Path(".github/workflows/h02-openraft-blocker-closure.yml")
-          closure_text = closure.read_text(encoding="utf-8")
-          lines = closure_text.splitlines(keepends=True)
-          removed = 0
-          filtered: list[str] = []
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith(("EVIDENCE_ROOT:", "PROBE_ROOT:")) and "runner.temp" in stripped:
-                  removed += 1
-                  continue
-              filtered.append(line)
-          if removed != 2:
-              raise SystemExit(f"closure workflow expected two runner.temp env lines, removed {removed}")
-          closure_text = "".join(filtered)
-          pip_step = "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
-          bind_step = """      - name: Bind runner-local evidence roots
-        shell: bash
-        run: |
-          printf 'EVIDENCE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-evidence" >> "$GITHUB_ENV"
-          printf 'PROBE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-probes" >> "$GITHUB_ENV"
-"""
-          if closure_text.count(pip_step) != 1:
-              raise SystemExit("closure workflow pip insertion point drift")
-          closure.write_text(closure_text.replace(pip_step, bind_step + pip_step), encoding="utf-8")
-          print("patched blocker closure workflow runner-local env binding")
-          PY
-
-      - name: Remove one-shot maintenance workflow from final tree
-        run: rm .github/workflows/h02-apply-runner-blockers.yml
-
-      - name: Validate repaired governance and H02 contracts
-        shell: bash
+      - name: Validate governance and H02 contracts
         run: |
           set -euo pipefail
           python scripts/validate_plan_v2.py
@@ -214,15 +61,13 @@ jobs:
             -v
 
       - name: Install exact Rust verification toolchains
-        shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           rustup toolchain install 1.85.0 --profile minimal
           rustup toolchain install 1.71.0 --profile minimal
 
-      - name: Verify workspace formatting, tests and strict Clippy
-        shell: bash
+      - name: Verify workspace formatting tests and strict Clippy
         run: |
           set -euo pipefail
           cargo +1.98.0 fmt --all -- --check
@@ -230,7 +75,6 @@ jobs:
           cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
 
       - name: Verify OpenRaft exact-toolchain build seams
-        shell: bash
         run: |
           set -euo pipefail
           for toolchain in 1.85.0 1.98.0; do
@@ -243,7 +87,6 @@ jobs:
           done
 
       - name: Verify rustls exact-toolchain build seams
-        shell: bash
         run: |
           set -euo pipefail
           for profile in rustls-ring rustls-aws-lc; do
@@ -260,7 +103,6 @@ jobs:
           done
 
       - name: Commit verified blocker closure batch
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
