@@ -60,7 +60,7 @@ fn majority(voters: &[u64], reachable: &[u64]) -> bool {
         .iter()
         .filter(|node| reachable.contains(node))
         .count();
-    present >= voters.len() / 2 + 1
+    present > voters.len() / 2
 }
 
 fn main() {
@@ -69,10 +69,10 @@ fn main() {
 
     let config_valid = Config::default().validate().is_ok();
     let mut order = vec![1_u64, 2, 3, 4, 5, 6];
-    SplitMix64::new(seed ^ 0x4150_504c_59).shuffled(&mut order);
+    SplitMix64::new(seed ^ 0x0041_5050_4c59).shuffled(&mut order);
     let replay = {
         let mut value = vec![1_u64, 2, 3, 4, 5, 6];
-        SplitMix64::new(seed ^ 0x4150_504c_59).shuffled(&mut value);
+        SplitMix64::new(seed ^ 0x0041_5050_4c59).shuffled(&mut value);
         value
     };
     emit_case(
@@ -160,7 +160,7 @@ fn main() {
     );
 
     let mut chaos = vec![10_u64, 20, 30, 40, 50];
-    SplitMix64::new(seed ^ 0x4348_414f_53).shuffled(&mut chaos);
+    SplitMix64::new(seed ^ 0x0043_4841_4f53).shuffled(&mut chaos);
     let interruption_index = (seed as usize) % chaos.len();
     let replay_seed = seed;
     let replay_index = (replay_seed as usize) % chaos.len();
