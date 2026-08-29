@@ -100,11 +100,11 @@ jobs:
               mkdir -p "$entry"
               execution_status=125
               if [ "$build_status" -eq 0 ]; then
+                execution_status=0
                 rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" \
                   --bin heptabao-h02-openraft-blocker-closure-lab -- \
                   --mode all --seed "$seed" \
-                  >"$entry/result.json" 2>"$entry/stderr.log"
-                execution_status=$?
+                  >"$entry/result.json" 2>"$entry/stderr.log" || execution_status=$?
               else
                 printf '{}\n' > "$entry/result.json"
               fi
