@@ -72,7 +72,7 @@ jobs:
           - rustls-ring-1_98
           - rustls-aws-lc-1_71
           - rustls-aws-lc-1_98
-          - openraft-1_85
+          - openraft-1_88
           - openraft-1_98
         seed:
           - "0x5eed20260828cafe"
@@ -125,8 +125,8 @@ jobs:
               profile=rustls-aws-lc; toolchain=1.71.0; subdir=rustls-aws-lc; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
             rustls-aws-lc-1_98)
               profile=rustls-aws-lc; toolchain=1.98.0; subdir=rustls-aws-lc; domain=tls; scope=FULL_REFERENCE_CASE_SET ;;
-            openraft-1_85)
-              profile=openraft; toolchain=1.85.0; subdir=openraft-tokio; domain=raft; scope=API_SEAM_AND_FAILURE_MODEL_PARTIAL ;;
+            openraft-1_88)
+              profile=openraft; toolchain=1.88.0; subdir=openraft-tokio; domain=raft; scope=API_SEAM_AND_FAILURE_MODEL_PARTIAL ;;
             openraft-1_98)
               profile=openraft; toolchain=1.98.0; subdir=openraft-tokio; domain=raft; scope=API_SEAM_AND_FAILURE_MODEL_PARTIAL ;;
             *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
