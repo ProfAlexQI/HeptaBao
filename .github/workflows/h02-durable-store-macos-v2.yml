@@ -58,7 +58,7 @@ jobs:
           shasum -a 256 "$probe/Cargo.lock" | tee "$RUNNER_TEMP/results/Cargo.lock.sha256"
           rustup run 1.98.0 cargo metadata --locked --format-version 1 \
             --manifest-path "$manifest" >"$RUNNER_TEMP/results/metadata.json"
-          python - "$RUNNER_TEMP/results/metadata.json" "$VALIDIT_REV" <<'PY'
+          python3 - "$RUNNER_TEMP/results/metadata.json" "$VALIDIT_REV" <<'PY'
           import json
           import sys
 
@@ -80,7 +80,7 @@ jobs:
           output="$RUNNER_TEMP/results/durable.json"
           rustup run 1.98.0 cargo run --quiet --locked --manifest-path "$manifest" \
             --bin heptabao-h02-openraft-durable-store-lab -- --seed 0x5eed20260828cafe >"$output"
-          python - "$output" "$GITHUB_SHA" <<'PY'
+          python3 - "$output" "$GITHUB_SHA" <<'PY'
           import json
           import sys
 
