@@ -1,4 +1,4 @@
-name: apply-v1-2-1-explicit-generation-lifecycle
+name: apply-v1-2-1-explicit-generation-lifecycle-arm64
 
 on:
   push:
@@ -13,12 +13,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-v1-2-1-explicit-generation-lifecycle
+  group: apply-v1-2-1-explicit-generation-lifecycle-arm64
   cancel-in-progress: true
 
 jobs:
   apply-verify-commit:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     steps:
       - name: Checkout exact transition head
