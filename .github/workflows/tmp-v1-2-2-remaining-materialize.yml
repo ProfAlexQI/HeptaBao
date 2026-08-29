@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: true
       - name: Extract, verify and self-remove
         shell: bash
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          git merge-base --is-ancestor "$EXACT_PARENT" HEAD
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           cat bootstrap/v122-remchunk-* > "$RUNNER_TEMP/remaining-overlay.tar.gz"
           printf '%s  %s\n' "$ARCHIVE_SHA256" "$RUNNER_TEMP/remaining-overlay.tar.gz" | sha256sum -c -
