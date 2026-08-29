@@ -35,10 +35,14 @@ impl InMemoryRouter {
         self.inner.nodes.write().await.insert(id, raft);
     }
 
+    // This shared module is compiled into several probe binaries; lifecycle and
+    // fault-injection methods are intentionally used by different binary targets.
+    #[allow(dead_code)]
     pub async fn unregister(&self, id: u64) {
         self.inner.nodes.write().await.remove(&id);
     }
 
+    #[allow(dead_code)]
     pub async fn isolate(&self, id: u64) {
         let ids = self
             .inner
@@ -57,14 +61,17 @@ impl InMemoryRouter {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn pause(&self, id: u64) {
         self.inner.paused.write().await.insert(id);
     }
 
+    #[allow(dead_code)]
     pub async fn resume(&self, id: u64) {
         self.inner.paused.write().await.remove(&id);
     }
 
+    #[allow(dead_code)]
     pub async fn heal_all(&self) {
         self.inner.blocked.write().await.clear();
         self.inner.paused.write().await.clear();
