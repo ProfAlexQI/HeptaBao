@@ -40,7 +40,7 @@ impl FaultCluster {
             election_timeout_max: 240,
             snapshot_policy: SnapshotPolicy::LogsSinceLast(3),
             max_in_snapshot_log_to_keep: 0,
-            enable_pre_vote: true,
+            enable_pre_vote: Some(true),
             ..Config::default()
         }
         .validate()?;

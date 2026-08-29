@@ -45,7 +45,7 @@ impl Cluster {
             election_timeout_max: 240,
             snapshot_policy: SnapshotPolicy::LogsSinceLast(3),
             max_in_snapshot_log_to_keep: 0,
-            enable_pre_vote: true,
+            enable_pre_vote: Some(true),
             ..Config::default()
         }
         .validate()?;
@@ -284,7 +284,7 @@ impl Cluster {
             }),
         )
         .await;
-        let old_rejected = !matches!(old_write, Ok(Ok(Ok(_))));
+        let old_rejected = !matches!(old_write, Ok(Ok(_)));
         let new_write = self.write(new_leader, 90_002, "new-leader-committed".to_owned()).await.is_ok();
         Ok((new_leader, old_rejected, new_write))
     }
@@ -306,7 +306,7 @@ impl Cluster {
             }),
         )
         .await;
-        let rejected = !matches!(result, Ok(Ok(Ok(_))));
+        let rejected = !matches!(result, Ok(Ok(_)));
         sleep(Duration::from_millis(350)).await;
         let after = self.nodes[&leader]
             .raft

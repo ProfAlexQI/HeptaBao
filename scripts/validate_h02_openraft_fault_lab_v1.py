@@ -150,10 +150,20 @@ def main() -> int:
 
         workflow = WORKFLOW.read_text(encoding="utf-8")
         for token in [
-            "1.85.0", "1.98.0", "0x5eed20260828cafe", "0x8badf00d12345678", "0xd15ea5e5cafef00d",
-            "fail-fast: false", "hostile-snapshot-parent", "linearizability-history",
-            "h02_linearizability_checker_v1.py", "h02_openraft_fault_lab_evidence_v1.py",
-            "if: ${{ always() }}", "qualification=false", "authority=NONE",
+            "1.85.0",
+            "1.98.0",
+            "0x5eed20260828cafe",
+            "0x8badf00d12345678",
+            "0xd15ea5e5cafef00d",
+            "Execute all six fault-lab entries and retain every outcome",
+            "exit 0",
+            "hostile-snapshot-parent",
+            "linearizability-history",
+            "h02_linearizability_checker_v1.py",
+            "h02_openraft_fault_lab_evidence_v1.py",
+            "if: ${{ always() }}",
+            "qualification=false",
+            "authority=NONE",
         ]:
             require(token in workflow, f"workflow token missing: {token}")
 

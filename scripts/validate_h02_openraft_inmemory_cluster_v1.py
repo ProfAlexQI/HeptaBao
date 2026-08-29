@@ -114,7 +114,8 @@ def main() -> int:
             "0x5eed20260828cafe",
             "0x8badf00d12345678",
             "0xd15ea5e5cafef00d",
-            "fail-fast: false",
+            "Execute all six entries serially and retain every outcome",
+            "exit 0",
             "if: ${{ always() }}",
         ]:
             require(token in text, f"workflow token missing: {token}")

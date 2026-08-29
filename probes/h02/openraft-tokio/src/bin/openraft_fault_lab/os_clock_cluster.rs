@@ -6,7 +6,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use openraft::async_runtime::WatchReceiver;
 use openraft::{Config, Raft, ReadPolicy, SnapshotPolicy};
 use openraft_memstore::{ClientRequest, MemLogStore, MemStateMachine, TypeConfig, new_mem_store};
 use serde_json::{Value, json};
@@ -38,7 +37,7 @@ impl Cluster {
             election_timeout_max: 240,
             snapshot_policy: SnapshotPolicy::LogsSinceLast(8),
             max_in_snapshot_log_to_keep: 0,
-            enable_pre_vote: true,
+            enable_pre_vote: Some(true),
             ..Config::default()
         }
         .validate()?;

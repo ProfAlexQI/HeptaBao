@@ -377,10 +377,10 @@ impl SnapshotMeta {
         if self.membership_epoch == 0 || self.byte_length == 0 {
             return Err(ContractError::InvalidSnapshotMetadata);
         }
-        if let Some(applied) = cursor.last_applied {
-            if self.last_included.index < applied.index {
-                return Err(ContractError::SnapshotRegression);
-            }
+        if let Some(applied) = cursor.last_applied
+            && self.last_included.index < applied.index
+        {
+            return Err(ContractError::SnapshotRegression);
         }
         Ok(())
     }
