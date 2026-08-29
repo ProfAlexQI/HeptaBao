@@ -1,0 +1,122 @@
+name: h02-openraft-windows-diagnostics
+
+on:
+  push:
+    branches: ["codex/h02-openraft-windows-diagnostics-v1"]
+    paths:
+      - ".github/workflows/h02-openraft-windows-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "cf3809a95ea4a12fb5ab1adbf1ea4ea7ef0b7397"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+      - name: Validate cluster and fault contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python -m unittest \
+            tests/platform/test_h02_openraft_inmemory_cluster_v1.py \
+            tests/platform/test_h02_linearizability_checker_v1.py \
+            tests/platform/test_h02_openraft_fault_lab_evidence_v1.py \
+            -v
+      - name: Install Rust 1.98.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup run 1.98.0 rustc --version --verbose
+          rustup run 1.98.0 cargo --version --verbose
+      - name: Resolve and test exact OpenRaft probe
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openraft-windows-diagnostic
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/openraft-tokio/Cargo.toml
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/openraft-tokio/Cargo.toml
+      - name: Run real three-node cluster and exact replay
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openraft-windows-diagnostic
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > cluster-output.jsonl 2> cluster-stderr.log
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > cluster-replay.jsonl 2> cluster-replay-stderr.log
+          cmp cluster-output.jsonl cluster-replay.jsonl
+          cat cluster-output.jsonl
+      - name: Run hostile-snapshot subprocess
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openraft-windows-diagnostic
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml \
+            --bin heptabao-h02-openraft-fault-lab -- --mode hostile-snapshot-parent --seed 0x5eed20260828cafe \
+            > hostile-result.json 2> hostile-stderr.log
+          cat hostile-result.json
+      - name: Run real history and external checker
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openraft-windows-diagnostic
+        run: |
+          set -euo pipefail
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml \
+            --bin heptabao-h02-openraft-fault-lab -- --mode linearizability-history --seed 0x5eed20260828cafe \
+            > linearizability-history.json 2> history-stderr.log
+          python scripts/h02_linearizability_checker_v1.py check \
+            --history linearizability-history.json \
+            --output linearizability-result.json
+          cat linearizability-result.json
+      - name: Require fail-closed success without authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          cluster_rows = [json.loads(line) for line in open('cluster-output.jsonl', encoding='utf-8') if line.strip()]
+          hostile = json.load(open('hostile-result.json', encoding='utf-8'))
+          linear = json.load(open('linearizability-result.json', encoding='utf-8'))
+          case_rows = [row for row in cluster_rows if row.get('kind') == 'case']
+          assert len(case_rows) == 6, case_rows
+          assert all(row['status'] == 'PASS' for row in case_rows)
+          assert hostile['status'] == 'EXECUTED_PASS', hostile
+          assert hostile['phase_reached'] is True
+          assert hostile['outcome'] == 'REJECTED_OR_ABORTED_AFTER_INJECTION'
+          assert linear['status'] == 'EXECUTED_PASS'
+          assert linear['linearizable'] is True
+          for value in (hostile, linear):
+              assert value['qualification'] is False
+              assert value['authority_effect'] == 'NONE'
+          print('OpenRaft diagnostic passed; qualification=false selection_effect=NONE authority_effect=NONE')
+          PY
