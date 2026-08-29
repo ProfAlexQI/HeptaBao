@@ -222,15 +222,22 @@ mod tests {
 
     #[test]
     fn every_h00_authority_flag_is_false() {
-        assert!(!H00_AUTHORITY.compatibility_claim);
-        assert!(!H00_AUTHORITY.production_authority);
-        assert!(!H00_AUTHORITY.migration_authority);
-        assert!(!H00_AUTHORITY.release_authority);
-        assert!(!H00_AUTHORITY.mixed_cluster_allowed);
-        assert!(!H00_AUTHORITY.openbao_physical_storage_read_allowed);
-        assert!(!H00_AUTHORITY.openbao_physical_storage_write_allowed);
-        assert!(!H00_AUTHORITY.real_secret_fixture_allowed);
-        assert!(!H00_AUTHORITY.root_token_fixture_allowed);
-        assert!(!H00_AUTHORITY.automatic_stage_promotion);
+        let authority = std::hint::black_box(H00_AUTHORITY);
+        assert!(
+            [
+                authority.compatibility_claim,
+                authority.production_authority,
+                authority.migration_authority,
+                authority.release_authority,
+                authority.mixed_cluster_allowed,
+                authority.openbao_physical_storage_read_allowed,
+                authority.openbao_physical_storage_write_allowed,
+                authority.real_secret_fixture_allowed,
+                authority.root_token_fixture_allowed,
+                authority.automatic_stage_promotion,
+            ]
+            .into_iter()
+            .all(|flag| !flag)
+        );
     }
 }
