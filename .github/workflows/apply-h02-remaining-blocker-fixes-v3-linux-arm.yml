@@ -65,25 +65,253 @@ jobs:
         shell: bash
         run: /tmp/h02-repair-apply.sh
 
+      - name: Restore exact OpenRaft alpha.33 family and Rust 1.85 lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def replace(path: str, old: str, new: str, expected: int = 1) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f'{path}: expected {expected} occurrences, found {count}: {old!r}')
+              target.write_text(text.replace(old, new), encoding='utf-8')
+              print(f'corrected {path}: {old!r} -> {new!r}')
+
+          # A [patch] entry does not force Cargo to choose a lower semver version.
+          # Retain the intended Rust 1.85 lane and restore the exact direct 0.2.5
+          # constraint that makes the immutable git patch selectable.
+          for path in (
+              '.github/workflows/h02-openraft-blocker-closure.yml',
+              '.github/workflows/h02-openraft-fault-lab.yml',
+              '.github/workflows/h02-openraft-inmemory-cluster.yml',
+          ):
+              replace(path, 'TOOLCHAINS: "1.88.0 1.98.0"', 'TOOLCHAINS: "1.85.0 1.98.0"')
+
+          for path in (
+              'planning/HEPTABAO_H02_CANDIDATE_ADAPTERS_V1.yaml',
+              'planning/HEPTABAO_H02_OPENRAFT_INMEMORY_CLUSTER_V1.yaml',
+              'planning/HEPTABAO_H02_OPENRAFT_HOSTILE_FAULTS_LINEARIZABILITY_V1.yaml',
+              'planning/HEPTABAO_H02_OS_DURABLE_CLOCK_BLOCKER_CLOSURE_V1.yaml',
+          ):
+              replace(path, "toolchains: ['1.88.0', '1.98.0']", "toolchains: ['1.85.0', '1.98.0']")
+
+          replace('scripts/validate_h02_blocker_closure_v1.py', '["1.88.0", "1.98.0"]', '["1.85.0", "1.98.0"]')
+          replace('scripts/validate_h02_blocker_closure_v1.py', '"1.88.0 1.98.0"', '"1.85.0 1.98.0"')
+          replace('scripts/validate_h02_openraft_inmemory_cluster_v1.py', '"1.88.0",', '"1.85.0",')
+          replace('scripts/validate_h02_openraft_fault_lab_v1.py', '"1.88.0",', '"1.85.0",')
+          replace('.github/workflows/h02-candidate-adapters.yml', 'openraft-1_88', 'openraft-1_85', expected=2)
+          replace(
+              '.github/workflows/h02-candidate-adapters.yml',
+              'profile=openraft; toolchain=1.88.0; subdir=openraft-tokio;',
+              'profile=openraft; toolchain=1.85.0; subdir=openraft-tokio;',
+          )
+
+          matrix = 'planning/HEPTABAO_H02_CANDIDATE_PROBE_MATRIX_V1.yaml'
+          replace(
+              matrix,
+              '  - OpenRaft has no declared rust-version in the captured workspace manifest; the exact resolved graph is observed to require Rust 1.88 because validit 0.2.6 declares that floor, while broader MSRV claims remain review-scoped.',
+              '  - OpenRaft alpha.33 declares validit 0.2.5; the probe binds that yanked crate to exact upstream commit 7016fa5e072a86092928144b3a3040381e6964e9 and requires positive Rust 1.85/1.98 execution before any effective-MSRV claim.',
+          )
+          replace(
+              matrix,
+              """    declared_rust_version: null
+    observed_effective_rust_version: '1.88'
+    msrv_boundary_toolchain: '1.85.0'
+    probe_toolchains: ['1.85.0', '1.88.0', '1.98.0']
+    expected_toolchain_outcomes:
+      '1.85.0': EXPECTED_FAIL_MSRV_BOUNDARY
+      '1.88.0': PASS
+      '1.98.0': PASS
+""",
+              """    declared_rust_version: null
+    probe_toolchains: ['1.85.0', '1.98.0']
+""",
+          )
+
+          dependency = Path('scripts/h02_dependency_probe_v1.py')
+          text = dependency.read_text(encoding='utf-8')
+          digest_extension = '''    for key in ("observed_effective_rust_version", "msrv_boundary_toolchain", "expected_toolchain_outcomes"):
+              if key in item:
+                  value[key] = item[key]
+          '''
+          if text.count(digest_extension) != 1:
+              raise SystemExit('dependency profile digest extension drifted')
+          text = text.replace(digest_extension, '')
+          marker = '        if profile_id == "HB-H02-PROBE-OPENRAFT-TOKIO":\n'
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit('OpenRaft synthetic MSRV validation block missing')
+          end = text.find('    return len(found)', start)
+          if end < 0:
+              raise SystemExit('OpenRaft synthetic MSRV validation block end missing')
+          text = text[:start] + text[end:]
+          dependency.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/platform/test_h02_dependency_probe_v1.py')
+          text = test_path.read_text(encoding='utf-8')
+          marker = '\n    def test_09_openraft_msrv_boundary_is_bound_into_profile_digest(self):\n'
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit('synthetic OpenRaft MSRV boundary test missing')
+          text = text[:start] + '\n\nif __name__ == "__main__":\n    unittest.main()\n'
+          test_path.write_text(text, encoding='utf-8')
+
+          # Restore the strict two-lane SBOM workflow; Rust 1.85 must now really
+          # compile instead of being reclassified as an expected failure.
+          subprocess.run(
+              ['git', 'checkout', 'HEAD', '--', '.github/workflows/h02-probe-sbom-msrv.yml'],
+              check=True,
+          )
+
+          cargo = 'probes/h02/openraft-tokio/Cargo.toml'
+          replace(
+              cargo,
+              'openraft-macros = "=0.10.0-alpha.33"\nserde_json = "=1.0.145"',
+              '''openraft-macros = "=0.10.0-alpha.33"
+# Constrain the resolver to the upstream alpha.33 workspace dependency. The
+# matching [patch.crates-io] entry below supplies the yanked package from its
+# immutable upstream commit instead of silently selecting validit 0.2.6.
+validit = "=0.2.5"
+serde_json = "=1.0.145"''',
+          )
+
+          harness = 'scripts/h02_candidate_adapter_harness_v1.py'
+          replace(
+              harness,
+              '"support_dependencies": ["openraft-memstore", "serde_json", "tokio", "validit"],',
+              '''"support_dependencies": [
+            "openraft-macros",
+            "openraft-memstore",
+            "openraft-rt",
+            "openraft-rt-tokio",
+            "serde_json",
+            "tokio",
+            "validit",
+        ],''',
+          )
+
+          harness_test = 'tests/platform/test_h02_candidate_adapter_harness_v1.py'
+          replace(
+              harness_test,
+              '    "openraft-memstore": \'openraft-memstore = "=0.10.0-alpha.33"\',\n',
+              '''    "openraft-macros": 'openraft-macros = "=0.10.0-alpha.33"',
+    "openraft-memstore": 'openraft-memstore = "=0.10.0-alpha.33"',
+    "openraft-rt": 'openraft-rt = "=0.10.0-alpha.33"',
+    "openraft-rt-tokio": 'openraft-rt-tokio = "=0.10.0-alpha.33"',
+''',
+          )
+
+          # The final source state must preserve Rust 1.85 as a required positive
+          # lane and bind every direct dependency present in the manifest.
+          assertions = {
+              cargo: [
+                  'validit = "=0.2.5"',
+                  'rev = "7016fa5e072a86092928144b3a3040381e6964e9"',
+                  'openraft-macros = "=0.10.0-alpha.33"',
+                  'openraft-rt = "=0.10.0-alpha.33"',
+                  'openraft-rt-tokio = "=0.10.0-alpha.33"',
+              ],
+              harness: [
+                  '"openraft-macros"',
+                  '"openraft-rt"',
+                  '"openraft-rt-tokio"',
+                  '"validit"',
+              ],
+              '.github/workflows/h02-openraft-blocker-closure.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+              '.github/workflows/h02-openraft-fault-lab.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+              '.github/workflows/h02-openraft-inmemory-cluster.yml': ['TOOLCHAINS: "1.85.0 1.98.0"'],
+          }
+          for path, needles in assertions.items():
+              body = Path(path).read_text(encoding='utf-8')
+              for needle in needles:
+                  if needle not in body:
+                      raise SystemExit(f'{path}: missing required binding {needle}')
+          print('restored exact validit 0.2.5 selection and complete OpenRaft family binding')
+          PY
+
       - name: Validate plans, schemas and Python semantics
         shell: bash
         run: /tmp/h02-repair-validate.sh
 
-      - name: Compile and execute repaired OpenRaft probes
+      - name: Compile and execute repaired OpenRaft probes on Rust 1.98
         shell: bash
         run: /tmp/h02-repair-rust.sh
+
+      - name: Prove exact family resolution and Rust 1.85 execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          rustup toolchain install 1.85.0 --profile minimal
+          python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          lock = tomllib.loads(Path('probes/h02/openraft-tokio/Cargo.lock').read_text(encoding='utf-8'))
+          packages = lock['package']
+          by_name = {}
+          for package in packages:
+              by_name.setdefault(package['name'], []).append(package)
+
+          def exactly_one(name):
+              values = by_name.get(name, [])
+              assert len(values) == 1, (name, values)
+              return values[0]
+
+          for name in ('openraft', 'openraft-macros', 'openraft-memstore', 'openraft-rt', 'openraft-rt-tokio'):
+              package = exactly_one(name)
+              assert package['version'] == '0.10.0-alpha.33', package
+
+          validit = exactly_one('validit')
+          assert validit['version'] == '0.2.5', validit
+          source = validit.get('source', '')
+          assert source.startswith('git+https://github.com/drmingdrmer/validit.git'), source
+          assert '7016fa5e072a86092928144b3a3040381e6964e9' in source, source
+
+          root = exactly_one('heptabao-h02-probe-openraft-tokio')
+          root_dependencies = set(root.get('dependencies', []))
+          for name in ('openraft', 'openraft-macros', 'openraft-memstore', 'openraft-rt', 'openraft-rt-tokio', 'serde_json', 'tokio', 'validit'):
+              assert name in root_dependencies, (name, sorted(root_dependencies))
+          print('Cargo.lock binds OpenRaft alpha.33 family and validit 0.2.5 exact git commit')
+          PY
+          cargo +1.85.0 test --locked --all-targets --manifest-path "$manifest"
+          cargo +1.85.0 run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > /tmp/inmemory-1.85.jsonl
+          cargo +1.85.0 run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-fault-lab -- --mode hostile-snapshot-parent --seed 0x5eed20260828cafe \
+            > /tmp/hostile-1.85.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          rows = [json.loads(line) for line in Path('/tmp/inmemory-1.85.jsonl').read_text().splitlines() if line.strip().startswith('{')]
+          assert any(row.get('kind') == 'summary' and row.get('status') == 'EXECUTED_PASS' for row in rows), rows[-3:]
+          hostile = json.loads(Path('/tmp/hostile-1.85.json').read_text())
+          assert hostile['status'] == 'EXECUTED_PASS', hostile
+          assert hostile['outcome'] == 'REJECTED_IGNORED_OR_ABORTED_AFTER_INJECTION', hostile
+          assert hostile['qualification'] is False
+          print('Rust 1.85 OpenRaft execution passed; qualification=false authority=NONE')
+          PY
 
       - name: Execute Linux OS suspend, durable WAL and clock smoke
         shell: bash
         run: |
           set -euo pipefail
           manifest=probes/h02/openraft-tokio/Cargo.toml
-          cargo +1.98.0 run --quiet --locked --manifest-path "$manifest" \
-            --bin heptabao-h02-openraft-blocker-closure-lab -- --mode all --seed 0x5eed20260828cafe \
-            > /tmp/blocker.json
-          python3 - <<'PY'
+          for toolchain in 1.85.0 1.98.0; do
+            cargo +"$toolchain" run --quiet --locked --manifest-path "$manifest" \
+              --bin heptabao-h02-openraft-blocker-closure-lab -- --mode all --seed 0x5eed20260828cafe \
+              > "/tmp/blocker-$toolchain.json"
+            python3 - "$toolchain" <<'PY'
           import json
-          value = json.load(open('/tmp/blocker.json', encoding='utf-8'))
+          import sys
+          toolchain = sys.argv[1]
+          value = json.load(open(f'/tmp/blocker-{toolchain}.json', encoding='utf-8'))
           assert value['status'] == 'EXECUTED_PASS', value
           assert value['qualification'] is False
           assert value['selection_effect'] == 'NONE'
@@ -92,8 +320,9 @@ jobs:
           assert cases['os_suspend_resume']['status'] == 'PASS', value
           assert cases['durable_wal']['status'] == 'PASS', value
           assert cases['clock_faults']['status'] == 'PASS', value
-          print('Linux ARM blocker smoke passed; authority=NONE')
+          print(f'Linux ARM blocker smoke passed on Rust {toolchain}; authority=NONE')
           PY
+          done
 
       - name: Commit repairs and remove one-shot workflows
         shell: bash
@@ -108,5 +337,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git commit -m "fix(h02): close OpenRaft execution and MSRV blockers"
+          git commit -m "fix(h02): close OpenRaft execution and source-binding blockers"
           git push origin HEAD:codex/h02-final-gap-closure-v1
