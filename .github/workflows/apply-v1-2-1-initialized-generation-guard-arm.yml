@@ -6,6 +6,7 @@ on:
       - "codex/plan-v1.2.1-direct-generation-closure-v2"
     paths:
       - ".github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml"
+      - ".github/workflows/explicit-generation-lifecycle.trigger"
   workflow_dispatch:
 
 permissions:
@@ -98,6 +99,7 @@ jobs:
           rm -f scripts/apply_v1_2_1_initialized_generation_guard.py
           rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml
           rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-macos.yml
+          rm -f .github/workflows/explicit-generation-lifecycle.trigger
 
       - name: Commit exact verified closure
         shell: bash
