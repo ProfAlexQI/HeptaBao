@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 
 use super::store::DurableStateMachine;
 
-pub type DurableRaft = Raft<TypeConfig, Arc<DurableStateMachine>>;
+pub type DurableRaft = Raft<TypeConfig, DurableStateMachine>;
 
 #[derive(Clone, Default)]
 pub struct DurableRouter {
