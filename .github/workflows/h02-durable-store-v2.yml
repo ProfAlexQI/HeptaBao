@@ -15,6 +15,7 @@ concurrency:
 env:
   TOOLCHAINS: "1.85.0 1.98.0"
   SEEDS: "0x5eed20260828cafe 0x8badf00d12345678 0xd15ea5e5cafef00d"
+  VALIDIT_REV: "7016fa5e072a86092928144b3a3040381e6964e9"
 
 jobs:
   durable-store:
@@ -25,13 +26,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind source and initialize diagnostics
+      - name: Bind exact source and initialize diagnostics
         shell: bash
         run: |
           set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$actual_head" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
           mkdir -p "$RUNNER_TEMP/results"
-          printf 'source_commit=%s\nsource_tree=%s\nrunner=%s\nos=%s\narch=%s\n' \
-            "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" \
+          printf 'repository=%s\nref=%s\nevent=%s\ngithub_sha=%s\nsource_commit=%s\nsource_tree=%s\nrunner_id=%s\nrunner_name=%s\nos=%s\narch=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_REF" "$GITHUB_EVENT_NAME" "$GITHUB_SHA" \
+            "$actual_head" "$actual_tree" "$RUNNER_TRACKING_ID" "$RUNNER_NAME" \
+            "$RUNNER_OS" "$RUNNER_ARCH" \
             | tee "$RUNNER_TEMP/results/source-binding.txt"
       - name: Install exact Rust toolchains
         shell: bash
@@ -39,8 +46,10 @@ jobs:
           set -euo pipefail
           for toolchain in $TOOLCHAINS; do
             rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
-            rustup run "$toolchain" rustc --version --verbose
-            rustup run "$toolchain" cargo --version --verbose
+            rustup run "$toolchain" rustc --version --verbose \
+              | tee "$RUNNER_TEMP/results/rustc-$toolchain.txt"
+            rustup run "$toolchain" cargo --version --verbose \
+              | tee "$RUNNER_TEMP/results/cargo-$toolchain.txt"
           done
       - name: Compile, test and execute all durable entries
         shell: bash
@@ -49,11 +58,30 @@ jobs:
           probe="$RUNNER_TEMP/openraft-durable"
           cp -a probes/h02/openraft-tokio "$probe"
           manifest="$probe/Cargo.toml"
+          sha256sum "$manifest" | tee "$RUNNER_TEMP/results/manifest.sha256"
           for toolchain in $TOOLCHAINS; do
             export CARGO_TARGET_DIR="$RUNNER_TEMP/target-$toolchain"
             rm -f "$probe/Cargo.lock"
             rustup run "$toolchain" cargo generate-lockfile --manifest-path "$manifest" \
               2>&1 | tee "$RUNNER_TEMP/results/generate-lock-$toolchain.log"
+            sha256sum "$probe/Cargo.lock" \
+              | tee "$RUNNER_TEMP/results/Cargo.lock-$toolchain.sha256"
+            rustup run "$toolchain" cargo metadata --locked --format-version 1 \
+              --manifest-path "$manifest" \
+              >"$RUNNER_TEMP/results/metadata-$toolchain.json"
+            python - "$RUNNER_TEMP/results/metadata-$toolchain.json" "$VALIDIT_REV" <<'PY'
+          import json
+          import sys
+
+          metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+          revision = sys.argv[2]
+          packages = [package for package in metadata["packages"] if package["name"] == "validit"]
+          assert len(packages) == 1, packages
+          source = packages[0].get("source") or ""
+          assert source.startswith("git+https://github.com/drmingdrmer/validit.git?"), source
+          assert f"rev={revision}" in source, source
+          assert source.endswith(f"#{revision}"), source
+          PY
             rustup run "$toolchain" cargo fmt --manifest-path "$manifest" --all --check \
               2>&1 | tee "$RUNNER_TEMP/results/fmt-$toolchain.log"
             rustup run "$toolchain" cargo test --locked --all-targets --manifest-path "$manifest" \
@@ -65,21 +93,33 @@ jobs:
               output="$RUNNER_TEMP/results/durable-$toolchain-$seed_name.json"
               rustup run "$toolchain" cargo run --quiet --locked --manifest-path "$manifest" \
                 --bin heptabao-h02-openraft-durable-store-lab -- --seed "$seed" >"$output"
-              python - "$output" <<'PY'
-          import json, sys
-          value = json.load(open(sys.argv[1], encoding='utf-8'))
-          assert value['status'] == 'EXECUTED_PASS', value
-          assert len(value['cases']) == 7, value
-          assert all(case['status'] == 'PASS' for case in value['cases']), value
-          assert value['scope']['raft_log_storage_implemented'] is True
-          assert value['scope']['raft_state_machine_implemented'] is True
-          assert value['scope']['full_cluster_disk_restart'] is True
-          assert value['qualification'] is False
-          assert value['selection_effect'] == 'NONE'
-          assert value['authority_effect'] == 'NONE'
+              python - "$output" "$GITHUB_SHA" "$toolchain" <<'PY'
+          import json
+          import sys
+
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert value["status"] == "EXECUTED_PASS", value
+          assert len(value["cases"]) == 7, value
+          assert all(case["status"] == "PASS" for case in value["cases"]), value
+          assert value["scope"]["raft_log_storage_implemented"] is True
+          assert value["scope"]["raft_state_machine_implemented"] is True
+          assert value["scope"]["full_cluster_disk_restart"] is True
+          assert value["qualification"] is False
+          assert value["selection_effect"] == "NONE"
+          assert value["authority_effect"] == "NONE"
+          print(json.dumps({
+              "head_sha": sys.argv[2],
+              "toolchain": sys.argv[3],
+              "status": value["status"],
+              "case_count": len(value["cases"]),
+              "qualification": value["qualification"],
+              "selection_effect": value["selection_effect"],
+              "authority_effect": value["authority_effect"],
+          }, sort_keys=True))
           PY
             done
           done
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Upload complete diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
