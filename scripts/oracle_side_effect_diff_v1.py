@@ -45,8 +45,8 @@ FORBIDDEN_KEY = re.compile(
     re.IGNORECASE,
 )
 FORBIDDEN_VALUE_MARKERS = (
-    "-----BEGIN PRIVATE KEY-----",
-    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
