@@ -30,7 +30,8 @@ V1.2 landing PR #26 head
         ↓
 hostile snapshot semantic closure PR #35 head
   codex/h02-hostile-snapshot-noop-closure-v1
-  @ b2e9eeb9d153f98280d1197aee8e895d7409c51c
+  @ 2b3f2e5e31396da9ceceafe76821babafc3035c9
+  (supersedes observed head b2e9eeb9d153f98280d1197aee8e895d7409c51c after BASE_DRIFT revalidation)
         ↓
 V1.2.1 operational gap closure package
   codex/plan-v1.2.1-operational-gap-closure-v1
@@ -170,7 +171,7 @@ Integrated Raft、HA、全部后端、namespace、Agent/Proxy 和 migration 不�
 - seed 失败后不得只重跑通过的 seed；
 - flake 只有在有确定性复现、root cause、修复和重复通过证据后才能关闭；
 - artifact provider TTL 不得被当作永久证据；至少永久保存 digest、metadata、receipt 和可验证 provenance；
--任何 Critical/High/Unclassified finding 未归零时，技术 lane 不能进入 CLOSED。
+- 任何 Critical/High/Unclassified finding 未归零时，技术 lane 不能进入 CLOSED。
 
 ## 9. 有效终止状态
 
