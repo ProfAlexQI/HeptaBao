@@ -79,8 +79,16 @@ def validate_schema() -> None:
             properties.get(field, {}).get("const") == expected,
             f"matrix summary {field} is not fail-closed",
         )
-    require(properties.get("entries", {}).get("minItems") == 24, "schema must require 24 entries")
-    require(properties.get("entries", {}).get("maxItems") == 24, "schema must cap at 24 entries")
+    entries = properties.get("entries", {})
+    require(entries.get("minItems") == 0, "failure summaries must permit partial entry retention")
+    require(entries.get("maxItems") == 24, "schema must cap entries at 24")
+    require("runner_errors" in properties, "schema must carry runner-level errors")
+    matrix_properties = properties.get("matrix", {}).get("properties", {})
+    require("duplicate_entry_ids" in matrix_properties, "schema must represent duplicate IDs")
+    entry_properties = entries.get("items", {}).get("properties", {})
+    for field in ("process_started", "command_digest", "application_status"):
+        require(field in entry_properties, f"entry schema missing {field}")
+
     pass_rule = json.dumps(schema.get("allOf", []), sort_keys=True)
     for token in (
         '"pass": {"const": 24}',
@@ -88,6 +96,10 @@ def validate_schema() -> None:
         '"blocked": {"const": 0}',
         '"unknown": {"const": 0}',
         '"unexecuted": {"const": 0}',
+        '"clean_tree": {"const": true}',
+        '"runner_errors": {"maxItems": 0}',
+        '"duplicate_entry_ids": {"maxItems": 0}',
+        '"entries": {"maxItems": 24, "minItems": 24}',
     ):
         require(token in pass_rule, f"PASS condition missing: {token}")
 
@@ -107,7 +119,18 @@ def validate_runner() -> None:
     require_tokens(
         RUNNER,
         (
+            "verify_source_binding",
+            "declared commit does not match HEAD",
+            "output directory must be outside the repository",
             "Process exit status is necessary but not sufficient",
+            "Explicit BLOCKED,",
+            "terminate_process_group",
+            "os.killpg",
+            '"command_digest"',
+            '"process_started"',
+            '"duplicate_entry_ids"',
+            '"runner_errors"',
+            "repository became dirty during matrix execution",
             "stdout JSONL line",
             "hostile application status",
             "blocker component",
@@ -117,6 +140,18 @@ def validate_runner() -> None:
             '"authority_effect": "NONE"',
         ),
     )
+    tests = RUNNER_TEST.read_text(encoding="utf-8")
+    for name in (
+        "test_explicit_blocked_application_remains_blocked",
+        "test_inmemory_unknown_remains_unknown",
+        "test_spawn_failure_is_unexecuted",
+        "test_timeout_is_blocked_even_with_partial_pass_json",
+        "test_duplicate_entry_id_forces_failure",
+        "test_runner_error_forces_schema_valid_failure",
+        "test_source_binding_rejects_declared_head_mismatch",
+        "test_output_inside_repository_is_rejected",
+    ):
+        require(name in tests, f"exact-head regression test missing: {name}")
 
 
 def validate_workflow() -> None:
@@ -234,7 +269,8 @@ def main() -> int:
         return 1
     print(
         "H02 exact-head matrix contract validation passed: entries=24; "
-        "application-status=required; diagnostics-before-gate=true; "
+        "source-self-binding=true; application-status-preserved=true; "
+        "timeout-process-group-termination=true; diagnostics-before-gate=true; "
         "qualification=false authority=NONE"
     )
     return 0
