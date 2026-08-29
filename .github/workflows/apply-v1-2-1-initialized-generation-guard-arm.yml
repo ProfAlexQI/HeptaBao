@@ -1,0 +1,93 @@
+name: apply-v1-2-1-initialized-generation-guard-arm
+
+on:
+  push:
+    branches: ["codex/plan-v1.2.1-initialized-generation-closure-v1"]
+    paths:
+      - ".github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v1-2-1-initialized-generation-guard-arm
+  cancel-in-progress: false
+
+jobs:
+  apply-verify-commit:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact transition head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python3 -m py_compile scripts/apply_v1_2_1_initialized_generation_guard.py
+
+      - name: Install plan dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Apply initialized-generation guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_v1_2_1_initialized_generation_guard.py
+
+      - name: Install exact Rust qualification toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+
+      - name: Validate plan and durable implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_plan_v2.py
+          python3 scripts/validate_plan_v2_extensions.py
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_plan_v1_2_1.py
+          python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python3 -m unittest tests.platform.test_h02_exact_head_matrix_v1 -v
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check
+          cargo +1.98.0 test --locked --all-targets --manifest-path "$manifest"
+          cargo +1.98.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+          cargo +1.88.0 test --locked --all-targets --manifest-path "$manifest"
+          cargo +1.88.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+          git diff --check
+
+      - name: Remove one-shot transition surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/apply_v1_2_1_initialized_generation_guard.py
+          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml
+          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-macos.yml
+
+      - name: Commit exact verified transition
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(h02): fail closed on initialized generation loss"
+          git push origin HEAD:codex/plan-v1.2.1-initialized-generation-closure-v1
