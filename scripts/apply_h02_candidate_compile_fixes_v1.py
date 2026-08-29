@@ -27,8 +27,8 @@ def main() -> int:
     )
     replace_once(
         "tests/platform/test_h02_candidate_adapter_harness_v1.py",
-        "'validit': 'validit = \"=0.2.5\"'",
-        "'validit': 'validit = \"=0.2.6\"'",
+        '"validit": \'validit = "=0.2.5"\'',
+        '"validit": \'validit = "=0.2.6"\'',
         "test-validit-pin",
     )
     print("H02 candidate compile fixes applied")
