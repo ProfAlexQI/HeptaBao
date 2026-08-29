@@ -16,7 +16,7 @@ purpose:
 rules:
   - Candidate evidence uses execution_kind CANDIDATE_ADAPTER and candidate.bound=true.
   - Every execution binds an exact manifest digest, feature set, toolchain, target, source commit and source tree.
-  - The feature_profile_sha256 includes the exact manifest, features, toolchain and target; it is not reusable across another toolchain.
+  - The feature_profile_sha256 includes the exact manifest, candidate features, complete allowlisted direct-dependency profile, toolchain and target; it is not reusable across dependency, feature, toolchain or target drift.
   - Candidate output is executed twice with the same seed and must be byte-for-byte equivalent after JSON parsing.
   - Reference and candidate evidence must have identical domain, seed and ordered case IDs.
   - Candidate traces may differ from reference traces; comparison is by named invariant outcome and explicit adapter scope.

@@ -30,6 +30,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "version": "1.53.1",
         "domain": "RUNTIME",
         "manifest": "probes/h02/tokio-minimal/Cargo.toml",
+        "candidate_package": "tokio",
+        "support_dependencies": [],
         "adapter_scope": "FULL_REFERENCE_CASE_SET",
         "cases": [
             "runtime-cancel-before-start",
@@ -46,6 +48,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "version": "0.23.43",
         "domain": "TLS",
         "manifest": "probes/h02/rustls-ring/Cargo.toml",
+        "candidate_package": "rustls",
+        "support_dependencies": ["zeroize"],
         "adapter_scope": "FULL_REFERENCE_CASE_SET",
         "cases": [
             "tls-version-policy-fail-closed",
@@ -62,6 +66,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "version": "0.23.43",
         "domain": "TLS",
         "manifest": "probes/h02/rustls-aws-lc/Cargo.toml",
+        "candidate_package": "rustls",
+        "support_dependencies": ["jobserver", "zeroize"],
         "adapter_scope": "FULL_REFERENCE_CASE_SET",
         "cases": [
             "tls-version-policy-fail-closed",
@@ -78,6 +84,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "version": "0.10.0-alpha.33",
         "domain": "RAFT",
         "manifest": "probes/h02/openraft-tokio/Cargo.toml",
+        "candidate_package": "openraft",
+        "support_dependencies": ["openraft-memstore", "serde_json", "tokio", "validit"],
         "adapter_scope": "API_SEAM_AND_FAILURE_MODEL_PARTIAL",
         "cases": [
             "raft-deterministic-apply-and-restart",
@@ -135,28 +143,96 @@ def parse_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def manifest_binding(root: Path, profile: dict[str, Any], toolchain: str, target: str) -> dict[str, Any]:
+def _direct_dependency_binding(path: Path, package: str, spec: Any) -> dict[str, Any]:
+    if isinstance(spec, str):
+        version = spec
+        default_features = True
+        features: list[str] = []
+    elif isinstance(spec, dict):
+        allowed_keys = {"version", "default-features", "features"}
+        unexpected_keys = sorted(set(spec) - allowed_keys)
+        if unexpected_keys:
+            raise Failure(
+                f"{path}: dependency {package!r} has unapproved keys: {unexpected_keys!r}"
+            )
+        version = str(spec.get("version", ""))
+        default_features = bool(spec.get("default-features", True))
+        raw_features = spec.get("features", [])
+        if not isinstance(raw_features, list):
+            raise Failure(f"{path}: dependency {package!r} features must be a list")
+        features = sorted(str(item) for item in raw_features)
+        if len(features) != len(set(features)):
+            raise Failure(f"{path}: dependency {package!r} has duplicate features")
+    else:
+        raise Failure(
+            f"{path}: dependency {package!r} must be a version string or inline table"
+        )
+    if not version.startswith("=") or len(version) <= 1:
+        raise Failure(f"{path}: dependency {package!r} must use an exact =version pin")
+    return {
+        "package": package,
+        "version": version,
+        "default_features": default_features,
+        "features": features,
+    }
+
+
+def manifest_binding(
+    root: Path,
+    profile: dict[str, Any],
+    toolchain: str,
+    target: str,
+) -> dict[str, Any]:
     path = root / profile["manifest"]
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     dependencies = document.get("dependencies", {})
-    if len(dependencies) != 1:
-        raise Failure(f"{path}: expected exactly one candidate dependency")
-    package, spec = next(iter(dependencies.items()))
-    if not isinstance(spec, dict):
-        raise Failure(f"{path}: candidate dependency must be an inline table")
-    exact_version = str(spec.get("version", ""))
-    if exact_version != f"={profile['version']}":
-        raise Failure(f"{path}: version drift: {exact_version!r}")
-    features = sorted(str(item) for item in spec.get("features", []))
+    if not isinstance(dependencies, dict) or not dependencies:
+        raise Failure(f"{path}: direct dependency table is missing or empty")
+    for table_name in ("dev-dependencies", "build-dependencies"):
+        table = document.get(table_name, {})
+        if table:
+            raise Failure(f"{path}: unbound {table_name} table is forbidden")
+    if document.get("target"):
+        raise Failure(f"{path}: unbound target-specific dependency tables are forbidden")
+
+    candidate_package = str(profile["candidate_package"])
+    support_dependencies = sorted(
+        str(item) for item in profile.get("support_dependencies", [])
+    )
+    if candidate_package in support_dependencies:
+        raise Failure(f"{path}: candidate dependency cannot also be a support dependency")
+    if len(support_dependencies) != len(set(support_dependencies)):
+        raise Failure(f"{path}: duplicate support dependency declaration")
+
+    expected_packages = {candidate_package, *support_dependencies}
+    actual_packages = set(dependencies)
+    if actual_packages != expected_packages:
+        missing = sorted(expected_packages - actual_packages)
+        unexpected = sorted(actual_packages - expected_packages)
+        raise Failure(
+            f"{path}: direct dependency drift: missing={missing!r} "
+            f"unexpected={unexpected!r}"
+        )
+
+    dependency_profile = {
+        package: _direct_dependency_binding(path, package, dependencies[package])
+        for package in sorted(actual_packages)
+    }
+    candidate = dependency_profile[candidate_package]
+    if candidate["version"] != f"={profile['version']}":
+        raise Failure(f"{path}: candidate version drift: {candidate['version']!r}")
+
     binding = {
         "profile_id": profile["profile_id"],
         "candidate_id": profile["candidate_id"],
-        "package": package,
+        "package": candidate_package,
         "version": profile["version"],
         "manifest_path": profile["manifest"],
         "manifest_sha256": file_sha256(path),
-        "default_features": bool(spec.get("default-features", True)),
-        "features": features,
+        "default_features": candidate["default_features"],
+        "features": candidate["features"],
+        "support_dependencies": support_dependencies,
+        "direct_dependencies": dependency_profile,
         "toolchain": toolchain,
         "target": target,
     }
