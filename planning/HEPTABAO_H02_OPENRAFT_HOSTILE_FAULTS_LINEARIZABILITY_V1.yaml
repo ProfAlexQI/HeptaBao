@@ -1,22 +1,23 @@
 schema: heptabao.h02-openraft-hostile-faults-linearizability.v1
 plan_id: HEPTABAO-PLAN-2026-08-28
-revision: '1.2'
-status: IMPLEMENTED_LOCALLY_VALIDATED_REMOTE_UNEXECUTED_NOT_QUALIFIED
+revision: '1.3'
+status: IMPLEMENTED_PENDING_EXACT_HEAD_REMOTE_EXECUTION_NOT_QUALIFIED
 qualification: false
 selection_effect: NONE
 authority_effect: NONE
 
 stack:
-  parent_branch: codex/h02-openraft-inmemory-cluster-v1
-  parent_pr: 22
-  active_branch: codex/h02-openraft-hostile-faults-linearizability-v1
-  merge_policy: stacked draft; do not retarget or merge to main before the parent stack and H00/H01/H02 gates are dispositioned
+  parent_branch: codex/h02-os-durable-clock-supplychain-v1
+  parent_pr: 24
+  active_branch: codex/h02-durable-multiprocess-closure-v2
+  merge_policy: stacked draft; do not retarget or merge to main before parent governance, H00/H01/H02 evidence gates and independent approvals are dispositioned
 
 objective:
-  - convert hostile committed-snapshot conflict from a documented blocker into an isolated executable candidate test
+  - execute hostile committed-snapshot conflict in an isolated candidate child process
   - export a real OpenRaft ReadIndex operation history
   - check the history with an independent fail-closed single-register linearizability checker
   - preserve all failed, blocked, malformed and process-fatal outcomes before the final CI gate
+  - compose the result with separately implemented OS, durable-storage, disk-fault and clock-fault layers
   - create no candidate selection, production, compatibility, migration or release authority
 
 candidate:
@@ -25,8 +26,9 @@ candidate:
   version: 0.10.0-alpha.33
   release_commit: 2be3f99a23c0ec734aefc18d1c8e756b35567c35
   package_sha256: ba6e911fb3c97faeecb8324b803a37d77a7387d02ee7019fc2a9777569e7f7b8
+  effective_rust_floor: '1.88.0'
   profile_id: HB-H02-FAULT-LAB-OPENRAFT-0_10_0_ALPHA_33
-  state: IDENTIFIED
+  state: IDENTIFIED_NOT_SELECTED
 
 supporting_packages:
   - package: openraft-memstore
@@ -39,9 +41,16 @@ supporting_packages:
     package_sha256: 202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed
     enabled_features: [macros, process, rt-multi-thread, sync, time]
     production_selection_effect: NONE
+  - package: validit
+    version: 0.2.5
+    source: https://github.com/drmingdrmer/validit.git
+    revision: 7016fa5e072a86092928144b3a3040381e6964e9
+    binding_kind: EXACT_SOURCE_OVERRIDE
+    production_selection_effect: NONE
 
 implementation:
   manifest: probes/h02/openraft-tokio/Cargo.toml
+  committed_lock: probes/h02/openraft-tokio/Cargo.lock
   binary: heptabao-h02-openraft-fault-lab
   entrypoint: probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
   cluster_support: probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs
@@ -54,6 +63,7 @@ implementation:
 
 hostile_snapshot_case:
   case_id: raft-hostile-stale-committed-snapshot-isolated
+  implementation_state: IMPLEMENTED_UNQUALIFIED
   process_model:
     parent:
       - resolves the exact current executable
@@ -87,6 +97,7 @@ hostile_snapshot_case:
 
 linearizability_case:
   case_id: raft-readindex-single-register-external-check
+  implementation_state: IMPLEMENTED_UNQUALIFIED
   history_schema: schemas/heptabao_h02_linearizability_history_v1.schema.json
   result_schema: schemas/heptabao_h02_linearizability_result_v1.schema.json
   real_candidate_scope:
@@ -125,7 +136,7 @@ evidence:
       - linearizability result is EXECUTED_PASS
       - all result and exit-code bindings agree
       - source tree is clean
-      - manifest and Cargo.lock are non-empty and digested
+      - manifest and committed Cargo.lock are non-empty and digested
     EXECUTED_FAIL:
       - hostile snapshot is accepted
       - or the executed history is non-linearizable
@@ -136,28 +147,30 @@ evidence:
     selection_effect: NONE
     promotion_effect: BLOCK_PENDING_DURABLE_STORE_OS_DISK_CLOCK_AND_INDEPENDENT_REPRODUCTION
     authority_effect: NONE
+  promotion_effect_note: legacy v1 identifier remains fail-closed even though related technical layers are now implemented; exact-head execution and external review remain absent
 
 execution_matrix:
   workflow: .github/workflows/h02-openraft-fault-lab.yml
   target: x86_64-unknown-linux-gnu
-  toolchains: ['1.85.0', '1.98.0']
+  toolchains: ['1.88.0', '1.98.0']
   seeds:
     - '0x5eed20260828cafe'
     - '0x8badf00d12345678'
     - '0xd15ea5e5cafef00d'
   entries: 6
-  fail_fast: false
+  scheduling: SERIAL_ON_ONE_RUNNER
   artifact_policy:
-    - preserve Cargo.toml and generated Cargo.lock
+    - preserve Cargo.toml and committed Cargo.lock
     - preserve cargo test output
     - preserve hostile child/parent stdout and stderr
     - preserve raw operation history
     - preserve external checker result
     - preserve combined evidence before the final pass/fail gate
-  remote_executions: 0
+  exact_head_remote_executions: 0
+  historical_executable_runner_observed: true
 
-local_validation:
-  status: LOCAL_UNATTESTED_PYTHON_PASS_RUST_UNEXECUTED_NOT_QUALIFICATION
+historical_local_validation:
+  status: LOCAL_UNATTESTED_PYTHON_PASS_NOT_QUALIFICATION
   json_schemas: PASS
   linearizability_checker_tests:
     passed: 13
@@ -171,44 +184,52 @@ local_validation:
     passed: 27
     failed: 0
     unknown: 0
-  python_syntax: PASS
-  rust_compile: UNEXECUTED_RUST_TOOLCHAIN_NOT_PRESENT_IN_LOCAL_CONTAINER
-  hostile_snapshot_run: UNEXECUTED_RUST_TOOLCHAIN_NOT_PRESENT_IN_LOCAL_CONTAINER
-  real_history_generation: UNEXECUTED_RUST_TOOLCHAIN_NOT_PRESENT_IN_LOCAL_CONTAINER
   qualification_effect: NONE
   authority_effect: NONE
 
+related_implemented_closure_layers:
+  Linux_SIGSTOP_process_suspend: true
+  storage_fault_seam_disk_stall_torn_tail_unsynced_loss_corruption: true
+  application_wall_clock_projection_and_monotonic_bounds: true
+  integrated_RaftLogStorage_and_RaftStateMachine: true
+  logical_full_cluster_disk_reopen: true
+  bounded_effective_MSRV: true
+
 promotion_blockers:
-  - no executable attested runner result for this branch
-  - no second independent attested reproduction
-  - openraft-memstore is test-only and no production durable log/state-machine/snapshot store is selected
-  - operating-system process suspension is not executed
-  - disk stall, torn-write, fsync loss and storage corruption are not executed
-  - monotonic and wall-clock fault injection is not executed
-  - package, locked graph, SBOM, advisory, license, unsafe, native, build-script and effective-MSRV closure is incomplete
-  - independent distributed-systems, platform, storage and security approvals are absent
+  - no current exact-head six-entry hostile-fault and linearizability pass artifact
+  - no second independently operated and attested reproduction
+  - no production durable storage candidate is selected
+  - separate-process per-node restart and process suspension are absent
+  - real kernel power-cut and filesystem crash-consistency evidence are absent
+  - per-node time-namespace or kernel-clock skew evidence is absent
+  - current exact-head package, locked graph, SBOM, advisory, license, unsafe, native and build-script closure is absent
+  - independent distributed-systems, platform, storage, security and crypto approvals are absent
+  - independent license/legal disposition is absent
   - no signed bounded prototype-selection receipt exists
+  - H00 is not qualified and formal authority is absent
 
 next_execution_queue:
-  - acquire an executable attested runner and execute all six exact matrix entries
+  - execute all six exact matrix entries on the current stacked PR head
   - fix every actual Rust compile, trait, API, runtime, panic-classification and checker integration failure while retaining failed artifacts
   - enrich evidence with numeric runner and job identity through a trusted post-run path
-  - reproduce the exact commit, tree, lock graph and evidence in a second independent attested environment
-  - add an OS-level SIGSTOP or equivalent process-suspension harness
-  - qualify durable storage candidates with disk-stall, torn-write, corruption and restart testing
-  - add clock-jump, monotonic-stall and lease-safety fault testing
-  - close package/SBOM/advisory/license/unsafe/native/build-script/effective-MSRV evidence
-  - obtain independent distributed-systems, storage, platform and security approvals
-  - keep OpenRaft IDENTIFIED until a separate signed bounded prototype-selection receipt exists
+  - reproduce the exact commit, tree, lock graph and evidence in a separately operated attested environment
+  - add separate-process per-node restart and persisted node directories
+  - add kernel power-cut or equivalent filesystem crash-consistency testing
+  - add per-node time-namespace or kernel-clock skew testing
+  - close package/SBOM/advisory/license/unsafe/native/build-script evidence
+  - obtain independent specialist approvals and H00 qualification
+  - keep OpenRaft IDENTIFIED_NOT_SELECTED until a separate signed bounded prototype-selection receipt exists
 
 invariants:
   - all candidate and fault-lab types remain under probes/h02
   - the HeptaBao core workspace does not depend on OpenRaft or openraft-memstore
+  - the exact validit source override is separately bound from direct dependencies
   - a successful fault-lab matrix is evidence only and cannot select a candidate
   - process fatality after injection is never represented as an availability or production pass
   - a missing phase marker prevents a crash from being interpreted as hostile-input rejection
   - every malformed, missing, timed-out, contradictory or replay-unbound input fails closed
   - the in-memory memstore never creates a durability claim
+  - implemented related technical layers are not represented as exact-head passes
   - qualification remains false and every authority effect remains NONE
 
 authority_flags:
