@@ -23,9 +23,17 @@ name = "heptabao-h02-openraft-blocker-closure-lab"
 path = "src/bin/blocker_closure_lab.rs"
 
 [dependencies]
+# OpenRaft alpha packages use pre-release-compatible requirements internally.
+# Pin the complete published family to the audited alpha.33 release so Cargo
+# cannot silently mix alpha.34 runtime/macros into an alpha.33 candidate.
 openraft = { version = "=0.10.0-alpha.33", default-features = false, features = ["serde", "tokio-rt", "type-alias"] }
 openraft-memstore = { version = "=0.10.0-alpha.33" }
-validit = "=0.2.6"
+openraft-rt = "=0.10.0-alpha.33"
+openraft-rt-tokio = "=0.10.0-alpha.33"
+openraft-macros = "=0.10.0-alpha.33"
+# Match the upstream alpha.33 workspace dependency instead of the newer 0.2.6
+# release, whose declared MSRV is above the candidate's Rust 1.85 profile.
+validit = "=0.2.5"
 serde_json = "=1.0.145"
 tokio = { version = "=1.53.1", default-features = false, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 
