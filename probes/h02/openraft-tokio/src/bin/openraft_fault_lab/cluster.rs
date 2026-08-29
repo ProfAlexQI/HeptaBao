@@ -156,16 +156,27 @@ fn operation_delay(seed: u64, salt: u32) -> Duration {
     Duration::from_millis(seed.rotate_left(salt) % 11)
 }
 
-async fn record_write(
+struct WriteOperation {
     operation_id: &'static str,
     actor: &'static str,
     serial: u64,
     value: String,
+    delay: Duration,
+}
+
+async fn record_write(
+    operation: WriteOperation,
     raft: MemRaft,
     barrier: Arc<Barrier>,
     clock: Arc<AtomicU64>,
-    delay: Duration,
 ) -> Value {
+    let WriteOperation {
+        operation_id,
+        actor,
+        serial,
+        value,
+        delay,
+    } = operation;
     let invoke = clock.fetch_add(1, Ordering::SeqCst) + 1;
     barrier.wait().await;
     sleep(delay).await;
@@ -248,24 +259,28 @@ pub async fn execute_linearizability_history(seed: u64) -> AnyResult<Value> {
     let value_b = format!("value-b-{seed:016x}");
 
     let write_a = tokio::spawn(record_write(
-        "write-a",
-        "writer-a",
-        100_001,
-        value_a,
+        WriteOperation {
+            operation_id: "write-a",
+            actor: "writer-a",
+            serial: 100_001,
+            value: value_a,
+            delay: operation_delay(seed, 7),
+        },
         cluster.nodes[&1].raft.clone(),
         barrier.clone(),
         clock.clone(),
-        operation_delay(seed, 7),
     ));
     let write_b = tokio::spawn(record_write(
-        "write-b",
-        "writer-b",
-        100_002,
-        value_b,
+        WriteOperation {
+            operation_id: "write-b",
+            actor: "writer-b",
+            serial: 100_002,
+            value: value_b,
+            delay: operation_delay(seed, 19),
+        },
         cluster.nodes[&1].raft.clone(),
         barrier.clone(),
         clock.clone(),
-        operation_delay(seed, 19),
     ));
     let read_overlap = tokio::spawn(record_read(
         "read-overlap",
@@ -329,7 +344,7 @@ pub async fn execute_hostile_snapshot_child(seed: u64) -> AnyResult<Value> {
     let stale_log_id = cluster
         .write_log_id(200_001, format!("stale-base-{seed:016x}"))
         .await?;
-    let mut latest_log_id = stale_log_id.clone();
+    let mut latest_log_id = stale_log_id;
     for offset in 0..6_u64 {
         latest_log_id = cluster
             .write_log_id(200_100 + offset, format!("latest-{offset}-{seed:016x}"))
@@ -343,21 +358,19 @@ pub async fn execute_hostile_snapshot_child(seed: u64) -> AnyResult<Value> {
         .get_snapshot()
         .await?
         .ok_or("leader returned no snapshot after snapshot trigger")?;
-    let original_snapshot_log_id = snapshot.meta.last_log_id.clone();
-    snapshot.meta.last_log_id = Some(stale_log_id.clone());
+    let original_snapshot_log_id = snapshot.meta.last_log_id;
+    snapshot.meta.last_log_id = Some(stale_log_id);
 
     let leader_vote = cluster.nodes[&1]
         .raft
         .metrics()
         .borrow_watched()
-        .vote
-        .clone();
+        .vote;
     let target_committed = cluster.nodes[&2]
         .raft
         .metrics()
         .borrow_watched()
-        .local_committed
-        .clone();
+        .local_committed;
 
     println!(
         "{}",
