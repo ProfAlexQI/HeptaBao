@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: apply-v1-2-1-explicit-generation-lifecycle-macos
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-verify-commit:
