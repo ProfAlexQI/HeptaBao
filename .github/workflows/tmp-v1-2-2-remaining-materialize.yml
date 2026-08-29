@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   materialize:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 15
     steps:
       - name: Checkout exact transition commit
@@ -69,6 +69,13 @@ jobs:
               "probes/h02/openraft-tokio/src/main.rs",
               "scripts/validate_h02_blocker_closure_v1.py",
               "scripts/validate_h02_openraft_fault_lab_v1.py",
+              ".github/workflows/tmp-v1-2-2-remaining-materialize.yml",
+              ".github/workflows/tmp-v1-2-2-remaining.trigger",
+              "bootstrap/v122-remchunk-00",
+              "bootstrap/v122-remchunk-01",
+              "bootstrap/v122-remchunk-02",
+              "bootstrap/v122-remchunk-03",
+              "bootstrap/v122-remchunk-04",
           }
           actual = set(subprocess.run(["git", "diff", "--cached", "--name-only"], check=True, capture_output=True, text=True).stdout.splitlines())
           assert actual == expected, (actual, expected)
