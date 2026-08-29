@@ -25,6 +25,7 @@ path = "src/bin/blocker_closure_lab.rs"
 [dependencies]
 openraft = { version = "=0.10.0-alpha.33", default-features = false, features = ["serde", "tokio-rt", "type-alias"] }
 openraft-memstore = { version = "=0.10.0-alpha.33" }
+validit = "=0.2.5"
 serde_json = "=1.0.145"
 tokio = { version = "=1.53.1", default-features = false, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 
