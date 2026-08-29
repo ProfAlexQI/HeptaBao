@@ -52,6 +52,11 @@ jobs:
           surface_pattern = re.compile(
               rb"(?<![A-Z0-9._-])" + re.escape(surface_old) + rb"(?![A-Z0-9._-])"
           )
+          config_old = ("HB-CONFIG-ITEM-" + "UI").encode("utf-8")
+          config_new = b"HB-CONFIG-ITEM-UI-ROOT"
+          config_pattern = re.compile(
+              rb"(?<![A-Z0-9._-])" + re.escape(config_old) + rb"(?![A-Z0-9._-])"
+          )
 
           tracked = [
               Path(item.decode("utf-8"))
@@ -61,6 +66,7 @@ jobs:
           changed: list[str] = []
           owner_occurrences = 0
           surface_occurrences = 0
+          config_occurrences = 0
 
           for path in tracked:
               data = path.read_bytes()
@@ -68,12 +74,15 @@ jobs:
               repaired = data.replace(owner_old, owner_new)
               surface_count = len(surface_pattern.findall(repaired))
               repaired = surface_pattern.sub(surface_new, repaired)
+              config_count = len(config_pattern.findall(repaired))
+              repaired = config_pattern.sub(config_new, repaired)
               if repaired == data:
                   continue
               path.write_bytes(repaired)
               changed.append(path.as_posix())
               owner_occurrences += owner_count
               surface_occurrences += surface_count
+              config_occurrences += config_count
 
           required_owner_paths = {
               ".github/CODEOWNERS",
@@ -101,6 +110,14 @@ jobs:
               raise SystemExit(
                   f"expected one Oracle surface replacement, observed {surface_occurrences}"
               )
+
+          required_config_path = "oracle/inventory/openbao-v2.6.2/config-core-seed.yaml"
+          if required_config_path not in changed:
+              raise SystemExit(
+                  f"expected invalid Oracle config identity was absent: {required_config_path}"
+              )
+          if config_occurrences < 1:
+              raise SystemExit("expected at least one Oracle config identity replacement")
 
           endpoint_path = Path("oracle/inventory/openbao-v2.6.2/endpoint-seed.yaml")
           endpoint_text = endpoint_path.read_text(encoding="utf-8")
@@ -207,11 +224,21 @@ jobs:
                   f"invalid Oracle surface identity remains in tracked files: {remaining_surface}"
               )
 
+          remaining_config = [
+              path.as_posix()
+              for path in tracked
+              if config_pattern.search(path.read_bytes()) is not None
+          ]
+          if remaining_config:
+              raise SystemExit(
+                  f"invalid Oracle config identity remains in tracked files: {remaining_config}"
+              )
+
           print(
               "applied deterministic source repairs: "
               f"files={len(set(changed))} owner_occurrences={owner_occurrences} "
-              f"surface_occurrences={surface_occurrences} endpoint_audit_repairs=1 "
-              "oracle_validator_repairs=4 reference_hash_bindings=3"
+              f"surface_occurrences={surface_occurrences} config_occurrences={config_occurrences} "
+              "endpoint_audit_repairs=1 oracle_validator_repairs=4 reference_hash_bindings=3"
           )
           for path in sorted(set(changed)):
               print(path)
@@ -253,7 +280,8 @@ jobs:
           run_check python scripts/validate_dependency_bakeoff_v1.py
           run_check python scripts/validate_dependency_research_captures_v1.py
           run_check python scripts/h02_dependency_probe_v1.py validate-matrix
-          run_check python -m unittest discover -s tests -p 'test_*.py' -v
+          run_check python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          run_check python -m unittest discover -s tests/platform -p 'test_*.py' -v
           if (( failures != 0 )); then
             echo "validation failures: ${failures}" >&2
             exit 1
