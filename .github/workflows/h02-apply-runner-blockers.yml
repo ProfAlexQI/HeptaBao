@@ -1,6 +1,11 @@
 name: h02-apply-runner-blockers
 
 on:
+  pull_request:
+    branches:
+      - "codex/h02-os-durable-clock-supplychain-v1"
+    paths:
+      - ".github/workflows/h02-apply-runner-blockers.yml"
   push:
     branches:
       - "codex/h02-final-gap-closure-v1"
@@ -17,6 +22,7 @@ concurrency:
 
 jobs:
   apply-and-verify:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -160,14 +166,7 @@ jobs:
             done
           done
 
-      - name: Remove one-shot maintenance files
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm scripts/apply_h02_runner_blocker_fixes.py
-          rm .github/workflows/h02-apply-runner-blockers.yml
-
-      - name: Commit verified blocker-closure batch
+      - name: Commit verified blocker-closure source batch
         shell: bash
         run: |
           set -euo pipefail
