@@ -11,11 +11,11 @@ permissions:
 
 concurrency:
   group: apply-repository-identity-closure-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   replace-and-verify:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - name: Checkout branch commit with write credentials
