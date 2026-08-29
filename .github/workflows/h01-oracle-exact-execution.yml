@@ -1,0 +1,66 @@
+name: h01-oracle-exact-execution
+
+on:
+  push:
+    branches: ["codex/h01-oracle-exact-execution-v1"]
+    paths:
+      - ".github/workflows/h01-oracle-exact-execution.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-exact:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact technical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cbaaadbdf9d7dbcb773625d62757db1368d07e64
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "cbaaadbdf9d7dbcb773625d62757db1368d07e64"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Run complete Oracle foundation validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_provenance_v1.py
+          python scripts/validate_oracle_foundation_v1.py
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python - <<'PY'
+          import json
+          status = json.load(open('qualifications/H01/H01-IMPLEMENTATION-STATUS.json', encoding='utf-8'))
+          assert status['qualification']['status'] == 'NOT_QUALIFIED'
+          assert not any(status['authority_flags'].values())
+          assert status['authority_effect'] == 'NONE'
+          assert status['capture_evidence'] == {
+              'raw_restricted_fixtures': 0,
+              'black_box_sanitized_fixtures': 0,
+              'synthetic_contract_fixtures': 1,
+              'signed_provenance_transfers': 0,
+              'reviewed_normalization_rules': 0,
+              'qualified_fixtures': 0,
+          }
+          print('H01 exact source passed: synthetic=1 real-capture=0 qualified=0 authority=NONE')
+          PY
