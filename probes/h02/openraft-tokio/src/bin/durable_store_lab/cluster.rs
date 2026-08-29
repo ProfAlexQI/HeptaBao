@@ -56,9 +56,7 @@ impl DurableCluster {
         self.root.join(format!("node-{id}"))
     }
 
-    async fn open_stores(
-        root: PathBuf,
-    ) -> AnyResult<(DurableLogStore, DurableStateMachine)> {
+    async fn open_stores(root: PathBuf) -> AnyResult<(DurableLogStore, DurableStateMachine)> {
         let stores = spawn_blocking(move || {
             let log_store = DurableLogStore::open(root.join("log"))?;
             let state_machine = DurableStateMachine::open(root.join("state-machine"))?;
