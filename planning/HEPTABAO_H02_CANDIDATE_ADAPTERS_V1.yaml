@@ -22,6 +22,7 @@ rules:
   - Candidate traces may differ from reference traces; comparison is by named invariant outcome and explicit adapter scope.
   - FULL_REFERENCE_CASE_SET means only the six H02 reference cases were exercised, not production qualification.
   - API_SEAM_AND_FAILURE_MODEL_PARTIAL can never support candidate promotion by itself.
+  - OpenRaft alpha.33 candidate execution starts at the proven effective Rust 1.88 floor; Rust 1.85 through 1.87 remain explicit expected-failure boundary evidence rather than adapter variants.
   - A Rust panic, non-zero process exit, missing output or malformed output becomes BLOCKED/FAIL evidence, never missing evidence.
   - Candidate evidence, comparison evidence and successful CI all retain qualification=false, selection_effect=NONE and authority_effect=NONE.
 
@@ -139,7 +140,7 @@ adapters:
     source: probes/h02/openraft-tokio/src/main.rs
     domain: RAFT
     adapter_scope: API_SEAM_AND_FAILURE_MODEL_PARTIAL
-    toolchains: ['1.85.0', '1.98.0']
+    toolchains: ['1.88.0', '1.98.0']
     cases:
       - raft-deterministic-apply-and-restart
       - raft-committed-snapshot-conflict-rejected
@@ -152,11 +153,11 @@ adapters:
       - SnapshotPolicy validation
       - HeptaBao adapter guards for deterministic apply, snapshot conflict, joint quorum, partition and quorum loss
     explicit_limitations:
-      - no OpenRaft Raft instance is started
-      - no network factory is implemented
-      - no log store or state machine store is implemented
-      - no OpenRaft membership transition is executed
-      - no linearizability or snapshot-install claim is permitted
+      - no OpenRaft Raft instance is started by this narrow candidate-adapter binary
+      - no network factory is implemented by this narrow candidate-adapter binary
+      - no log store or state machine store is implemented by this narrow candidate-adapter binary
+      - no OpenRaft membership transition is executed by this narrow candidate-adapter binary
+      - no linearizability or snapshot-install claim is permitted from this adapter alone
     promotion_blocked_until:
       - full in-memory network and storage adapter executes the same seeded cases
       - deterministic FSM and snapshot installation traces are independently reproduced
