@@ -1,0 +1,184 @@
+name: land-v1-2-nonworkflow-tree
+
+on:
+  push:
+    branches: ["codex/plan-v1.2-deepened-blocker-closure-v1"]
+    paths:
+      - ".github/workflows/land-v1.2-nonworkflow-tree.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: land-v1-2-nonworkflow-tree
+  cancel-in-progress: false
+
+jobs:
+  validate-land-and-export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact transport head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact source and transport-only ancestry
+        shell: bash
+        env:
+          BASIS_SHA: f1d1a92783ef5fa8d69f12e1f8ccd7b9277422b3
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$BASIS_SHA" HEAD
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install exact Python validation environment
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install plan dependencies
+        run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Verify and materialize payload
+        shell: bash
+        env:
+          PAYLOAD_SHA256: 27785a193b8b354e87c4736458b2a5763575946c98b4cfe438ac79122a8042b1
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/heptabao-v1.2-payload.tar.gz" "$PAYLOAD_SHA256" <<'PY'
+          import base64
+          import hashlib
+          import pathlib
+          import sys
+          import tarfile
+
+          output = pathlib.Path(sys.argv[1])
+          expected = sys.argv[2]
+          parts = sorted(pathlib.Path('.github/bootstrap-payload').glob('heptabao-part-*'))
+          assert len(parts) == 14, len(parts)
+          encoded = b''.join(part.read_bytes() for part in parts)
+          payload_bytes = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(payload_bytes).hexdigest()
+          assert actual == expected, (actual, expected)
+          output.write_bytes(payload_bytes)
+          with tarfile.open(output, 'r:gz') as payload:
+              members = payload.getmembers()
+              assert len(members) == 43, len(members)
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  assert not path.is_absolute(), member.name
+                  assert '..' not in path.parts, member.name
+                  assert not member.issym() and not member.islnk(), member.name
+              payload.extractall(path='.', filter='data')
+          print(f'materialized members={len(members)} sha256={actual}')
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          path.write_text('\n'.join(line.rstrip() for line in lines) + '\n', encoding='utf-8')
+          PY
+          rm -rf .github/bootstrap-payload
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+
+      - name: Validate all plan, Oracle and platform semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_plan_v2.py
+          python3 scripts/validate_plan_v2_extensions.py
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_h01_h02_next_v1.py
+          python3 scripts/validate_h02_candidate_adapters_v1.py
+          python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python3 scripts/validate_h02_openraft_fault_lab_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python3 -m compileall -q scripts tests
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          workflows = sorted(Path('.github/workflows').glob('*.yml'))
+          assert workflows
+          for workflow in workflows:
+              assert isinstance(yaml.safe_load(workflow.read_text(encoding='utf-8')), dict), workflow
+          print(f'workflow YAML parse passed: {len(workflows)} files')
+          PY
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+          git diff --check
+
+      - name: Enforce fail-closed final payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/workflows/plan-integrity-v4.yml
+          test -f docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md
+          test -f planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml
+          test -f planning/HEPTABAO_BLOCKER_REGISTER_V1.yaml
+          test -f planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml
+          test -f probes/h02/openraft-tokio/Cargo.lock
+          ! grep -RInE 'contents:[[:space:]]*write|git push|persist-credentials:[[:space:]]*true' .github/workflows/plan-integrity-v4.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          flags = yaml.safe_load(Path('planning/AUTHORITY_FLAGS_V2.yaml').read_text(encoding='utf-8'))
+          assert isinstance(flags, dict)
+          assert all(value is False for value in flags.values() if isinstance(value, bool))
+          print('authority boolean sentinels remain false')
+          PY
+
+      - name: Export tested workflow delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/v1.2-tested-workflows"
+          mkdir -p "$out"
+          cp .github/workflows/plan-integrity-v4.yml "$out/plan-integrity-v4.yml"
+          cat > "$out/delete-workflows.txt" <<'EOF'
+          .github/workflows/apply-h02-candidate-binding-contract.yml
+          .github/workflows/apply-h02-deterministic-contract-closure.yml
+          .github/workflows/apply-h02-validit-lock-binding.yml
+          .github/workflows/bootstrap-v1.2-execution-contracts-gap-closure.yml
+          .github/workflows/land-v1.2-nonworkflow-tree.yml
+          .github/workflows/materialize-plan-v1-1.yml
+          EOF
+          sha256sum "$out/plan-integrity-v4.yml" > "$out/plan-integrity-v4.sha256"
+
+      - name: Restore workflow control plane and land tested non-workflow tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          branch="$GITHUB_REF_NAME"
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+          git clean -fd -- .github/workflows
+          git add -A
+          test -z "$(git diff --cached --name-only | grep '^\.github/workflows/' || true)"
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs(plan): land tested V1.2 execution contracts and source gaps"
+          git push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > "$RUNNER_TEMP/v1.2-tested-workflows/non-workflow-commit.txt"
+
+      - name: Upload tested workflow delta
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1-2-tested-workflows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.2-tested-workflows/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 9
