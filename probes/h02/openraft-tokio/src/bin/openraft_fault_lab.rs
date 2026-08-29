@@ -196,20 +196,22 @@ async fn main() {
                 std::process::exit(2);
             }
         }
-        "hostile-snapshot-child" => match cluster::execute_hostile_snapshot_child_guarded(seed).await {
-            Ok(result) => print_json(&result),
-            Err(error) => {
-                print_json(&json!({
-                    "kind": "hostile_snapshot_child_result",
-                    "outcome": "SETUP_OR_EXECUTION_BLOCKED",
-                    "detail": error.to_string(),
-                    "qualification": false,
-                    "selection_effect": "NONE",
-                    "authority_effect": "NONE",
-                }));
-                std::process::exit(2);
+        "hostile-snapshot-child" => {
+            match cluster::execute_hostile_snapshot_child_guarded(seed).await {
+                Ok(result) => print_json(&result),
+                Err(error) => {
+                    print_json(&json!({
+                        "kind": "hostile_snapshot_child_result",
+                        "outcome": "SETUP_OR_EXECUTION_BLOCKED",
+                        "detail": error.to_string(),
+                        "qualification": false,
+                        "selection_effect": "NONE",
+                        "authority_effect": "NONE",
+                    }));
+                    std::process::exit(2);
+                }
             }
-        },
+        }
         "linearizability-history" => match cluster::execute_linearizability_history(seed).await {
             Ok(history) => print_json(&history),
             Err(error) => {
