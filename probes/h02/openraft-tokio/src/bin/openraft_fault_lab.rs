@@ -109,7 +109,9 @@ async fn execute_hostile_parent(seed: u64) -> Value {
     let child_outcome = values
         .iter()
         .rev()
-        .find(|value| value.get("kind").and_then(Value::as_str) == Some("hostile_snapshot_child_result"))
+        .find(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("hostile_snapshot_child_result")
+        })
         .and_then(|value| value.get("outcome"))
         .and_then(Value::as_str);
 

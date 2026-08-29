@@ -139,7 +139,9 @@ impl DurableCluster {
         }
         let leader = self.consensus_leader().await?;
         for node in self.nodes.values() {
-            node.raft.wait_for_recovery(Some(Duration::from_secs(12))).await?;
+            node.raft
+                .wait_for_recovery(Some(Duration::from_secs(12)))
+                .await?;
         }
         Ok(leader)
     }
@@ -217,7 +219,11 @@ impl DurableCluster {
             .await?;
         let snapshot_path = self.nodes[&leader].state_machine.snapshot_path();
         if !snapshot_path.is_file() || fs::metadata(snapshot_path)?.len() == 0 {
-            return Err(format!("snapshot was not durably published: {}", snapshot_path.display()).into());
+            return Err(format!(
+                "snapshot was not durably published: {}",
+                snapshot_path.display()
+            )
+            .into());
         }
         Ok(())
     }
@@ -242,7 +248,10 @@ impl DurableCluster {
     pub fn artifact_paths(&self) -> BTreeMap<String, PathBuf> {
         let mut result = BTreeMap::new();
         for (id, node) in &self.nodes {
-            result.insert(format!("node-{id}-log"), node.log_store.state_path().to_path_buf());
+            result.insert(
+                format!("node-{id}-log"),
+                node.log_store.state_path().to_path_buf(),
+            );
             result.insert(
                 format!("node-{id}-state"),
                 node.state_machine.state_path().to_path_buf(),

@@ -56,7 +56,10 @@ fn emit_case(case_id: &str, pass: bool, assertions: u64, detail: &str) {
 }
 
 fn majority(voters: &[u64], reachable: &[u64]) -> bool {
-    let present = voters.iter().filter(|node| reachable.contains(node)).count();
+    let present = voters
+        .iter()
+        .filter(|node| reachable.contains(node))
+        .count();
     present >= voters.len() / 2 + 1
 }
 
@@ -76,7 +79,11 @@ fn main() {
         "raft-deterministic-apply-and-restart",
         config_valid && order == replay,
         2,
-        if config_valid && order == replay { "openraft-config-valid-seeded-apply-order-replays" } else { "config-or-replay-failed" },
+        if config_valid && order == replay {
+            "openraft-config-valid-seeded-apply-order-replays"
+        } else {
+            "config-or-replay-failed"
+        },
     );
 
     let snapshot_config = Config {
@@ -92,7 +99,11 @@ fn main() {
         "raft-committed-snapshot-conflict-rejected",
         snapshot_config_valid && conflict_rejected,
         2,
-        if snapshot_config_valid && conflict_rejected { "openraft-snapshot-policy-valid-adapter-conflict-guard-rejected" } else { "snapshot-guard-failed" },
+        if snapshot_config_valid && conflict_rejected {
+            "openraft-snapshot-policy-valid-adapter-conflict-guard-rejected"
+        } else {
+            "snapshot-guard-failed"
+        },
     );
 
     let old_voters = vec![1_u64, 2, 3];
@@ -104,7 +115,11 @@ fn main() {
         "raft-joint-membership-single-writer",
         joint_quorum && active_writers == 1,
         2,
-        if joint_quorum && active_writers == 1 { "openraft-config-seam-joint-majorities-one-writer" } else { "joint-membership-writer-violation" },
+        if joint_quorum && active_writers == 1 {
+            "openraft-config-seam-joint-majorities-one-writer"
+        } else {
+            "joint-membership-writer-violation"
+        },
     );
 
     let config = Config::default();
@@ -119,17 +134,29 @@ fn main() {
         "raft-process-pause-plus-partition",
         timing_valid && writers <= 1,
         2,
-        if timing_valid && writers <= 1 { "openraft-timing-valid-partition-model-at-most-one-writer" } else { "partition-produced-multiple-writers" },
+        if timing_valid && writers <= 1 {
+            "openraft-timing-valid-partition-model-at-most-one-writer"
+        } else {
+            "partition-produced-multiple-writers"
+        },
     );
 
     let no_quorum = !majority(&old_voters, &[1_u64]);
     let committed_before = 6_u64;
-    let committed_after = if no_quorum { committed_before } else { committed_before + 1 };
+    let committed_after = if no_quorum {
+        committed_before
+    } else {
+        committed_before + 1
+    };
     emit_case(
         "raft-quorum-loss-fail-closed",
         no_quorum && committed_after == committed_before,
         2,
-        if no_quorum && committed_after == committed_before { "openraft-config-seam-no-quorum-no-commit-advance" } else { "quorum-loss-advanced-state" },
+        if no_quorum && committed_after == committed_before {
+            "openraft-config-seam-no-quorum-no-commit-advance"
+        } else {
+            "quorum-loss-advanced-state"
+        },
     );
 
     let mut chaos = vec![10_u64, 20, 30, 40, 50];
@@ -141,6 +168,10 @@ fn main() {
         "raft-incomplete-run-replay-diagnostics",
         interruption_index == replay_index && !chaos.is_empty(),
         2,
-        if interruption_index == replay_index { "seed-and-last-event-index-replayable" } else { "incomplete-run-diagnostics-mismatch" },
+        if interruption_index == replay_index {
+            "seed-and-last-event-index-replayable"
+        } else {
+            "incomplete-run-diagnostics-mismatch"
+        },
     );
 }

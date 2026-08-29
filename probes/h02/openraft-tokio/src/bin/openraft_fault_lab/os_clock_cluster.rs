@@ -137,9 +137,14 @@ impl Cluster {
 
 fn write_json_atomic(path: &Path, value: &Value) -> io::Result<()> {
     let temporary = path.with_extension("tmp");
-    let bytes = serde_json::to_vec(value).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     {
-        let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)?;
         file.write_all(&bytes)?;
         file.flush()?;
         file.sync_all()?;
@@ -172,7 +177,9 @@ pub async fn execute_os_suspend_child(seed: u64, work_dir: &Path) -> AnyResult<(
 
     for step in 1_u64..=100_000 {
         let value = format!("os-resume-{step}-{seed:016x}");
-        let (committed_index, observed) = cluster.write_and_read(300_000 + step, value.clone()).await?;
+        let (committed_index, observed) = cluster
+            .write_and_read(300_000 + step, value.clone())
+            .await?;
         let current_leader = cluster.nodes[&1].raft.current_leader().await;
         let progress = json!({
             "kind": "progress",

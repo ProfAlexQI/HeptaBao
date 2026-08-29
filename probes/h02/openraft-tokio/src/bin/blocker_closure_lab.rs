@@ -1,11 +1,11 @@
 #[path = "openraft_fault_lab/durable.rs"]
 mod durable;
+#[path = "inmemory_cluster/network.rs"]
+mod network;
 #[path = "openraft_fault_lab/os_clock.rs"]
 mod os_clock;
 #[path = "openraft_fault_lab/os_clock_cluster.rs"]
 mod os_clock_cluster;
-#[path = "inmemory_cluster/network.rs"]
-mod network;
 
 use std::path::PathBuf;
 
@@ -60,7 +60,11 @@ async fn main() {
         "os-suspend-child" => {
             let work_dir = PathBuf::from(argument("--work-dir", ""));
             if work_dir.as_os_str().is_empty() {
-                let value = blocked(seed, "OS_SUSPEND_CHILD", "--work-dir is required".to_owned());
+                let value = blocked(
+                    seed,
+                    "OS_SUSPEND_CHILD",
+                    "--work-dir is required".to_owned(),
+                );
                 println!("{value}");
                 std::process::exit(2);
             }

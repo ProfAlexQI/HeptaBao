@@ -42,7 +42,14 @@ impl DurableRouter {
     }
 
     pub async fn isolate(&self, id: u64) {
-        let ids = self.inner.nodes.read().await.keys().copied().collect::<Vec<_>>();
+        let ids = self
+            .inner
+            .nodes
+            .read()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         let mut blocked = self.inner.blocked.write().await;
         for other in ids {
             if other != id {

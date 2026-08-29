@@ -62,7 +62,8 @@ fn decode_envelope(magic: [u8; 8], bytes: &[u8]) -> io::Result<Vec<u8>> {
             .try_into()
             .map_err(|_| invalid("invalid durable envelope length field"))?,
     );
-    let length = usize::try_from(length).map_err(|_| invalid("durable envelope length overflow"))?;
+    let length =
+        usize::try_from(length).map_err(|_| invalid("durable envelope length overflow"))?;
     let expected = 8_usize
         .checked_add(8)
         .and_then(|value| value.checked_add(length))
@@ -125,7 +126,11 @@ fn atomic_write(path: &Path, magic: [u8; 8], payload: &[u8]) -> io::Result<()> {
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| invalid("durable file name is not valid UTF-8"))?;
-    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), sequence));
+    let temporary = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
     let encoded = encode_envelope(magic, payload)?;
 
     let result = (|| -> io::Result<()> {
@@ -296,7 +301,10 @@ impl RaftLogStorage<TypeConfig> for Arc<DurableLogStore> {
         self.persist(&state)
     }
 
-    async fn save_committed(&mut self, committed: Option<LogIdOf<TypeConfig>>) -> Result<(), io::Error> {
+    async fn save_committed(
+        &mut self,
+        committed: Option<LogIdOf<TypeConfig>>,
+    ) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
         state.committed = committed;
         self.persist(&state)
@@ -306,7 +314,11 @@ impl RaftLogStorage<TypeConfig> for Arc<DurableLogStore> {
         Ok(self.state.lock().await.committed)
     }
 
-    async fn append<I>(&mut self, entries: I, callback: IOFlushed<TypeConfig>) -> Result<(), io::Error>
+    async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: IOFlushed<TypeConfig>,
+    ) -> Result<(), io::Error>
     where
         I: IntoIterator<Item = EntryOf<TypeConfig>> + OptionalSend,
         I::IntoIter: OptionalSend,
@@ -341,7 +353,10 @@ impl RaftLogStorage<TypeConfig> for Arc<DurableLogStore> {
         }
     }
 
-    async fn truncate_after(&mut self, last_log_id: Option<LogIdOf<TypeConfig>>) -> Result<(), io::Error> {
+    async fn truncate_after(
+        &mut self,
+        last_log_id: Option<LogIdOf<TypeConfig>>,
+    ) -> Result<(), io::Error> {
         let start = match last_log_id {
             Some(log_id) => log_id
                 .index
@@ -350,7 +365,11 @@ impl RaftLogStorage<TypeConfig> for Arc<DurableLogStore> {
             None => 0,
         };
         let mut state = self.state.lock().await;
-        let remove = state.log.range(start..).map(|(index, _)| *index).collect::<Vec<_>>();
+        let remove = state
+            .log
+            .range(start..)
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>();
         for index in remove {
             state.log.remove(&index);
         }
@@ -396,7 +415,10 @@ impl DurableStateMachine {
         let state_path = root.join("state-machine.bin");
         let snapshot_path = root.join("snapshot.bin");
         let snapshot = if snapshot_path.is_file() {
-            Some(read_json::<PersistentSnapshot>(&snapshot_path, SNAPSHOT_MAGIC)?)
+            Some(read_json::<PersistentSnapshot>(
+                &snapshot_path,
+                SNAPSHOT_MAGIC,
+            )?)
         } else {
             None
         };
@@ -444,7 +466,9 @@ impl DurableStateMachine {
 impl RaftSnapshotBuilder<TypeConfig> for Arc<DurableStateMachine> {
     type SnapshotData = Cursor<Vec<u8>>;
 
-    async fn build_snapshot(&mut self) -> Result<SnapshotOf<TypeConfig, Self::SnapshotData>, io::Error> {
+    async fn build_snapshot(
+        &mut self,
+    ) -> Result<SnapshotOf<TypeConfig, Self::SnapshotData>, io::Error> {
         let state = self.state.lock().await.clone();
         let data = serde_json::to_vec(&state).map_err(|error| invalid(error.to_string()))?;
         let meta = SnapshotMetaOf::<TypeConfig> {
@@ -528,10 +552,10 @@ impl RaftStateMachine<TypeConfig> for Arc<DurableStateMachine> {
         if state.last_applied_log != meta.last_log_id {
             return Err(invalid("snapshot last-applied log does not match metadata"));
         }
-        let state_membership =
-            serde_json::to_vec(&state.last_membership).map_err(|error| invalid(error.to_string()))?;
-        let meta_membership =
-            serde_json::to_vec(&meta.last_membership).map_err(|error| invalid(error.to_string()))?;
+        let state_membership = serde_json::to_vec(&state.last_membership)
+            .map_err(|error| invalid(error.to_string()))?;
+        let meta_membership = serde_json::to_vec(&meta.last_membership)
+            .map_err(|error| invalid(error.to_string()))?;
         if state_membership != meta_membership {
             return Err(invalid("snapshot membership does not match metadata"));
         }
@@ -549,12 +573,15 @@ impl RaftStateMachine<TypeConfig> for Arc<DurableStateMachine> {
     async fn get_current_snapshot(
         &mut self,
     ) -> Result<Option<SnapshotOf<TypeConfig, Self::SnapshotData>>, io::Error> {
-        Ok(self.current_snapshot.lock().await.clone().map(|snapshot| {
-            SnapshotOf::<TypeConfig, Cursor<Vec<u8>>> {
+        Ok(self
+            .current_snapshot
+            .lock()
+            .await
+            .clone()
+            .map(|snapshot| SnapshotOf::<TypeConfig, Cursor<Vec<u8>>> {
                 meta: snapshot.meta,
                 snapshot: Cursor::new(snapshot.data),
-            }
-        }))
+            }))
     }
 }
 

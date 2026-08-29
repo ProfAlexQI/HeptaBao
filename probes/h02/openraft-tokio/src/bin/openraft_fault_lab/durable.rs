@@ -35,7 +35,8 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 fn encode_record(sequence: u64, value: &str) -> io::Result<Vec<u8>> {
     let payload = value.as_bytes();
-    let payload_len = u32::try_from(payload.len()).map_err(|_| invalid_data("payload exceeds u32 length"))?;
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| invalid_data("payload exceeds u32 length"))?;
     let mut record = Vec::with_capacity(HEADER_LEN + payload.len());
     record.extend_from_slice(MAGIC);
     record.extend_from_slice(&sequence.to_le_bytes());
@@ -47,7 +48,11 @@ fn encode_record(sequence: u64, value: &str) -> io::Result<Vec<u8>> {
 
 fn append_record(path: &Path, sequence: u64, value: &str, sync: bool) -> io::Result<u64> {
     let record = encode_record(sequence, value)?;
-    let mut file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .read(true)
+        .open(path)?;
     let offset = file.metadata()?.len();
     file.write_all(&record)?;
     file.flush()?;
@@ -59,7 +64,10 @@ fn append_record(path: &Path, sequence: u64, value: &str, sync: bool) -> io::Res
 
 fn append_torn_record(path: &Path, sequence: u64, value: &str) -> io::Result<()> {
     let record = encode_record(sequence, value)?;
-    let partial_len = HEADER_LEN.saturating_sub(3).max(record.len() / 2).min(record.len() - 1);
+    let partial_len = HEADER_LEN
+        .saturating_sub(3)
+        .max(record.len() / 2)
+        .min(record.len() - 1);
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&record[..partial_len])?;
     file.flush()?;
@@ -103,14 +111,19 @@ fn recover(path: &Path, repair_torn_tail: bool) -> io::Result<Recovered> {
             break;
         }
         if &header[..8] != MAGIC {
-            return Err(invalid_data(format!("invalid WAL magic at byte {valid_len}")));
+            return Err(invalid_data(format!(
+                "invalid WAL magic at byte {valid_len}"
+            )));
         }
 
         let sequence = u64::from_le_bytes(header[8..16].try_into().expect("fixed sequence slice"));
-        let payload_len = u32::from_le_bytes(header[16..20].try_into().expect("fixed length slice")) as usize;
+        let payload_len =
+            u32::from_le_bytes(header[16..20].try_into().expect("fixed length slice")) as usize;
         let expected_crc = u32::from_le_bytes(header[20..24].try_into().expect("fixed crc slice"));
         if payload_len > 16 * 1024 * 1024 {
-            return Err(invalid_data(format!("WAL payload length {payload_len} exceeds bound")));
+            return Err(invalid_data(format!(
+                "WAL payload length {payload_len} exceeds bound"
+            )));
         }
 
         let mut payload = vec![0_u8; payload_len];
@@ -127,7 +140,9 @@ fn recover(path: &Path, repair_torn_tail: bool) -> io::Result<Recovered> {
             break;
         }
         if crc32(&payload) != expected_crc {
-            return Err(invalid_data(format!("WAL checksum mismatch at sequence {sequence}")));
+            return Err(invalid_data(format!(
+                "WAL checksum mismatch at sequence {sequence}"
+            )));
         }
         if sequence <= latest_sequence {
             return Err(invalid_data(format!(
@@ -180,7 +195,11 @@ fn write_snapshot_atomic(root: &Path, sequence: u64, value: &str) -> io::Result<
     let bytes = serde_json::to_vec(&json!({"sequence": sequence, "value": value}))
         .map_err(|error| invalid_data(error.to_string()))?;
     {
-        let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)?;
         file.write_all(&bytes)?;
         file.flush()?;
         file.sync_all()?;

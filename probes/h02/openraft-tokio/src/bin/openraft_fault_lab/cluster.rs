@@ -332,10 +332,7 @@ pub async fn execute_hostile_snapshot_child(seed: u64) -> AnyResult<Value> {
     let mut latest_log_id = stale_log_id.clone();
     for offset in 0..6_u64 {
         latest_log_id = cluster
-            .write_log_id(
-                200_100 + offset,
-                format!("latest-{offset}-{seed:016x}"),
-            )
+            .write_log_id(200_100 + offset, format!("latest-{offset}-{seed:016x}"))
             .await?;
     }
     cluster.wait_all_applied(latest_log_id.index).await?;

@@ -173,7 +173,8 @@ impl Cluster {
         old.raft.shutdown().await?;
 
         let fresh_state_machine = Arc::new(MemStateMachine::new(BlockConfig::default()));
-        self.start_node_with(id, old.log_store, fresh_state_machine).await?;
+        self.start_node_with(id, old.log_store, fresh_state_machine)
+            .await?;
         self.nodes[&id]
             .raft
             .wait(Some(Duration::from_secs(5)))
@@ -199,7 +200,11 @@ impl Cluster {
         let mut last_index = 0;
         for offset in 0..6_u64 {
             last_index = self
-                .write(leader, start_serial + offset, format!("snapshot-value-{offset}"))
+                .write(
+                    leader,
+                    start_serial + offset,
+                    format!("snapshot-value-{offset}"),
+                )
                 .await?;
         }
         self.nodes[&leader].raft.trigger().snapshot().await?;
@@ -207,7 +212,12 @@ impl Cluster {
             .raft
             .wait(Some(Duration::from_secs(5)))
             .metrics(
-                |metrics| metrics.snapshot.as_ref().is_some_and(|log_id| log_id.index >= last_index),
+                |metrics| {
+                    metrics
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|log_id| log_id.index >= last_index)
+                },
                 "leader snapshot contains committed writes",
             )
             .await?;
@@ -216,7 +226,10 @@ impl Cluster {
         self.nodes[&lagging]
             .raft
             .wait(Some(Duration::from_secs(8)))
-            .applied_index_at_least(Some(last_index), "lagging follower installs snapshot or catches up")
+            .applied_index_at_least(
+                Some(last_index),
+                "lagging follower installs snapshot or catches up",
+            )
             .await?;
 
         let after = self.nodes[&lagging]
@@ -226,7 +239,8 @@ impl Cluster {
             .local_committed
             .index();
         let monotonic = after >= before && after >= Some(last_index);
-        let converged = self.state_digest_input(lagging).await == self.state_digest_input(leader).await;
+        let converged =
+            self.state_digest_input(lagging).await == self.state_digest_input(leader).await;
         Ok((last_index, monotonic, converged))
     }
 
@@ -285,7 +299,10 @@ impl Cluster {
         )
         .await;
         let old_rejected = !matches!(old_write, Ok(Ok(_)));
-        let new_write = self.write(new_leader, 90_002, "new-leader-committed".to_owned()).await.is_ok();
+        let new_write = self
+            .write(new_leader, 90_002, "new-leader-committed".to_owned())
+            .await
+            .is_ok();
         Ok((new_leader, old_rejected, new_write))
     }
 
@@ -387,26 +404,28 @@ pub async fn execute(seed: u64) -> AnyResult<Vec<Value>> {
     let replayed_after_restart = cluster.state_digest_input(3).await == before_restart;
     let deterministic_restart = replicated_before && replayed_after_restart;
 
-    let (snapshot_index, committed_monotonic, snapshot_converged) = cluster
-        .trigger_snapshot_and_catch_up(3, 1, 20_000)
-        .await?;
-    let snapshot_rpc_seen = cluster.rpc_counts().await.get("full_snapshot").copied().unwrap_or(0) > 0;
+    let (snapshot_index, committed_monotonic, snapshot_converged) =
+        cluster.trigger_snapshot_and_catch_up(3, 1, 20_000).await?;
+    let snapshot_rpc_seen = cluster
+        .rpc_counts()
+        .await
+        .get("full_snapshot")
+        .copied()
+        .unwrap_or(0)
+        > 0;
     let snapshot_case = committed_monotonic && snapshot_converged && snapshot_rpc_seen;
 
     let linearizable = cluster.linearizable(1).await?;
-    let voters_exact = cluster
-        .nodes
-        .values()
-        .all(|node| {
-            node.raft
-                .metrics()
-                .borrow_watched()
-                .membership_config
-                .membership()
-                .voter_ids()
-                .collect::<BTreeSet<_>>()
-                == BTreeSet::from([1_u64, 2, 3])
-        });
+    let voters_exact = cluster.nodes.values().all(|node| {
+        node.raft
+            .metrics()
+            .borrow_watched()
+            .membership_config
+            .membership()
+            .voter_ids()
+            .collect::<BTreeSet<_>>()
+            == BTreeSet::from([1_u64, 2, 3])
+    });
     let leaders_before = cluster.leaders_reported().await;
     let membership_case = linearizable && voters_exact && leaders_before == BTreeSet::from([1_u64]);
 
@@ -415,7 +434,8 @@ pub async fn execute(seed: u64) -> AnyResult<Vec<Value>> {
 
     cluster.router.resume(1).await;
     cluster.router.heal_all().await;
-    let (quorum_rejected, committed_not_advanced) = cluster.quorum_loss_fail_closed(new_leader).await?;
+    let (quorum_rejected, committed_not_advanced) =
+        cluster.quorum_loss_fail_closed(new_leader).await?;
     let quorum_case = quorum_rejected && committed_not_advanced;
 
     let mut fault_plan = vec![1_u64, 2, 3, 4, 5, 6];

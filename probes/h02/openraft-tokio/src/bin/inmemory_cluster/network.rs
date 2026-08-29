@@ -6,8 +6,8 @@ use std::sync::Arc;
 use openraft::OptionalSend;
 use openraft::Raft;
 use openraft::errors::{NetworkError, RPCError, ReplicationClosed, StreamingError, Unreachable};
-use openraft::network::{RPCOption, RaftNetworkFactory};
 use openraft::network::v2::RaftNetworkV2;
+use openraft::network::{RPCOption, RaftNetworkFactory};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
 };
@@ -40,7 +40,14 @@ impl InMemoryRouter {
     }
 
     pub async fn isolate(&self, id: u64) {
-        let ids = self.inner.nodes.read().await.keys().copied().collect::<Vec<_>>();
+        let ids = self
+            .inner
+            .nodes
+            .read()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         let mut blocked = self.inner.blocked.write().await;
         for other in ids {
             if other != id {

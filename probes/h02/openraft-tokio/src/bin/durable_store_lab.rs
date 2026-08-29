@@ -9,9 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use durable_store_lab::cluster::DurableCluster;
-use durable_store_lab::store::{
-    DurableLogStore, DurableStateMachine, flip_first_payload_byte,
-};
+use durable_store_lab::store::{DurableLogStore, DurableStateMachine, flip_first_payload_byte};
 use serde_json::{Value, json};
 use tokio::task::spawn_blocking;
 

@@ -31,7 +31,11 @@ async fn wait_for_progress(path: &Path, minimum: u64, deadline: Duration) -> Res
     timeout(deadline, async {
         loop {
             if let Ok(value) = read_json(path) {
-                if value.get("step").and_then(Value::as_u64).is_some_and(|step| step >= minimum) {
+                if value
+                    .get("step")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|step| step >= minimum)
+                {
                     return value;
                 }
             }
@@ -60,7 +64,11 @@ fn proc_state(pid: u32) -> Result<String, String> {
     let text = fs::read_to_string(&status_path)
         .map_err(|error| format!("read {}: {error}", status_path.display()))?;
     text.lines()
-        .find_map(|line| line.strip_prefix("State:").map(str::trim).map(str::to_owned))
+        .find_map(|line| {
+            line.strip_prefix("State:")
+                .map(str::trim)
+                .map(str::to_owned)
+        })
         .ok_or_else(|| format!("{} has no State line", status_path.display()))
 }
 
