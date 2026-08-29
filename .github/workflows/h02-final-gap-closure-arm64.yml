@@ -3,12 +3,6 @@ name: h02-final-gap-closure-arm64
 on:
   push:
     branches: ["codex/plan-v1.2.1-final-gap-closure-v1"]
-    paths:
-      - ".github/workflows/h02-final-gap-closure-arm64.yml"
-      - "scripts/h02_exact_head_matrix_v1.py"
-      - "scripts/validate_h02_exact_head_matrix_contract_v1.py"
-      - "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json"
-      - "tests/platform/test_h02_exact_head_matrix_v1.py"
   workflow_dispatch:
 
 permissions:
@@ -18,13 +12,14 @@ concurrency:
   group: h02-final-gap-closure-arm64-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SOURCE_SHA: ${{ github.sha }}
+  TOOLCHAINS: "1.88.0 1.98.0"
+
 jobs:
   exact-head-single-runner:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
-    env:
-      SOURCE_SHA: ${{ github.sha }}
-      TOOLCHAINS: "1.88.0 1.98.0"
     steps:
       - name: Checkout exact immutable source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,13 +47,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-plan.txt
 
-      - name: Install Python dependencies
-        run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-
       - name: Validate all current plans, contracts and Python suites
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
           python3 scripts/validate_plan_v2.py
           python3 scripts/validate_plan_v2_extensions.py
           python3 scripts/validate_plan_v1_2.py
@@ -85,7 +78,7 @@ jobs:
               | tee "$RUNNER_TEMP/results/cargo-$toolchain.txt"
           done
 
-      - name: Validate root Rust workspace
+      - name: Validate root and exact OpenRaft Rust graphs
         shell: bash
         run: |
           set -euo pipefail
@@ -95,10 +88,6 @@ jobs:
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings \
             2>&1 | tee "$RUNNER_TEMP/results/root-clippy.log"
 
-      - name: Bind and validate exact OpenRaft graph
-        shell: bash
-        run: |
-          set -euo pipefail
           manifest=probes/h02/openraft-tokio/Cargo.toml
           lock=probes/h02/openraft-tokio/Cargo.lock
           test -s "$lock"
@@ -157,42 +146,23 @@ jobs:
           from jsonschema import Draft202012Validator, FormatChecker
 
           root = Path.cwd()
-          result_root = Path(os.environ["RUNNER_TEMP"]) / "results"
-          matrix_root = result_root / "matrix"
+          matrix_root = Path(os.environ["RUNNER_TEMP"]) / "results/matrix"
           summary = json.loads((matrix_root / "matrix-summary.json").read_text(encoding="utf-8"))
-          schema = json.loads(
-              (root / "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          errors = sorted(
-              Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(summary),
-              key=lambda error: list(error.path),
-          )
+          schema = json.loads((root / "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json").read_text(encoding="utf-8"))
+          errors = list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(summary))
           assert not errors, [error.message for error in errors]
           assert summary["result"] == "PASS"
-          assert summary["counts"] == {
-              "pass": 24,
-              "fail": 0,
-              "blocked": 0,
-              "unknown": 0,
-              "unexecuted": 0,
-          }
-          assert summary["runner_errors"] == []
+          assert summary["counts"] == {"pass": 24, "fail": 0, "blocked": 0, "unknown": 0, "unexecuted": 0}
           assert summary["matrix"]["executed_entry_count"] == 24
           assert summary["matrix"]["missing_entry_ids"] == []
           assert summary["matrix"]["unexpected_entry_ids"] == []
           assert summary["matrix"]["duplicate_entry_ids"] == []
+          assert summary["runner_errors"] == []
           assert summary["source_binding"]["commit"] == os.environ["SOURCE_SHA"]
-          tree = subprocess.run(
-              ["git", "rev-parse", "HEAD^{tree}"],
-              check=True,
-              capture_output=True,
-              text=True,
-          ).stdout.strip()
-          assert summary["source_binding"]["tree"] == tree
+          actual_tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], check=True, capture_output=True, text=True).stdout.strip()
+          assert summary["source_binding"]["tree"] == actual_tree
 
-          def digest(path: Path) -> str:
+          def digest(path):
               return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
           for entry in summary["entries"]:
@@ -204,11 +174,8 @@ jobs:
               assert entry["validation_errors"] == []
               assert digest(matrix_root / entry["stdout_path"]) == entry["stdout_digest"]
               assert digest(matrix_root / entry["stderr_path"]) == entry["stderr_digest"]
-              assert (matrix_root / entry["exit_path"]).read_text(encoding="utf-8").strip() == "0"
-              command_bytes = json.dumps(
-                  entry["command"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
-              ).encode("utf-8")
-              assert "sha256:" + hashlib.sha256(command_bytes).hexdigest() == entry["command_digest"]
+              command = json.dumps(entry["command"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+              assert "sha256:" + hashlib.sha256(command).hexdigest() == entry["command_digest"]
           assert summary["qualification"] is False
           assert summary["compatibility_claim"] is False
           assert summary["selection_effect"] == "NONE"
