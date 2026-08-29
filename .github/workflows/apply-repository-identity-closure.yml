@@ -1,0 +1,113 @@
+name: apply-repository-identity-closure
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-v1"]
+    paths:
+      - ".github/workflows/apply-repository-identity-closure.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-repository-identity-closure-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  replace-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout branch commit with write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify event commit is the checked-out branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Replace deprecated repository identity in tracked bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          old = ("ProfAlex" + "QI/HeptaBao").encode("utf-8")
+          new = b"ProfHepta/HeptaBao"
+          tracked = [Path(item.decode("utf-8")) for item in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0") if item]
+          changed = []
+          occurrences = 0
+          for path in tracked:
+              data = path.read_bytes()
+              count = data.count(old)
+              if not count:
+                  continue
+              path.write_bytes(data.replace(old, new))
+              changed.append(path.as_posix())
+              occurrences += count
+
+          required = {
+              "schemas/heptabao_dependency_probe_evidence_v1.schema.json",
+              "schemas/heptabao_qualification_receipt_v2.schema.json",
+              "scripts/h02_dependency_probe_v1.py",
+              "scripts/validate_plan_v2.py",
+          }
+          missing = sorted(required - set(changed))
+          if missing:
+              raise SystemExit(f"expected deprecated bindings were absent: {missing}")
+          if occurrences < len(required):
+              raise SystemExit(f"unexpectedly shallow replacement count: {occurrences}")
+          remaining = [path.as_posix() for path in tracked if old in path.read_bytes()]
+          if remaining:
+              raise SystemExit(f"deprecated identity remains in tracked files: {remaining}")
+          print(f"canonicalized repository identity: files={len(changed)} occurrences={occurrences}")
+          for path in changed:
+              print(path)
+          PY
+          git diff --check
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install pinned validation dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Validate identity, plan, evidence and H01/H02 semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_repository_identity_v1.py
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_provenance_v1.py
+          python scripts/validate_evidence_objects_v1.py
+          python scripts/validate_oracle_foundation_v1.py
+          python scripts/validate_h01_h02_next_v1.py
+          python scripts/validate_dependency_bakeoff_v1.py
+          python scripts/validate_dependency_research_captures_v1.py
+          python scripts/h02_dependency_probe_v1.py validate-matrix
+          python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Commit exact replacement batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(git status --porcelain)"
+          git config user.name "heptabao-maintenance-bot"
+          git config user.email "heptabao-maintenance-bot@users.noreply.github.com"
+          git add -u
+          git commit -m "fix(evidence): bind receipts to canonical repository identity"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -37,10 +37,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          git diff --quiet
+          git diff --cached --quiet
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -83,10 +93,20 @@ jobs:
           - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.85.0, target: x86_64-unknown-linux-gnu}
           - {profile: HB-H02-PROBE-OPENRAFT-TOKIO, probe_dir: probes/h02/openraft-tokio, package: openraft, version: 0.10.0-alpha.33, toolchain: 1.98.0, target: x86_64-unknown-linux-gnu}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify exact source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          git diff --quiet
+          git diff --cached --quiet
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -98,7 +118,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/probe" "$RUNNER_TEMP/evidence"
           cp -a "${{ matrix.probe_dir }}/." "$RUNNER_TEMP/probe/"
           cp probes/h02/rustls-public-fixtures.rs "$RUNNER_TEMP/rustls-public-fixtures.rs"
+          git rev-parse HEAD > "$RUNNER_TEMP/evidence/source-sha.txt"
           git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/evidence/tree-sha.txt"
+          printf '%s\n' "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" > "$RUNNER_TEMP/evidence/source-branch.txt"
           git diff --quiet && git diff --cached --quiet
       - name: Execute mechanical Cargo and source probes without losing failures
         shell: bash
@@ -147,6 +169,23 @@ jobs:
           p=next(p for p in yaml.safe_load(open('planning/HEPTABAO_H02_CANDIDATE_PROBE_MATRIX_V1.yaml'))['profiles'] if p['profile_id']==sys.argv[1])
           json.dump([{'case_id':c,'status':'UNEXECUTED','evidence_ref':None} for c in p['required_cases']],open(sys.argv[2],'w'),indent=2)
           PY
+      - name: Sanitize text artifacts before digesting
+        shell: bash
+        run: |
+          set -euo pipefail
+          ev="$RUNNER_TEMP/evidence"
+          python - "$ev" "$HOME" "$GITHUB_WORKSPACE" <<'PY'
+          import pathlib
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          replacements = ((sys.argv[2], '<HOME>'), (sys.argv[3], '<WORKSPACE>'))
+          for path in list(root.glob('*.log')) + list(root.glob('*.txt')):
+              text = path.read_text(encoding='utf-8', errors='replace')
+              for original, replacement in replacements:
+                  text = text.replace(original, replacement)
+              path.write_text(text, encoding='utf-8')
+          PY
+          if grep -ERn '(gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN .*PRIVATE KEY-----)' "$ev"; then exit 1; fi
       - name: Collect sanitized fail-closed evidence
         shell: bash
         env: {PROFILE_ID: "${{ matrix.profile }}", TOOLCHAIN: "${{ matrix.toolchain }}", TARGET: "${{ matrix.target }}"}
@@ -154,9 +193,23 @@ jobs:
           set -euo pipefail; ev="$RUNNER_TEMP/evidence"; source "$ev/status.env"
           checksum_arg=--no-package-checksum-match; [ "$PACKAGE_CHECKSUM_MATCH" = true ] && checksum_arg=--package-checksum-match
           vcs_arg=--no-package-vcs-commit-match; [ "$PACKAGE_VCS_COMMIT_MATCH" = true ] && vcs_arg=--package-vcs-commit-match
-          python scripts/h02_dependency_probe_v1.py collect --profile-id "$PROFILE_ID" --evidence-id "HB-H02-PROBE-EVIDENCE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${PROFILE_ID}-${TOOLCHAIN//./_}" --artifact-root "$ev" --source-root "${SOURCE_ROOT:-}" --case-results "$ev/cases.json" --execution-kind GITHUB_HOSTED --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${PROFILE_ID}-${TOOLCHAIN}" --branch "$GITHUB_REF_NAME" --commit-sha "$GITHUB_SHA" --tree-sha "$(cat "$ev/tree-sha.txt")" --clean-tree --os "$RUNNER_OS" --arch "$RUNNER_ARCH" --target "$TARGET" --toolchain "$TOOLCHAIN" --rustc "$(cat "$ev/rustc.txt" 2>/dev/null || true)" --cargo "$(cat "$ev/cargo.txt" 2>/dev/null || true)" --runner-name "$RUNNER_NAME" --lock-status "$LOCK_STATUS" --metadata-status "$METADATA_STATUS" --build-status "$BUILD_STATUS" --test-status "$TEST_STATUS" "$checksum_arg" "$vcs_arg" --output "$ev/evidence.json"
-          sed -i "s#${HOME}#<HOME>#g; s#${GITHUB_WORKSPACE}#<WORKSPACE>#g" "$ev"/*.log "$ev"/*.txt 2>/dev/null || true
-          if grep -ERn --exclude=evidence.json '(gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN .*PRIVATE KEY-----)' "$ev"; then exit 1; fi
+          python scripts/h02_dependency_probe_v1.py collect --profile-id "$PROFILE_ID" --evidence-id "HB-H02-PROBE-EVIDENCE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${PROFILE_ID}-${TOOLCHAIN//./_}" --artifact-root "$ev" --source-root "${SOURCE_ROOT:-}" --case-results "$ev/cases.json" --execution-kind GITHUB_HOSTED --environment-id "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${PROFILE_ID}-${TOOLCHAIN}" --branch "$(cat "$ev/source-branch.txt")" --commit-sha "$(cat "$ev/source-sha.txt")" --tree-sha "$(cat "$ev/tree-sha.txt")" --clean-tree --os "$RUNNER_OS" --arch "$RUNNER_ARCH" --target "$TARGET" --toolchain "$TOOLCHAIN" --rustc "$(cat "$ev/rustc.txt" 2>/dev/null || true)" --cargo "$(cat "$ev/cargo.txt" 2>/dev/null || true)" --runner-name "$RUNNER_NAME" --lock-status "$LOCK_STATUS" --metadata-status "$METADATA_STATUS" --build-status "$BUILD_STATUS" --test-status "$TEST_STATUS" "$checksum_arg" "$vcs_arg" --output "$ev/evidence.json"
+          python - "$ev" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          evidence = json.loads((root / 'evidence.json').read_text(encoding='utf-8'))
+          for name, ref in evidence['artifacts'].items():
+              if ref is None:
+                  continue
+              path = root / ref['path']
+              payload = path.read_bytes()
+              assert len(payload) == ref['byte_length'], (name, 'byte_length')
+              assert hashlib.sha256(payload).hexdigest() == ref['sha256'], (name, 'sha256')
+          print('all uploaded artifact digests match sanitized immutable bytes')
+          PY
       - name: Upload non-authoritative probe evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
