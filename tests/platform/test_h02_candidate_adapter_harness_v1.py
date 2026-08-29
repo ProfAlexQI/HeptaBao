@@ -42,7 +42,7 @@ SUPPORT_DEPENDENCY_SPECS = {
         'tokio = { version = "=1.53.1", default-features = false, '
         'features = ["macros", "process", "rt-multi-thread", "sync", "time"] }'
     ),
-    "validit": 'validit = "=0.2.5"',
+    "validit": 'validit = "=0.2.6"',
     "zeroize": 'zeroize = "=1.8.2"',
 }
 

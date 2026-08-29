@@ -1,5 +1,5 @@
-//! Synthetic public X.509 DER fixtures for H02 rustls candidate adapters.
-//! No private key material is present in this file.
+// Synthetic public X.509 DER fixtures for H02 rustls candidate adapters.
+// No private key material is present in this file.
 
 const ROOT_DER: &[u8] = &[
     0x30, 0x82, 0x01, 0x81, 0x30, 0x82, 0x01, 0x27, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x02, 0x10,
