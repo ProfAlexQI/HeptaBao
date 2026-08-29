@@ -18,7 +18,7 @@ concurrency:
 jobs:
   apply-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - name: Checkout exact closure branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,76 +53,85 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('.github/workflows/h02-openraft-blocker-closure.yml')
-          text = path.read_text(encoding='utf-8')
+          path = Path(".github/workflows/h02-openraft-blocker-closure.yml")
+          text = path.read_text(encoding="utf-8")
           filtered = []
           removed = 0
           for line in text.splitlines(keepends=True):
               stripped = line.strip()
-              if stripped.startswith(('EVIDENCE_ROOT:', 'PROBE_ROOT:')) and 'runner.temp' in stripped:
+              if stripped.startswith(("EVIDENCE_ROOT:", "PROBE_ROOT:")) and "runner.temp" in stripped:
                   removed += 1
                   continue
               filtered.append(line)
           if removed != 2:
-              raise SystemExit(f'expected two invalid runner.temp job-env lines, removed {removed}')
-          text = ''.join(filtered)
+              raise SystemExit(
+                  f"expected two invalid runner.temp job-env lines, removed {removed}"
+              )
+          text = "".join(filtered)
 
-          anchor = '''      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-'''
-          replacement = '''      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-      - name: Bind runner-local evidence roots
-        shell: bash
-        run: |
-          printf 'EVIDENCE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-evidence" >> "$GITHUB_ENV"
-          printf 'PROBE_ROOT=%s\\n' "$RUNNER_TEMP/h02-blocker-closure-probes" >> "$GITHUB_ENV"
-      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-'''
-          if text.count(anchor) != 1:
-              raise SystemExit(f'closure-sequential setup-python anchor count={text.count(anchor)}')
-          path.write_text(text.replace(anchor, replacement), encoding='utf-8')
-          print('patched blocker-closure runner-local environment binding')
+          anchor = (
+              "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
+              "        with:\n"
+              "          python-version: \"3.13\"\n"
+              "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
+          )
+          replacement = (
+              "      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n"
+              "        with:\n"
+              "          python-version: \"3.13\"\n"
+              "      - name: Bind runner-local evidence roots\n"
+              "        shell: bash\n"
+              "        run: |\n"
+              "          printf 'EVIDENCE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-evidence\" >> \"$GITHUB_ENV\"\n"
+              "          printf 'PROBE_ROOT=%s\\n' \"$RUNNER_TEMP/h02-blocker-closure-probes\" >> \"$GITHUB_ENV\"\n"
+              "      - run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt\n"
+          )
+          count = text.count(anchor)
+          if count != 1:
+              raise SystemExit(f"closure-sequential setup-python anchor count={count}")
+          path.write_text(text.replace(anchor, replacement), encoding="utf-8")
+          print("patched blocker-closure runner-local environment binding")
           PY
 
-      - name: Remove one-shot maintenance files
-        run: rm scripts/apply_h02_runner_blocker_fixes.py .github/workflows/h02-apply-runner-blockers.yml
-
-      - name: Validate governance and H02 contracts
+      - name: Validate full governance, plan, Oracle and H02 contracts
+        shell: bash
         run: |
           set -euo pipefail
           python scripts/validate_plan_v2.py
-          python scripts/validate_plan_v3.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_provenance_v1.py
+          python scripts/validate_evidence_objects_v1.py
+          python scripts/validate_oracle_foundation_v1.py
+          python scripts/validate_h01_h02_next_v1.py
+          python scripts/validate_dependency_bakeoff_v1.py
+          python scripts/validate_dependency_execution_profiles_v1.py
+          python scripts/validate_dependency_registry_evidence_v1.py
+          python scripts/validate_dependency_research_captures_v1.py
+          python scripts/validate_h02_seeded_behavior_plan_v1.py
           python scripts/validate_h02_candidate_adapters_v1.py
           python scripts/validate_h02_openraft_inmemory_cluster_v1.py
           python scripts/validate_h02_openraft_fault_lab_v1.py
           python scripts/validate_h02_blocker_closure_v1.py
-          python -m unittest \
-            tests/platform/test_h02_candidate_adapter_harness_v1.py \
-            tests/platform/test_h02_openraft_inmemory_cluster_v1.py \
-            tests/platform/test_h02_linearizability_checker_v1.py \
-            tests/platform/test_h02_openraft_fault_lab_evidence_v1.py \
-            tests/platform/test_h02_blocker_closure_evidence_v1.py \
-            -v
+          python -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Install exact Rust verification toolchains
+        shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           rustup toolchain install 1.85.0 --profile minimal
           rustup toolchain install 1.71.0 --profile minimal
 
-      - name: Verify workspace formatting tests and strict Clippy
+      - name: Verify workspace formatting, tests and strict Clippy
+        shell: bash
         run: |
           set -euo pipefail
           cargo +1.98.0 fmt --all -- --check
-          cargo +1.98.0 test --workspace --all-targets
-          cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
+          cargo +1.98.0 test --workspace --all-targets --locked
+          cargo +1.98.0 clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Verify OpenRaft exact-toolchain build seams
+        shell: bash
         run: |
           set -euo pipefail
           for toolchain in 1.85.0 1.98.0; do
@@ -135,6 +144,7 @@ jobs:
           done
 
       - name: Verify rustls exact-toolchain build seams
+        shell: bash
         run: |
           set -euo pipefail
           for profile in rustls-ring rustls-aws-lc; do
@@ -150,12 +160,21 @@ jobs:
             done
           done
 
-      - name: Commit verified blocker closure batch
+      - name: Remove one-shot maintenance files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/apply_h02_runner_blocker_fixes.py
+          rm .github/workflows/h02-apply-runner-blockers.yml
+
+      - name: Commit verified blocker-closure batch
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
+          git diff --cached --stat
           git commit -m "fix(h02): close runner-discovered validation blockers"
           git push origin HEAD:codex/h02-final-gap-closure-v1
