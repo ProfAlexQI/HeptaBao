@@ -29,7 +29,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 - <<'PY'
           from pathlib import Path
           import textwrap
           source = Path('.github/workflows/apply-h02-remaining-blocker-fixes-v3.yml').read_text(encoding='utf-8')
@@ -44,7 +45,7 @@ jobs:
           PY
 
           set +e
-          python /tmp/apply_h02_remaining_blockers.py
+          python3 /tmp/apply_h02_remaining_blockers.py
           patch_rc=$?
           set -e
           if [ "$patch_rc" -ne 0 ] && [ "$patch_rc" -ne 1 ]; then
@@ -52,9 +53,10 @@ jobs:
             exit "$patch_rc"
           fi
 
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import subprocess
+          import yaml
 
           # The canonical program intentionally stopped at its final exact-match
           # transform. All preceding source changes remain in this worktree.
@@ -92,10 +94,13 @@ jobs:
               raise SystemExit('OpenRaft SBOM matrix rows drifted')
           text = text.replace(old_rows, new_rows)
 
+          gh_open = '$' + '{{'
+          profile_expr = gh_open + ' matrix.profile }}'
+          toolchain_expr = gh_open + ' matrix.toolchain }}'
           classification_lines = [
               '      - name: Classify required pass or expected MSRV boundary',
               '        shell: bash',
-              '        env: {PROFILE_ID: "${{ matrix.profile }}", TOOLCHAIN: "${{ matrix.toolchain }}"}',
+              f'        env: {{PROFILE_ID: "{profile_expr}", TOOLCHAIN: "{toolchain_expr}"}}',
               '        run: |',
               '          set -euo pipefail',
               '          ev="$RUNNER_TEMP/evidence"',
@@ -204,7 +209,6 @@ jobs:
                   if forbidden_marker in body:
                       raise SystemExit(f'{path}: retained positive-lane marker {forbidden_marker}')
 
-          import yaml
           parsed = yaml.safe_load(sbom.read_text(encoding='utf-8'))
           if not isinstance(parsed, dict) or 'jobs' not in parsed:
               raise SystemExit('rebuilt SBOM workflow is not valid YAML')
@@ -216,7 +220,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
           python3 scripts/validate_h02_candidate_adapters_v1.py
           python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
           python3 scripts/validate_h02_openraft_fault_lab_v1.py
