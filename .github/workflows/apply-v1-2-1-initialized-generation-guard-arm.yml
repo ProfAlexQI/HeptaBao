@@ -48,6 +48,15 @@ jobs:
           set -euo pipefail
           python3 scripts/apply_v1_2_1_initialized_generation_guard.py
 
+      - name: Remove transition surfaces before workflow-policy validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/apply_v1_2_1_initialized_generation_guard.py
+          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml
+          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-macos.yml
+          rm -f .github/workflows/explicit-generation-lifecycle.trigger
+
       - name: Install exact Rust verification toolchains
         shell: bash
         run: |
@@ -91,15 +100,6 @@ jobs:
           manifest=probes/h02/openraft-tokio/Cargo.toml
           cargo +1.88.0 test --locked --all-targets --manifest-path "$manifest"
           cargo +1.88.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
-
-      - name: Remove transition surfaces
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f scripts/apply_v1_2_1_initialized_generation_guard.py
-          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-arm.yml
-          rm -f .github/workflows/apply-v1-2-1-initialized-generation-guard-macos.yml
-          rm -f .github/workflows/explicit-generation-lifecycle.trigger
 
       - name: Commit exact verified closure
         shell: bash
