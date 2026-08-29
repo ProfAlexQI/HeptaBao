@@ -1,0 +1,132 @@
+name: h02-closure-windows-smoke
+
+on:
+  push:
+    branches: ["exec/h02-closure-windows-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-closure-windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate-compile:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:GITHUB_SHA) { throw "HEAD mismatch: $head != $env:GITHUB_SHA" }
+          if (git status --porcelain) { throw 'dirty checkout' }
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install validation dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Run core deterministic validators
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python scripts/validate_h02_blocker_closure_v1.py
+
+      - name: Install Rust 1.98
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Validate main Rust workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo fmt --all --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Copy complete shared probe tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeRoot = Join-Path $env:RUNNER_TEMP 'h02-probes'
+          if (Test-Path $probeRoot) { Remove-Item -Recurse -Force $probeRoot }
+          New-Item -ItemType Directory -Path $probeRoot | Out-Null
+          Copy-Item -Recurse -Force 'probes/h02/*' $probeRoot
+          if (-not (Test-Path (Join-Path $probeRoot 'rustls-public-fixtures.rs'))) { throw 'shared fixture missing' }
+          "PROBE_ROOT=$probeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Compile and test exact candidate probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($subdir in @('tokio-minimal','rustls-ring','rustls-aws-lc','openraft-tokio')) {
+            $manifest = Join-Path (Join-Path $env:PROBE_ROOT $subdir) 'Cargo.toml'
+            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP "h02-target-$subdir"
+            cargo generate-lockfile --manifest-path $manifest
+            cargo test --locked --all-targets --manifest-path $manifest
+          }
+
+      - name: Run one candidate seed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $seed = '0x5eed20260828cafe'
+          foreach ($subdir in @('tokio-minimal','rustls-ring','rustls-aws-lc','openraft-tokio')) {
+            $manifest = Join-Path (Join-Path $env:PROBE_ROOT $subdir) 'Cargo.toml'
+            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP "h02-target-$subdir"
+            $output = Join-Path $env:RUNNER_TEMP "$subdir.jsonl"
+            cargo run --quiet --locked --manifest-path $manifest -- --seed $seed | Out-File -FilePath $output -Encoding utf8
+            if ((Get-Item $output).Length -eq 0) { throw "$subdir emitted no output" }
+          }
+
+      - name: Keep authority closed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import json, yaml
+          flags = yaml.safe_load(open('planning/AUTHORITY_FLAGS_V2.yaml', encoding='utf-8'))['flags']
+          enabled = [k for k, v in flags.items() if v and k != 'implementation_started']
+          if enabled:
+              raise SystemExit(enabled)
+          h02 = json.load(open('qualifications/H02/H02-IMPLEMENTATION-STATUS.json', encoding='utf-8'))
+          assert h02['qualification']['status'] == 'NOT_QUALIFIED'
+          assert h02['authority_effect'] == 'NONE'
+          print('Windows candidate compile/run passed; qualification and authority remain closed')
+          '@ | python -
+
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-closure-windows-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/*.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
