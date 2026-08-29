@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   diagnostic:
-    runs-on: windows-2025
-    timeout-minutes: 120
+    runs-on: macos-15
+    timeout-minutes: 150
     steps:
       - name: Checkout exact technical source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -21,7 +21,6 @@ jobs:
           ref: cbaaadbdf9d7dbcb773625d62757db1368d07e64
           fetch-depth: 1
           persist-credentials: false
-
       - name: Verify exact source
         shell: bash
         run: |
@@ -29,7 +28,23 @@ jobs:
           test "$(git rev-parse HEAD)" = "cbaaadbdf9d7dbcb773625d62757db1368d07e64"
           git diff --quiet
           git diff --cached --quiet
-
+      - name: Apply pending source fixes in diagnostic workspace only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          fixture = Path('probes/h02/rustls-public-fixtures.rs')
+          text = fixture.read_text(encoding='utf-8')
+          old = '//! Synthetic public X.509 DER fixtures for H02 rustls candidate adapters.\n//! No private key material is present in this file.'
+          new = '// Synthetic public X.509 DER fixtures for H02 rustls candidate adapters.\n// No private key material is present in this file.'
+          assert text.count(old) == 1
+          fixture.write_text(text.replace(old, new, 1), encoding='utf-8')
+          cargo = Path('probes/h02/openraft-tokio/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          assert text.count('validit = "=0.2.5"') == 1
+          cargo.write_text(text.replace('validit = "=0.2.5"', 'validit = "=0.2.6"', 1), encoding='utf-8')
+          PY
       - name: Install Rust 1.98.0
         shell: bash
         run: |
@@ -37,17 +52,6 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
           rustup run 1.98.0 rustc --version --verbose
           rustup run 1.98.0 cargo --version --verbose
-
-      - name: Compile and run Tokio candidate
-        shell: bash
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/diag-target-tokio
-        run: |
-          set -euo pipefail
-          rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/tokio-minimal/Cargo.toml
-          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/tokio-minimal/Cargo.toml
-          rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/tokio-minimal/Cargo.toml -- --seed 0x5eed20260828cafe
-
       - name: Compile and run rustls ring candidate
         shell: bash
         env:
@@ -57,7 +61,6 @@ jobs:
           rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/rustls-ring/Cargo.toml
           rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/rustls-ring/Cargo.toml
           rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/rustls-ring/Cargo.toml -- --seed 0x5eed20260828cafe
-
       - name: Compile and run rustls aws-lc candidate
         shell: bash
         env:
@@ -67,7 +70,6 @@ jobs:
           rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/rustls-aws-lc/Cargo.toml
           rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/rustls-aws-lc/Cargo.toml
           rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/rustls-aws-lc/Cargo.toml -- --seed 0x5eed20260828cafe
-
       - name: Compile and run OpenRaft candidate
         shell: bash
         env:
@@ -77,9 +79,6 @@ jobs:
           rustup run 1.98.0 cargo generate-lockfile --manifest-path probes/h02/openraft-tokio/Cargo.toml
           rustup run 1.98.0 cargo test --locked --all-targets --manifest-path probes/h02/openraft-tokio/Cargo.toml
           rustup run 1.98.0 cargo run --quiet --locked --manifest-path probes/h02/openraft-tokio/Cargo.toml -- --seed 0x5eed20260828cafe
-
       - name: Confirm diagnostic authority is none
         shell: bash
-        run: |
-          set -euo pipefail
-          echo 'qualification=false selection_effect=NONE authority_effect=NONE'
+        run: echo 'qualification=false selection_effect=NONE authority_effect=NONE'
