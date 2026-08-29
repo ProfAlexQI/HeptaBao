@@ -134,6 +134,40 @@ jobs:
           )
           changed.append(endpoint_path.as_posix())
 
+          validator_path = Path("scripts/validate_oracle_foundation_v1.py")
+          validator_text = validator_path.read_text(encoding="utf-8")
+          validator_replacements = [
+              (
+                  'status.get("work_status") != "SAFE_PUBLIC_FOUNDATION_ACTIVE"',
+                  'status.get("work_status") != "SAFE_PUBLIC_AND_SYNTHETIC_FOUNDATION_ACTIVE"',
+              ),
+              (
+                  '("raw_restricted_fixtures", "sanitized_repository_fixtures", "signed_provenance_transfers", "reviewed_normalization_rules", "qualified_fixtures")',
+                  '("raw_restricted_fixtures", "black_box_sanitized_fixtures", "signed_provenance_transfers", "reviewed_normalization_rules", "qualified_fixtures")',
+              ),
+              (
+                  '        fail("H01 implementation status count mismatch")\n    capture = status.get("capture_evidence", {})',
+                  '        fail("H01 implementation status count mismatch")\n    if delivered.get("synthetic_side_effect_contracts") != 1:\n        fail("H01 status must bind exactly one synthetic side-effect contract")\n    capture = status.get("capture_evidence", {})',
+              ),
+              (
+                  '        fail("H01 status falsely claims capture/review/qualification evidence")\n    if status.get("qualification", {}).get("status") != "NOT_QUALIFIED":',
+                  '        fail("H01 status falsely claims capture/review/qualification evidence")\n    if capture.get("synthetic_contract_fixtures") != 1:\n        fail("H01 status must bind exactly one synthetic contract fixture")\n    if status.get("qualification", {}).get("status") != "NOT_QUALIFIED":',
+              ),
+          ]
+          for old, new in validator_replacements:
+              observed = validator_text.count(old)
+              if observed != 1:
+                  raise SystemExit(
+                      f"Oracle validator anchor drift: expected=1 observed={observed} anchor={old!r}"
+                  )
+              validator_text = validator_text.replace(old, new, 1)
+          validator_path.write_text(
+              validator_text,
+              encoding="utf-8",
+              newline="\n",
+          )
+          changed.append(validator_path.as_posix())
+
           evidence_paths = {
               "RUNTIME": Path("planning/evidence/h02/reference-model/local/runtime-5eed20260828cafe.json"),
               "TLS": Path("planning/evidence/h02/reference-model/local/tls-5eed20260828cafe.json"),
@@ -177,7 +211,7 @@ jobs:
               "applied deterministic source repairs: "
               f"files={len(set(changed))} owner_occurrences={owner_occurrences} "
               f"surface_occurrences={surface_occurrences} endpoint_audit_repairs=1 "
-              "reference_hash_bindings=3"
+              "oracle_validator_repairs=4 reference_hash_bindings=3"
           )
           for path in sorted(set(changed)):
               print(path)
@@ -197,18 +231,33 @@ jobs:
       - name: Validate identity, plan, evidence and H01/H02 semantics
         shell: bash
         run: |
-          set -euo pipefail
-          python scripts/validate_repository_identity_v1.py
-          python scripts/validate_plan_v2.py
-          python scripts/validate_plan_v2_extensions.py
-          python scripts/validate_provenance_v1.py
-          python scripts/validate_evidence_objects_v1.py
-          python scripts/validate_oracle_foundation_v1.py
-          python scripts/validate_h01_h02_next_v1.py
-          python scripts/validate_dependency_bakeoff_v1.py
-          python scripts/validate_dependency_research_captures_v1.py
-          python scripts/h02_dependency_probe_v1.py validate-matrix
-          python -m unittest discover -s tests -p 'test_*.py' -v
+          set -uo pipefail
+          failures=0
+          run_check() {
+            echo "::group::$*"
+            if "$@"; then
+              echo "PASS: $*"
+            else
+              failures=$((failures + 1))
+              echo "FAIL: $*" >&2
+            fi
+            echo "::endgroup::"
+          }
+          run_check python scripts/validate_repository_identity_v1.py
+          run_check python scripts/validate_plan_v2.py
+          run_check python scripts/validate_plan_v2_extensions.py
+          run_check python scripts/validate_provenance_v1.py
+          run_check python scripts/validate_evidence_objects_v1.py
+          run_check python scripts/validate_oracle_foundation_v1.py
+          run_check python scripts/validate_h01_h02_next_v1.py
+          run_check python scripts/validate_dependency_bakeoff_v1.py
+          run_check python scripts/validate_dependency_research_captures_v1.py
+          run_check python scripts/h02_dependency_probe_v1.py validate-matrix
+          run_check python -m unittest discover -s tests -p 'test_*.py' -v
+          if (( failures != 0 )); then
+            echo "validation failures: ${failures}" >&2
+            exit 1
+          fi
 
       - name: Retire one-shot workflow and commit exact repair batch
         shell: bash
