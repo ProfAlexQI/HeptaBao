@@ -96,6 +96,7 @@ response_unknown_policies:
   CONSENSUS_OBSERVE: inspect committed/applied index before action
 sample_operations:
   sys.health.read:
+    operation_id: sys.health.read
     operation_class: PURE_READ
     exposure: PUBLIC_UNAUTHENTICATED
     allowed_http_methods: [GET]
@@ -119,6 +120,7 @@ sample_operations:
     timeout_profile: health
     compatibility_source: oracle://openbao/v2.6.2/sys/health
   sys.mounts.update:
+    operation_id: sys.mounts.update
     operation_class: DURABLE_MUTATION
     exposure: PUBLIC_AUTHENTICATED
     allowed_http_methods: [POST, PUT]
@@ -142,6 +144,7 @@ sample_operations:
     timeout_profile: durable-mutation
     compatibility_source: oracle://openbao/v2.6.2/sys/mounts
   secret.dynamic.read:
+    operation_id: secret.dynamic.read
     operation_class: LEASE_ISSUING_READ
     exposure: PUBLIC_AUTHENTICATED
     allowed_http_methods: [GET, POST]
@@ -165,6 +168,7 @@ sample_operations:
     timeout_profile: external-effect
     compatibility_source: oracle://openbao/v2.6.2/dynamic-secret
   auth.login:
+    operation_id: auth.login
     operation_class: AUTH_LOGIN
     exposure: PUBLIC_UNAUTHENTICATED
     allowed_http_methods: [POST]
@@ -188,6 +192,7 @@ sample_operations:
     timeout_profile: authentication
     compatibility_source: oracle://openbao/v2.6.2/auth/login
   token.create:
+    operation_id: token.create
     operation_class: TOKEN_ISSUE
     exposure: PUBLIC_AUTHENTICATED
     allowed_http_methods: [POST]
@@ -211,6 +216,7 @@ sample_operations:
     timeout_profile: durable-mutation
     compatibility_source: oracle://openbao/v2.6.2/auth/token/create
   seal.unseal.submit-share:
+    operation_id: seal.unseal.submit-share
     operation_class: SEAL_CEREMONY
     exposure: PUBLIC_UNAUTHENTICATED
     allowed_http_methods: [POST]
@@ -234,6 +240,7 @@ sample_operations:
     timeout_profile: ceremony
     compatibility_source: oracle://openbao/v2.6.2/sys/unseal
   cluster.join:
+    operation_id: cluster.join
     operation_class: CLUSTER_OPERATION
     exposure: CLUSTER_ONLY
     allowed_http_methods: [POST]
@@ -257,6 +264,7 @@ sample_operations:
     timeout_profile: cluster
     compatibility_source: oracle://openbao/v2.6.2/sys/storage/raft/join
   migration.cutover:
+    operation_id: migration.cutover
     operation_class: MIGRATION_OPERATION
     exposure: MIGRATION_ONLY
     allowed_http_methods: [POST]
