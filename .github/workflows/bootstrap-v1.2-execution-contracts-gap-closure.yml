@@ -1,4 +1,4 @@
-name: export-tested-v1-2-deepened-blocker-closure
+name: land-tested-v1-2-source-and-export-workflows
 
 on:
   push:
@@ -8,23 +8,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: export-tested-v1-2-deepened-blocker-closure-ubuntu
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  materialize-validate-and-export:
+  materialize-validate-land-and-export:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Checkout exact transport head without write credentials
+      - name: Checkout exact transport head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify isolated transport ancestry and surface
         shell: bash
@@ -104,7 +104,7 @@ jobs:
           find . -type f -name '*.pyc' -delete
           test ! -e .github/bootstrap-payload
 
-      - name: Validate historical and current plans
+      - name: Validate plans and every Python regression suite
         shell: bash
         run: |
           set -euo pipefail
@@ -116,11 +116,6 @@ jobs:
           python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
           python3 scripts/validate_h02_openraft_fault_lab_v1.py
           python3 scripts/validate_h02_blocker_closure_v1.py
-
-      - name: Execute every Python regression suite
-        shell: bash
-        run: |
-          set -euo pipefail
           python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
           python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
           python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
@@ -163,77 +158,76 @@ jobs:
                   assert value is False, (key, value)
           print('authority boolean sentinels remain false')
           PY
-          test -n "$(git diff --name-only HEAD)"
 
-      - name: Export exact tested tree delta manifest
+      - name: Export tested workflow delta before restoring transport workflows
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/v1.2-tested-tree"
-          python3 - "$RUNNER_TEMP/v1.2-tested-tree/final-tree-manifest.json" <<'PY'
-          import base64
+          out="$RUNNER_TEMP/v1.2-tested-workflows"
+          mkdir -p "$out"
+          cp .github/workflows/plan-integrity-v4.yml "$out/plan-integrity-v4.yml"
+          cat > "$out/delete-workflows.txt" <<'EOF'
+          .github/workflows/apply-h02-candidate-binding-contract.yml
+          .github/workflows/apply-h02-deterministic-contract-closure.yml
+          .github/workflows/apply-h02-validit-lock-binding.yml
+          .github/workflows/bootstrap-v1.2-execution-contracts-gap-closure.yml
+          .github/workflows/materialize-plan-v1-1.yml
+          EOF
+          python3 - "$out" <<'PY'
           import hashlib
           import json
-          import os
           import pathlib
-          import stat
           import subprocess
           import sys
 
-          def zpaths(command: list[str]) -> list[str]:
-              raw = subprocess.check_output(command)
-              return [item.decode('utf-8') for item in raw.split(b'\0') if item]
-
-          tracked = zpaths(['git', 'diff', '--name-only', '-z', 'HEAD'])
-          untracked = zpaths(['git', 'ls-files', '--others', '--exclude-standard', '-z'])
-          paths = sorted(set(tracked + untracked))
-          assert paths, 'empty final delta'
-          entries = []
-          for name in paths:
-              path = pathlib.Path(name)
-              if not path.exists():
-                  entries.append({'path': name, 'delete': True})
-                  continue
-              assert path.is_file(), name
-              data = path.read_bytes()
-              mode = '100755' if os.stat(path).st_mode & stat.S_IXUSR else '100644'
-              entries.append({
-                  'path': name,
-                  'delete': False,
-                  'mode': mode,
-                  'type': 'blob',
-                  'sha256': hashlib.sha256(data).hexdigest(),
-                  'content_base64': base64.b64encode(data).decode('ascii'),
-              })
+          root = pathlib.Path(sys.argv[1])
+          workflow = root / 'plan-integrity-v4.yml'
           document = {
-              'schema': 'heptabao.tested-tree-delta.v1',
-              'repository': os.environ['GITHUB_REPOSITORY'],
+              'schema': 'heptabao.tested-workflow-delta.v1',
               'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'source_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
-              'workflow_run_id': os.environ['GITHUB_RUN_ID'],
-              'workflow_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'plan_integrity_v4_sha256': hashlib.sha256(workflow.read_bytes()).hexdigest(),
+              'delete_paths': [
+                  line.strip()
+                  for line in (root / 'delete-workflows.txt').read_text(encoding='utf-8').splitlines()
+                  if line.strip()
+              ],
               'qualification': False,
               'authority_effect': 'NONE',
-              'entry_count': len(entries),
-              'entries': entries,
           }
-          payload = json.dumps(document, sort_keys=True, separators=(',', ':')).encode('utf-8')
-          output = pathlib.Path(sys.argv[1])
-          output.write_bytes(payload + b'\n')
-          digest = hashlib.sha256(payload + b'\n').hexdigest()
-          pathlib.Path(output.parent / 'manifest.sha256').write_text(
-              f'{digest}  {output.name}\n', encoding='utf-8'
+          payload = json.dumps(document, sort_keys=True, indent=2) + '\n'
+          (root / 'workflow-delta-manifest.json').write_text(payload, encoding='utf-8')
+          (root / 'workflow-delta-manifest.sha256').write_text(
+              hashlib.sha256(payload.encode('utf-8')).hexdigest() + '  workflow-delta-manifest.json\n',
+              encoding='utf-8',
           )
-          with open(output.parent / 'final-tree.patch', 'wb') as patch:
-              subprocess.run(['git', 'diff', '--binary', 'HEAD'], check=True, stdout=patch)
-          print(f'exported entries={len(entries)} manifest_sha256={digest}')
           PY
 
-      - name: Upload tested final tree manifest
+      - name: Commit and push the tested non-workflow tree only
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$GITHUB_REF_NAME"
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA" || {
+            printf 'branch drift: remote=%s tested=%s\n' "$remote_head" "$GITHUB_SHA" >&2
+            exit 1
+          }
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test -z "$(git diff --cached --name-only | grep '^\.github/workflows/' || true)"
+          git diff --cached --check
+          git commit -m "docs(plan): land tested V1.2 execution contracts and source gaps"
+          git push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > "$RUNNER_TEMP/v1.2-tested-workflows/non-workflow-commit.txt"
+
+      - name: Upload tested workflow delta
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v1-2-tested-tree-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/v1.2-tested-tree/
+          name: v1-2-tested-workflows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.2-tested-workflows/
           if-no-files-found: error
           retention-days: 30
           compression-level: 9
