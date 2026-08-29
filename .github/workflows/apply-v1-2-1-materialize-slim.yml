@@ -1,9 +1,9 @@
-name: apply-v1-2-1-materialize-explicit-lifecycle-slim
+name: apply-v1-2-1-materialize-explicit-lifecycle-arm64
 
 on:
   push:
     branches:
-      - "codex/plan-v1.2.1-direct-generation-closure-v2"
+      - "exec/v1-2-1-lifecycle-materialize-arm64-v1"
     paths:
       - ".github/workflows/apply-v1-2-1-materialize-slim.yml"
       - ".github/workflows/explicit-generation-lifecycle.trigger"
@@ -13,12 +13,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-v1-2-1-materialize-explicit-lifecycle-slim
+  group: apply-v1-2-1-materialize-explicit-lifecycle-arm64
   cancel-in-progress: true
 
 jobs:
   materialize-and-commit:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - name: Checkout exact transition head
@@ -76,4 +76,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "fix(h02): materialize fail-closed durable lifecycle"
-          git push origin HEAD:codex/plan-v1.2.1-direct-generation-closure-v2
+          git push origin HEAD:exec/v1-2-1-lifecycle-materialize-arm64-v1
