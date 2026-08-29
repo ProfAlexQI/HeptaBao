@@ -121,13 +121,13 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
 
         let snapshot_copy = root.join("snapshot-recovery-copy");
         copy_tree(&snapshot_source, &snapshot_copy)?;
-        let state_path = snapshot_copy.join("state-machine.bin");
-        fs::remove_file(&state_path)?;
         let expected_snapshot_state = expected_after_restart.client_status.clone();
         let snapshot_recovered = spawn_blocking(move || DurableStateMachine::open(snapshot_copy))
             .await??;
         let snapshot_recovery_matches =
-            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state;
+            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
+                && snapshot_recovered.has_current_snapshot().await
+                && snapshot_recovered.generation().await > 1;
 
         let corrupt_log_root = root.join("corrupt-log-copy");
         copy_tree(&root.join("node-1").join("log"), &corrupt_log_root)?;
@@ -138,7 +138,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
 
         let corrupt_state_root = root.join("corrupt-state-copy");
         copy_tree(&root.join("node-1").join("state-machine"), &corrupt_state_root)?;
-        flip_first_payload_byte(&corrupt_state_root.join("state-machine.bin"))?;
+        flip_first_payload_byte(&corrupt_state_root.join("state-bundle.bin"))?;
         let corrupt_state_rejected =
             spawn_blocking(move || DurableStateMachine::open(corrupt_state_root))
                 .await?
@@ -174,7 +174,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 }),
             ),
             case(
-                "durable-snapshot-recovers-missing-state-file",
+                "durable-snapshot-state-atomic-generation-reopen",
                 snapshot_recovery_matches,
                 json!({"matches": snapshot_recovery_matches}),
             ),
@@ -216,7 +216,8 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 "committed_index_persisted": true,
                 "log_io_flushed_after_sync_all": true,
                 "state_machine_persisted_before_responder": true,
-                "snapshot_atomic_publish_and_parent_sync": true,
+                "snapshot_state_atomic_bundle_publish": true,
+                "state_publish_after_durable_write": true,
                 "full_cluster_disk_restart": true,
                 "read_index_after_restart": true,
                 "corruption_rejected": true,

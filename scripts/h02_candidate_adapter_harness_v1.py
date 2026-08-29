@@ -85,7 +85,22 @@ PROFILES: dict[str, dict[str, Any]] = {
         "domain": "RAFT",
         "manifest": "probes/h02/openraft-tokio/Cargo.toml",
         "candidate_package": "openraft",
-        "support_dependencies": ["openraft-memstore", "serde_json", "tokio", "validit"],
+        "support_dependencies": [
+            "futures",
+            "openraft-macros",
+            "openraft-memstore",
+            "openraft-rt",
+            "openraft-rt-tokio",
+            "serde",
+            "serde_json",
+            "tokio",
+        ],
+        "source_overrides": {
+            "validit": {
+                "git": "https://github.com/drmingdrmer/validit.git",
+                "rev": "7016fa5e072a86092928144b3a3040381e6964e9",
+            }
+        },
         "adapter_scope": "API_SEAM_AND_FAILURE_MODEL_PARTIAL",
         "cases": [
             "raft-deterministic-apply-and-restart",
@@ -177,6 +192,24 @@ def _direct_dependency_binding(path: Path, package: str, spec: Any) -> dict[str,
     }
 
 
+def _source_override_binding(path: Path, package: str, spec: Any) -> dict[str, Any]:
+    if not isinstance(spec, dict):
+        raise Failure(f"{path}: source override {package!r} must be an inline table")
+    allowed_keys = {"git", "rev"}
+    unexpected_keys = sorted(set(spec) - allowed_keys)
+    if unexpected_keys:
+        raise Failure(
+            f"{path}: source override {package!r} has unapproved keys: {unexpected_keys!r}"
+        )
+    git = str(spec.get("git", ""))
+    rev = str(spec.get("rev", ""))
+    if not git.startswith("https://") or git.endswith("/"):
+        raise Failure(f"{path}: source override {package!r} must use an exact HTTPS Git URL")
+    if len(rev) != 40 or any(character not in "0123456789abcdef" for character in rev):
+        raise Failure(f"{path}: source override {package!r} must use a full lowercase commit SHA")
+    return {"package": package, "git": git, "rev": rev}
+
+
 def manifest_binding(
     root: Path,
     profile: dict[str, Any],
@@ -203,6 +236,45 @@ def manifest_binding(
         raise Failure(f"{path}: candidate dependency cannot also be a support dependency")
     if len(support_dependencies) != len(set(support_dependencies)):
         raise Failure(f"{path}: duplicate support dependency declaration")
+
+    expected_overrides_raw = profile.get("source_overrides", {})
+    if not isinstance(expected_overrides_raw, dict):
+        raise Failure(f"{path}: expected source override profile must be a mapping")
+    expected_overrides = {
+        str(package): _source_override_binding(path, str(package), spec)
+        for package, spec in sorted(expected_overrides_raw.items())
+    }
+    patch_tables = document.get("patch", {})
+    if not isinstance(patch_tables, dict):
+        raise Failure(f"{path}: patch tables must be a mapping")
+    if expected_overrides:
+        if set(patch_tables) != {"crates-io"}:
+            raise Failure(
+                f"{path}: source override registry drift: {sorted(patch_tables)!r}"
+            )
+        crates_io = patch_tables.get("crates-io", {})
+        if not isinstance(crates_io, dict):
+            raise Failure(f"{path}: patch.crates-io must be a mapping")
+        if set(crates_io) != set(expected_overrides):
+            missing = sorted(set(expected_overrides) - set(crates_io))
+            unexpected = sorted(set(crates_io) - set(expected_overrides))
+            raise Failure(
+                f"{path}: source override drift: missing={missing!r} unexpected={unexpected!r}"
+            )
+        source_overrides = {
+            str(package): _source_override_binding(path, str(package), spec)
+            for package, spec in sorted(crates_io.items())
+        }
+        for package, expected in expected_overrides.items():
+            if source_overrides[package] != expected:
+                raise Failure(
+                    f"{path}: source override {package!r} drift: "
+                    f"{source_overrides[package]!r} != {expected!r}"
+                )
+    else:
+        if patch_tables:
+            raise Failure(f"{path}: unbound patch tables are forbidden")
+        source_overrides = {}
 
     expected_packages = {candidate_package, *support_dependencies}
     actual_packages = set(dependencies)
@@ -233,6 +305,7 @@ def manifest_binding(
         "features": candidate["features"],
         "support_dependencies": support_dependencies,
         "direct_dependencies": dependency_profile,
+        "source_overrides": source_overrides,
         "toolchain": toolchain,
         "target": target,
     }

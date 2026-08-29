@@ -35,14 +35,18 @@ CANDIDATE_FEATURES = {
 }
 
 SUPPORT_DEPENDENCY_SPECS = {
+    "futures": 'futures = "=0.3.34"',
     "jobserver": 'jobserver = "=0.1.32"',
+    "openraft-macros": 'openraft-macros = "=0.10.0-alpha.33"',
     "openraft-memstore": 'openraft-memstore = "=0.10.0-alpha.33"',
+    "openraft-rt": 'openraft-rt = "=0.10.0-alpha.33"',
+    "openraft-rt-tokio": 'openraft-rt-tokio = "=0.10.0-alpha.33"',
+    "serde": 'serde = { version = "=1.0.229", features = ["derive"] }',
     "serde_json": 'serde_json = "=1.0.145"',
     "tokio": (
         'tokio = { version = "=1.53.1", default-features = false, '
         'features = ["macros", "process", "rt-multi-thread", "sync", "time"] }'
     ),
-    "validit": 'validit = "=0.2.6"',
     "zeroize": 'zeroize = "=1.8.2"',
 }
 
@@ -67,6 +71,14 @@ def make_repo(root: Path, profile_name: str) -> Path:
     ]
     for dependency in profile["support_dependencies"]:
         lines.append(SUPPORT_DEPENDENCY_SPECS[dependency])
+    source_overrides = profile.get("source_overrides", {})
+    if source_overrides:
+        lines.extend(["", "[patch.crates-io]"])
+        for dependency, spec in sorted(source_overrides.items()):
+            lines.append(
+                f'{dependency} = {{ git = {json.dumps(spec["git"])}, '
+                f'rev = {json.dumps(spec["rev"])} }}'
+            )
     lines.extend(["", "[workspace]", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
@@ -221,6 +233,60 @@ class CandidateTests(unittest.TestCase):
             self.assertNotEqual(
                 original["feature_profile_sha256"], changed["feature_profile_sha256"]
             )
+
+
+    def test_source_override_is_separate_and_digest_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_repo(root, "openraft")
+            binding = mod.manifest_binding(
+                root,
+                mod.PROFILES["openraft"],
+                "1.88.0",
+                "x86_64-unknown-linux-gnu",
+            )
+            self.assertNotIn("validit", binding["direct_dependencies"])
+            self.assertEqual(
+                binding["source_overrides"]["validit"]["rev"],
+                "7016fa5e072a86092928144b3a3040381e6964e9",
+            )
+
+    def test_source_override_drift_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = make_repo(root, "openraft")
+            expected = mod.PROFILES["openraft"]["source_overrides"]["validit"]["rev"]
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(expected, "0" * 40, 1),
+                encoding="utf-8",
+            )
+            with self.assertRaises(mod.Failure):
+                mod.manifest_binding(
+                    root,
+                    mod.PROFILES["openraft"],
+                    "1.88.0",
+                    "x86_64-unknown-linux-gnu",
+                )
+
+    def test_unbound_patch_table_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = make_repo(root, "tokio")
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "\n[workspace]",
+                    '\n[patch.crates-io]\nserde = { git = "https://example.invalid/serde", rev = "' + "1" * 40 + '" }\n\n[workspace]',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(mod.Failure):
+                mod.manifest_binding(
+                    root,
+                    mod.PROFILES["tokio"],
+                    "1.98.0",
+                    "x86_64-unknown-linux-gnu",
+                )
 
     def test_meta_mismatch_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

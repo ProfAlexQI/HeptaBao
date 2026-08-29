@@ -5,6 +5,11 @@
 
 # Critical governance and evidence surfaces.
 /docs/plan/ @ProfHepta
+/docs/architecture/ @ProfHepta
+/docs/compatibility/ @ProfHepta
+/docs/governance/ @ProfHepta
+/docs/security/ @ProfHepta
+/docs/storage/ @ProfHepta
 /planning/ @ProfHepta
 /schemas/ @ProfHepta
 /specs/ @ProfHepta

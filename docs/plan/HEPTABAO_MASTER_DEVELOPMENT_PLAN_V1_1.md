@@ -1,3 +1,5 @@
+> **Historical notice:** V1.1 is retained for audit history and is superseded as the current execution plan by `HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md`. V1.1 grants no authority.
+
 # HeptaBao 全量 Rust 重写 OpenBao 服务端——总体开发计划 V1.1
 
 **日期：** 2026-08-28  

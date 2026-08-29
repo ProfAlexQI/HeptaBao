@@ -1,0 +1,186 @@
+schema: heptabao.blocker-register.v1
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.2'
+status: ACTIVE_FAIL_CLOSED
+authority_effect: NONE
+rules:
+- CLOSED requires exact-head evidence and every closure criterion
+- repository-controlled and external blockers are never conflated
+- automations may not fabricate independent review legal disposition or authority
+- failed executable runs remain immutable evidence
+blockers:
+- id: HB-BLK-REPO-001
+  class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: self-modifying validation workflows
+  owner_role: program-security
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - no active workflow has contents write
+  - no persist-credentials true
+  - no git commit or push in workflows
+  - exact-head policy validator PASS
+  evidence:
+  - scripts/validate_plan_v1_2.py
+  - .github/workflows/plan-integrity-v4.yml
+- id: HB-BLK-REPO-002
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: multiple stale status files claimed current truth
+  owner_role: program
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - normative manifest identifies one current state input
+  - historical objects marked non-normative
+  - resolved state generated from exact source
+  evidence:
+  - planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml
+  - scripts/render_canonical_project_state_v1.py
+- id: HB-BLK-REPO-003
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: V1.1 stated work-package count does not match catalog
+  owner_role: program
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - V1.2 catalog contains exactly 301 unique IDs
+  - validator rejects additions removals duplicates or count drift
+  evidence:
+  - planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml
+  - scripts/validate_plan_v1_2.py
+- id: HB-BLK-REPO-004
+  class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: OpenRaft committed lock does not bind audited validit source
+  owner_role: platform
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - lock has one validit 0.2.5 exact git revision
+  - exact alpha.33 family unique
+  - cargo metadata locked succeeds on exact head
+  evidence:
+  - probes/h02/openraft-tokio/Cargo.lock
+  - .github/workflows/plan-integrity-v4.yml
+- id: HB-BLK-REPO-005
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: candidate adapter conflates direct dependencies and source overrides
+  owner_role: platform
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - source override independently parsed and digest-bound
+  - branch tag path and drift rejected
+  - negative tests PASS
+  evidence:
+  - scripts/h02_candidate_adapter_harness_v1.py
+  - tests/platform/test_h02_candidate_adapter_harness_v1.py
+- id: HB-BLK-REPO-006
+  class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: durable store publishes in-memory state before persistence
+  owner_role: storage-distributed-systems
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - all log/state mutations build a candidate copy
+  - persist succeeds before in-memory publish and callback
+  - fault regression tests and exact-head Rust lanes PASS
+  evidence:
+  - probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
+  - .github/workflows/plan-integrity-v4.yml
+- id: HB-BLK-REPO-007
+  class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: state machine and snapshot can cross generations
+  owner_role: storage-distributed-systems
+  state: REMEDIATION_IMPLEMENTED
+  closure_criteria:
+  - state and snapshot stored in one atomic versioned bundle or atomic manifest
+  - corruption and reopen fail closed
+  - exact-head durable tests PASS
+  evidence:
+  - probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
+- id: HB-BLK-CTRL-001
+  class: REPOSITORY_SETTING
+  severity: CRITICAL
+  title: canonical integration branch has no enforced ruleset
+  owner_role: repository-admin
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - required checks enforced
+  - stale approvals dismissed
+  - admin bypass disabled
+  - signed commits or equivalent provenance enforced
+  evidence: []
+- id: HB-BLK-EXT-001
+  class: EXTERNAL_GOVERNANCE
+  severity: CRITICAL
+  title: independent accountable reviewer identities absent
+  owner_role: program-owner
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - program security and domain roles assigned to distinct real identities
+  - conflicts and keys recorded
+  - first scoped approvals verified
+  evidence: []
+- id: HB-BLK-EXT-002
+  class: EXTERNAL_LEGAL
+  severity: CRITICAL
+  title: outbound license clean-room trademark patent and export disposition absent
+  owner_role: legal
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - signed legal disposition current and scoped
+  evidence: []
+- id: HB-BLK-EXT-003
+  class: EXTERNAL_SECURITY
+  severity: CRITICAL
+  title: private disclosure 24x7 incident and revocation operation absent
+  owner_role: security-operations
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - private channel operational
+  - roster assigned
+  - tabletop and technical revocation drill passed
+  evidence: []
+- id: HB-BLK-EXT-004
+  class: EXTERNAL_SIGNING
+  severity: CRITICAL
+  title: isolated signer trust root transparency and emergency revocation absent
+  owner_role: release-security
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - role-separated keys provisioned
+  - trust root and transparency operational
+  - revocation ceremony executed
+  evidence: []
+- id: HB-BLK-EXT-005
+  class: EXTERNAL_ORACLE
+  severity: CRITICAL
+  title: real restricted Oracle fixtures and signed transfer absent
+  owner_role: compatibility
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - restricted lab and ACLs provisioned
+  - first raw capture sanitized
+  - signed provenance transfer independently reviewed
+  evidence: []
+- id: HB-BLK-EXT-006
+  class: EXTERNAL_STORAGE_LAB
+  severity: CRITICAL
+  title: kernel or VM power-cut and filesystem crash-consistency evidence absent
+  owner_role: storage
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - separately operated lab executes declared crash matrix
+  - exact source lock and environment attested
+  - all critical cases PASS
+  evidence: []
+- id: HB-BLK-EXT-007
+  class: EXTERNAL_REPRODUCTION
+  severity: CRITICAL
+  title: independently operated reproduction count is zero
+  owner_role: qualification
+  state: EXTERNAL_ACTION_REQUIRED
+  closure_criteria:
+  - distinct operator credential root and artifact custody reproduce exact source/lock/profile
+  evidence: []

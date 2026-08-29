@@ -207,7 +207,11 @@ def validate_workflows() -> None:
     )
     require_tokens(
         MSRV_WORKFLOW,
-        ["1.85.0 1.86.0 1.87.0 1.88.0 1.98.0", '"effective_msrv": "1.88.0"'],
+        [
+            'BOUNDARY_TOOLCHAINS: "1.85.0 1.86.0 1.87.0"',
+            'EFFECTIVE_TOOLCHAINS: "1.88.0 1.98.0"',
+            '"effective_msrv": "1.88.0"',
+        ],
     )
 
 

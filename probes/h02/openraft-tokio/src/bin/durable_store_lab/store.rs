@@ -20,8 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 const LOG_MAGIC: [u8; 8] = *b"HBRLOG01";
-const STATE_MAGIC: [u8; 8] = *b"HBRSM001";
-const SNAPSHOT_MAGIC: [u8; 8] = *b"HBRSNP01";
+const STATE_BUNDLE_MAGIC: [u8; 8] = *b"HBRSB001";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -90,7 +89,47 @@ fn decode_envelope(magic: [u8; 8], bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(payload.to_vec())
 }
 
+fn recover_interrupted_replace(path: &Path) -> io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid(format!("{} has no parent directory", path.display())))?;
+    if !parent.is_dir() {
+        return Ok(());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| invalid("durable file name is not valid UTF-8"))?;
+    let prefix = format!(".{file_name}.");
+    let mut previous = fs::read_dir(parent)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| {
+            candidate
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".previous"))
+        })
+        .collect::<Vec<_>>();
+    previous.sort();
+    match previous.as_slice() {
+        [] => Ok(()),
+        [candidate] => {
+            fs::rename(candidate, path)?;
+            sync_parent(path)
+        }
+        _ => Err(invalid(format!(
+            "multiple interrupted replacement candidates for {}",
+            path.display()
+        ))),
+    }
+}
+
 fn read_payload(path: &Path, magic: [u8; 8]) -> io::Result<Vec<u8>> {
+    recover_interrupted_replace(path)?;
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
     if metadata.len() > 128 * 1024 * 1024 {
@@ -297,8 +336,11 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
 
     async fn save_vote(&mut self, vote: &VoteOf<TypeConfig>) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
-        state.vote = Some(*vote);
-        self.persist(&state)
+        let mut candidate = state.clone();
+        candidate.vote = Some(*vote);
+        self.persist(&candidate)?;
+        *state = candidate;
+        Ok(())
     }
 
     async fn save_committed(
@@ -306,8 +348,11 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
         committed: Option<LogIdOf<TypeConfig>>,
     ) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
-        state.committed = committed;
-        self.persist(&state)
+        let mut candidate = state.clone();
+        candidate.committed = committed;
+        self.persist(&candidate)?;
+        *state = candidate;
+        Ok(())
     }
 
     async fn read_committed(&mut self) -> Result<Option<LogIdOf<TypeConfig>>, io::Error> {
@@ -324,11 +369,12 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
         I::IntoIter: OptionalSend,
     {
         let mut state = self.state.lock().await;
+        let mut candidate = state.clone();
         for entry in entries {
             let index = entry.index();
             let serialized =
                 serde_json::to_string(&entry).map_err(|error| invalid(error.to_string()))?;
-            if let Some(existing) = state.log.get(&index) {
+            if let Some(existing) = candidate.log.get(&index) {
                 if existing != &serialized {
                     let error = invalid(format!(
                         "attempted to overwrite log index {index} without truncate"
@@ -337,12 +383,12 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
                     return Err(error);
                 }
             } else {
-                state.log.insert(index, serialized);
+                candidate.log.insert(index, serialized);
             }
         }
-        let result = self.persist(&state);
-        match result {
+        match self.persist(&candidate) {
             Ok(()) => {
+                *state = candidate;
                 callback.io_completed(Ok(()));
                 Ok(())
             }
@@ -365,32 +411,38 @@ impl RaftLogStorage<TypeConfig> for DurableLogStore {
             None => 0,
         };
         let mut state = self.state.lock().await;
-        let remove = state
+        let mut candidate = state.clone();
+        let remove = candidate
             .log
             .range(start..)
             .map(|(index, _)| *index)
             .collect::<Vec<_>>();
         for index in remove {
-            state.log.remove(&index);
+            candidate.log.remove(&index);
         }
-        self.persist(&state)
+        self.persist(&candidate)?;
+        *state = candidate;
+        Ok(())
     }
 
     async fn purge(&mut self, log_id: LogIdOf<TypeConfig>) -> Result<(), io::Error> {
         let mut state = self.state.lock().await;
-        if state.last_purged_log_id.is_some_and(|last| last > log_id) {
+        let mut candidate = state.clone();
+        if candidate.last_purged_log_id.is_some_and(|last| last > log_id) {
             return Err(invalid("purge log id regressed"));
         }
-        let remove = state
+        let remove = candidate
             .log
             .range(..=log_id.index)
             .map(|(index, _)| *index)
             .collect::<Vec<_>>();
         for index in remove {
-            state.log.remove(&index);
+            candidate.log.remove(&index);
         }
-        state.last_purged_log_id = Some(log_id);
-        self.persist(&state)
+        candidate.last_purged_log_id = Some(log_id);
+        self.persist(&candidate)?;
+        *state = candidate;
+        Ok(())
     }
 }
 
@@ -400,64 +452,102 @@ struct PersistentSnapshot {
     data: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistentStateBundle {
+    format_version: u16,
+    generation: u64,
+    state: MemStoreStateMachine,
+    current_snapshot: Option<PersistentSnapshot>,
+}
+
+impl Default for PersistentStateBundle {
+    fn default() -> Self {
+        Self {
+            format_version: 1,
+            generation: 1,
+            state: MemStoreStateMachine::default(),
+            current_snapshot: None,
+        }
+    }
+}
+
+impl PersistentStateBundle {
+    fn next_generation(&self) -> io::Result<u64> {
+        self.generation
+            .checked_add(1)
+            .ok_or_else(|| invalid("state bundle generation overflow"))
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        if self.format_version != 1 || self.generation == 0 {
+            return Err(invalid("unsupported or zero state bundle generation"));
+        }
+        if let Some(snapshot) = &self.current_snapshot {
+            let snapshot_state: MemStoreStateMachine = serde_json::from_slice(&snapshot.data)
+                .map_err(|error| invalid(error.to_string()))?;
+            if snapshot_state.last_applied_log != snapshot.meta.last_log_id {
+                return Err(invalid("snapshot state and metadata last-applied mismatch"));
+            }
+            let state_membership = serde_json::to_vec(&snapshot_state.last_membership)
+                .map_err(|error| invalid(error.to_string()))?;
+            let meta_membership = serde_json::to_vec(&snapshot.meta.last_membership)
+                .map_err(|error| invalid(error.to_string()))?;
+            if state_membership != meta_membership {
+                return Err(invalid("snapshot state and metadata membership mismatch"));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DurableStateMachine {
-    state_path: PathBuf,
-    snapshot_path: PathBuf,
-    state: Arc<Mutex<MemStoreStateMachine>>,
-    current_snapshot: Arc<Mutex<Option<PersistentSnapshot>>>,
+    bundle_path: PathBuf,
+    bundle: Arc<Mutex<PersistentStateBundle>>,
 }
 
 impl DurableStateMachine {
     pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref();
         fs::create_dir_all(root)?;
-        let state_path = root.join("state-machine.bin");
-        let snapshot_path = root.join("snapshot.bin");
-        let snapshot = if snapshot_path.is_file() {
-            Some(read_json::<PersistentSnapshot>(
-                &snapshot_path,
-                SNAPSHOT_MAGIC,
-            )?)
+        let bundle_path = root.join("state-bundle.bin");
+        let bundle = if bundle_path.is_file() {
+            read_json(&bundle_path, STATE_BUNDLE_MAGIC)?
         } else {
-            None
+            let initial = PersistentStateBundle::default();
+            write_json(&bundle_path, STATE_BUNDLE_MAGIC, &initial)?;
+            initial
         };
-        let state = if state_path.is_file() {
-            read_json(&state_path, STATE_MAGIC)?
-        } else if let Some(snapshot) = &snapshot {
-            serde_json::from_slice(&snapshot.data).map_err(|error| invalid(error.to_string()))?
-        } else {
-            MemStoreStateMachine::default()
-        };
-        if !state_path.is_file() {
-            write_json(&state_path, STATE_MAGIC, &state)?;
-        }
+        bundle.validate()?;
         Ok(Self {
-            state_path,
-            snapshot_path,
-            state: Arc::new(Mutex::new(state)),
-            current_snapshot: Arc::new(Mutex::new(snapshot)),
+            bundle_path,
+            bundle: Arc::new(Mutex::new(bundle)),
         })
     }
 
-    fn persist_state(&self, state: &MemStoreStateMachine) -> io::Result<()> {
-        write_json(&self.state_path, STATE_MAGIC, state)
-    }
-
-    fn persist_snapshot(&self, snapshot: &PersistentSnapshot) -> io::Result<()> {
-        write_json(&self.snapshot_path, SNAPSHOT_MAGIC, snapshot)
+    fn persist_bundle(&self, bundle: &PersistentStateBundle) -> io::Result<()> {
+        bundle.validate()?;
+        write_json(&self.bundle_path, STATE_BUNDLE_MAGIC, bundle)
     }
 
     pub async fn get_state_machine(&self) -> MemStoreStateMachine {
-        self.state.lock().await.clone()
+        self.bundle.lock().await.state.clone()
+    }
+
+    pub async fn has_current_snapshot(&self) -> bool {
+        self.bundle.lock().await.current_snapshot.is_some()
+    }
+
+    pub async fn generation(&self) -> u64 {
+        self.bundle.lock().await.generation
     }
 
     pub fn state_path(&self) -> &Path {
-        &self.state_path
+        &self.bundle_path
     }
 
     pub fn snapshot_path(&self) -> &Path {
-        &self.snapshot_path
+        &self.bundle_path
     }
 }
 
@@ -467,7 +557,8 @@ impl RaftSnapshotBuilder<TypeConfig> for DurableStateMachine {
     async fn build_snapshot(
         &mut self,
     ) -> Result<SnapshotOf<TypeConfig, Self::SnapshotData>, io::Error> {
-        let state = self.state.lock().await.clone();
+        let mut bundle = self.bundle.lock().await;
+        let state = bundle.state.clone();
         let data = serde_json::to_vec(&state).map_err(|error| invalid(error.to_string()))?;
         let meta = SnapshotMetaOf::<TypeConfig> {
             last_log_id: state.last_applied_log,
@@ -477,8 +568,11 @@ impl RaftSnapshotBuilder<TypeConfig> for DurableStateMachine {
             meta: meta.clone(),
             data: data.clone(),
         };
-        self.persist_snapshot(&snapshot)?;
-        *self.current_snapshot.lock().await = Some(snapshot);
+        let mut candidate = bundle.clone();
+        candidate.generation = candidate.next_generation()?;
+        candidate.current_snapshot = Some(snapshot);
+        self.persist_bundle(&candidate)?;
+        *bundle = candidate;
         Ok(SnapshotOf::<TypeConfig, Cursor<Vec<u8>>> {
             meta,
             snapshot: Cursor::new(data),
@@ -493,8 +587,11 @@ impl RaftStateMachine<TypeConfig> for DurableStateMachine {
     async fn applied_state(
         &mut self,
     ) -> Result<(Option<LogIdOf<TypeConfig>>, StoredMembershipOf<TypeConfig>), io::Error> {
-        let state = self.state.lock().await;
-        Ok((state.last_applied_log, state.last_membership.clone()))
+        let bundle = self.bundle.lock().await;
+        Ok((
+            bundle.state.last_applied_log,
+            bundle.state.last_membership.clone(),
+        ))
     }
 
     async fn apply<Strm>(&mut self, mut entries: Strm) -> Result<(), io::Error>
@@ -503,25 +600,29 @@ impl RaftStateMachine<TypeConfig> for DurableStateMachine {
     {
         while let Some((entry, responder)) = entries.try_next().await? {
             let response = {
-                let mut state = self.state.lock().await;
-                state.last_applied_log = Some(entry.log_id);
+                let mut bundle = self.bundle.lock().await;
+                let mut candidate = bundle.clone();
+                candidate.generation = candidate.next_generation()?;
+                candidate.state.last_applied_log = Some(entry.log_id);
                 let response = match entry.payload {
                     EntryPayload::Blank => ClientResponse(None),
                     EntryPayload::Normal(ref data) => {
-                        let previous = state
+                        let previous = candidate
+                            .state
                             .client_status
                             .insert(data.client.clone(), data.status.clone());
                         ClientResponse(previous)
                     }
                     EntryPayload::Membership(ref membership) => {
-                        state.last_membership = StoredMembershipOf::<TypeConfig>::new(
+                        candidate.state.last_membership = StoredMembershipOf::<TypeConfig>::new(
                             Some(entry.log_id),
                             membership.clone(),
                         );
                         ClientResponse(None)
                     }
                 };
-                self.persist_state(&state)?;
+                self.persist_bundle(&candidate)?;
+                *bundle = candidate;
                 response
             };
             if let Some(responder) = responder {
@@ -561,10 +662,13 @@ impl RaftStateMachine<TypeConfig> for DurableStateMachine {
             meta: meta.clone(),
             data,
         };
-        self.persist_state(&state)?;
-        self.persist_snapshot(&persisted)?;
-        *self.state.lock().await = state;
-        *self.current_snapshot.lock().await = Some(persisted);
+        let mut bundle = self.bundle.lock().await;
+        let mut candidate = bundle.clone();
+        candidate.generation = candidate.next_generation()?;
+        candidate.state = state;
+        candidate.current_snapshot = Some(persisted);
+        self.persist_bundle(&candidate)?;
+        *bundle = candidate;
         Ok(())
     }
 
@@ -572,9 +676,10 @@ impl RaftStateMachine<TypeConfig> for DurableStateMachine {
         &mut self,
     ) -> Result<Option<SnapshotOf<TypeConfig, Self::SnapshotData>>, io::Error> {
         Ok(self
-            .current_snapshot
+            .bundle
             .lock()
             .await
+            .current_snapshot
             .clone()
             .map(|snapshot| SnapshotOf::<TypeConfig, Cursor<Vec<u8>>> {
                 meta: snapshot.meta,
@@ -592,4 +697,99 @@ pub fn flip_first_payload_byte(path: &Path) -> io::Result<()> {
     fs::write(path, bytes)?;
     File::open(path)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DurableLogStore, DurableStateMachine, LOG_MAGIC, PersistentLogState,
+        PersistentStateBundle, RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, read_json,
+        write_json,
+    };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tokio::sync::Mutex;
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "heptabao-{label}-{}-{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[tokio::test]
+    async fn failed_log_persist_does_not_publish_candidate_state() {
+        let root = root("log-persist-failure");
+        fs::create_dir_all(&root).expect("test root");
+        let blocking_parent = root.join("not-a-directory");
+        fs::write(&blocking_parent, b"block").expect("blocking file");
+        let mut log = BTreeMap::new();
+        log.insert(1, "synthetic-entry".to_owned());
+        let state = PersistentLogState {
+            log,
+            ..PersistentLogState::default()
+        };
+        let mut store = DurableLogStore {
+            state_path: blocking_parent.join("raft-log.bin"),
+            state: Arc::new(Mutex::new(state)),
+        };
+
+        let result = store.truncate_after(None).await;
+        assert!(result.is_err());
+        assert!(store.state.lock().await.log.contains_key(&1));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn failed_snapshot_persist_does_not_publish_snapshot_or_generation() {
+        let root = root("snapshot-persist-failure");
+        fs::create_dir_all(&root).expect("test root");
+        let blocking_parent = root.join("not-a-directory");
+        fs::write(&blocking_parent, b"block").expect("blocking file");
+        let initial = PersistentStateBundle::default();
+        let mut state_machine = DurableStateMachine {
+            bundle_path: blocking_parent.join("state-bundle.bin"),
+            bundle: Arc::new(Mutex::new(initial)),
+        };
+
+        let result = state_machine.build_snapshot().await;
+        assert!(result.is_err());
+        let bundle = state_machine.bundle.lock().await;
+        assert_eq!(bundle.generation, 1);
+        assert!(bundle.current_snapshot.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_previous_file_is_recovered_fail_closed() {
+        let root = root("replace-recovery");
+        fs::create_dir_all(&root).expect("test root");
+        let target = root.join("state-bundle.bin");
+        let previous = root.join(".state-bundle.bin.1.1.previous");
+        let expected = PersistentStateBundle::default();
+        write_json(&previous, STATE_BUNDLE_MAGIC, &expected).expect("write previous");
+
+        let recovered: PersistentStateBundle =
+            read_json(&target, STATE_BUNDLE_MAGIC).expect("recover previous");
+        assert_eq!(recovered.generation, expected.generation);
+        assert!(target.is_file());
+        assert!(!previous.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn log_envelope_round_trip_remains_bounded() {
+        let root = root("log-roundtrip");
+        fs::create_dir_all(&root).expect("test root");
+        let path = root.join("raft-log.bin");
+        let expected = PersistentLogState::default();
+        write_json(&path, LOG_MAGIC, &expected).expect("write log");
+        let _: PersistentLogState = read_json(&path, LOG_MAGIC).expect("read log");
+        let _ = fs::remove_dir_all(root);
+    }
 }
