@@ -29,13 +29,13 @@ jobs:
       - name: Apply, verify and self-remove
         shell: bash
         env:
-          EXACT_PARENT: cedb6c95a5323f7004551087d75e2f57a1ec484a
-          PATCH_SHA256: d369f70e46c153cb47459190cf0d7613fa42664707ede73acd61c09eff109866
+          EXACT_BASE: cedb6c95a5323f7004551087d75e2f57a1ec484a
+          PATCH_SHA256: 4e54ac73616c999fd8ca323d6f3fc385c8a5310b42e077528d1dc126660b35a5
           TARGET_BLOB: e4c2021df0709b5a294e5a5f8648d752056a84e4
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          test "$(git merge-base HEAD "$EXACT_BASE")" = "$EXACT_BASE"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           gzip -dc bootstrap/tmp-v1-2-2-store.patch.gz > "$RUNNER_TEMP/store.patch"
           printf '%s  %s\n' "$PATCH_SHA256" "$RUNNER_TEMP/store.patch" | sha256sum -c -
