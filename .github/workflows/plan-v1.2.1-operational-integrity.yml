@@ -9,6 +9,7 @@ on:
       - "schemas/**"
       - "scripts/**"
       - "tests/plan/**"
+      - "tests/platform/test_h02_exact_head_matrix_v1.py"
       - ".github/workflows/plan-v1.2.1-operational-integrity.yml"
   workflow_dispatch:
 
@@ -53,15 +54,17 @@ jobs:
       - name: Install validation dependencies
         run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
 
-      - name: Validate V1.2 and V1.2.1 contracts
+      - name: Validate V1.2/V1.2.1 and exact-head execution contracts
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/validate_plan_v1_2.py
           python3 scripts/validate_plan_v1_2_1.py
+          python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
           python3 -m unittest \
             tests/plan/test_plan_v1_2.py \
             tests/plan/test_plan_v1_2_1.py \
+            tests/platform/test_h02_exact_head_matrix_v1.py \
             -v
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 

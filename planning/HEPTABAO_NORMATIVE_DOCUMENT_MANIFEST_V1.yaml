@@ -30,6 +30,14 @@ documents:
   effective_revision: '1.2'
   supersedes: []
   authority_effect: NONE
+- id: HB-DOC-PLAN-EXACT-HEAD-EVIDENCE-ADDENDUM-V1_2_1
+  path: docs/plan/HEPTABAO_PLAN_V1_2_1_EXACT_HEAD_EVIDENCE_ADDENDUM.md
+  kind: NORMATIVE
+  owner_role: program-qualification-security
+  digest: RESOLVE_FROM_EXACT_SOURCE
+  effective_revision: '1.2'
+  supersedes: []
+  authority_effect: NONE
 - id: HB-DOC-VERTICAL-SLICES-V1_2
   path: docs/plan/HEPTABAO_VERTICAL_SLICE_EXECUTION_PLAN_V1_2.md
   kind: NORMATIVE
@@ -98,6 +106,14 @@ documents:
   path: docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md
   kind: NORMATIVE
   owner_role: program-qualification
+  digest: RESOLVE_FROM_EXACT_SOURCE
+  effective_revision: '1.2'
+  supersedes: []
+  authority_effect: NONE
+- id: HB-DOC-H02-EXACT-HEAD-MATRIX-V1
+  path: docs/execution/HEPTABAO_H02_EXACT_HEAD_MATRIX_EXECUTION_SPEC_V1.md
+  kind: NORMATIVE
+  owner_role: qualification-platform-security
   digest: RESOLVE_FROM_EXACT_SOURCE
   effective_revision: '1.2'
   supersedes: []
@@ -219,6 +235,14 @@ documents:
   path: schemas/heptabao_blocker_closure_receipt_v1.schema.json
   kind: NORMATIVE
   owner_role: qualification-security
+  digest: RESOLVE_FROM_EXACT_SOURCE
+  effective_revision: '1.2'
+  supersedes: []
+  authority_effect: NONE
+- id: HB-SCHEMA-H02-EXACT-HEAD-MATRIX-SUMMARY-V1
+  path: schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json
+  kind: NORMATIVE
+  owner_role: qualification-platform-security
   digest: RESOLVE_FROM_EXACT_SOURCE
   effective_revision: '1.2'
   supersedes: []

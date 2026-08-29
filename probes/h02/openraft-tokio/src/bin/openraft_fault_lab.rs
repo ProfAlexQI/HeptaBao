@@ -182,6 +182,23 @@ fn print_json(value: &Value) {
     println!("{value}");
 }
 
+fn exit_code_for_status(value: &Value) -> i32 {
+    match value.get("status").and_then(Value::as_str) {
+        Some("EXECUTED_PASS") => 0,
+        Some("EXECUTED_FAIL") => 1,
+        Some("BLOCKED") => 2,
+        _ => 3,
+    }
+}
+
+fn print_parent_result(value: &Value) {
+    let exit_code = exit_code_for_status(value);
+    print_json(value);
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     let seed = parse_seed();
@@ -190,11 +207,7 @@ async fn main() {
     match mode.as_str() {
         "hostile-snapshot-parent" => {
             let result = execute_hostile_parent(seed).await;
-            let blocked = result["status"].as_str() == Some("BLOCKED");
-            print_json(&result);
-            if blocked {
-                std::process::exit(2);
-            }
+            print_parent_result(&result);
         }
         "hostile-snapshot-child" => {
             match cluster::execute_hostile_snapshot_child_guarded(seed).await {
@@ -241,5 +254,27 @@ async fn main() {
             }));
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exit_code_for_status;
+    use serde_json::json;
+
+    #[test]
+    fn hostile_application_failure_cannot_exit_successfully() {
+        assert_eq!(exit_code_for_status(&json!({"status": "EXECUTED_FAIL"})), 1);
+    }
+
+    #[test]
+    fn blocked_and_unknown_results_are_nonzero() {
+        assert_eq!(exit_code_for_status(&json!({"status": "BLOCKED"})), 2);
+        assert_eq!(exit_code_for_status(&json!({"status": "UNKNOWN"})), 3);
+    }
+
+    #[test]
+    fn only_executed_pass_exits_zero() {
+        assert_eq!(exit_code_for_status(&json!({"status": "EXECUTED_PASS"})), 0);
     }
 }
