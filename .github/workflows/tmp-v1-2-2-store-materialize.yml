@@ -1,0 +1,54 @@
+name: tmp-v1-2-2-store-materialize
+
+on:
+  push:
+    branches: ["codex/tmp-v1.2.2-store-materialize"]
+    paths:
+      - ".github/workflows/tmp-v1-2-2-store-materialize.yml"
+      - ".github/workflows/tmp-v1-2-2-store.trigger"
+      - "bootstrap/tmp-v1-2-2-store.patch.gz"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-v1-2-2-store-materialize
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact transition commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: true
+      - name: Apply, verify and self-remove
+        shell: bash
+        env:
+          EXACT_PARENT: cedb6c95a5323f7004551087d75e2f57a1ec484a
+          PATCH_SHA256: d369f70e46c153cb47459190cf0d7613fa42664707ede73acd61c09eff109866
+          TARGET_BLOB: e4c2021df0709b5a294e5a5f8648d752056a84e4
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXACT_PARENT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          gzip -dc bootstrap/tmp-v1-2-2-store.patch.gz > "$RUNNER_TEMP/store.patch"
+          printf '%s  %s\n' "$PATCH_SHA256" "$RUNNER_TEMP/store.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/store.patch"
+          git apply "$RUNNER_TEMP/store.patch"
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs)" = "$TARGET_BLOB"
+          rm -f bootstrap/tmp-v1-2-2-store.patch.gz
+          rm -f .github/workflows/tmp-v1-2-2-store-materialize.yml
+          rm -f .github/workflows/tmp-v1-2-2-store.trigger
+          git add -A
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort)" = "probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(h02): materialize hardened durable store blob"
+          git push origin HEAD:codex/tmp-v1.2.2-store-materialize
