@@ -1,0 +1,79 @@
+name: apply-h02-candidate-compile-fixes-macos
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-v1"]
+    paths:
+      - ".github/workflows/apply-h02-candidate-compile-fixes-macos.yml"
+      - "scripts/apply_h02_candidate_compile_fixes_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-h02-candidate-compile-fixes-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-compile-commit:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-final-gap-closure-v1
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify exact event source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+      - name: Apply exact compile fixes
+        run: python3 scripts/apply_h02_candidate_compile_fixes_v1.py
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned validation dependencies
+        run: python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+      - name: Validate source contracts
+        run: |
+          set -euo pipefail
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python -m unittest tests/platform/test_h02_candidate_adapter_harness_v1.py -v
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          git diff --check
+      - name: Install Rust 1.98.0
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Compile and execute repaired candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          for subdir in rustls-ring rustls-aws-lc openraft-tokio; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/$subdir"
+            rustup run 1.98.0 cargo generate-lockfile --manifest-path "probes/h02/$subdir/Cargo.toml"
+            rustup run 1.98.0 cargo test --locked --all-targets --manifest-path "probes/h02/$subdir/Cargo.toml"
+            rustup run 1.98.0 cargo run --quiet --locked --manifest-path "probes/h02/$subdir/Cargo.toml" -- --seed 0x5eed20260828cafe
+          done
+      - name: Commit source fixes and retire temporary maintenance files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-h02-candidate-compile-fixes.yml \
+            .github/workflows/apply-h02-candidate-compile-fixes-ubuntu.yml \
+            .github/workflows/apply-h02-candidate-compile-fixes-macos.yml \
+            scripts/apply_h02_candidate_compile_fixes_v1.py
+          git diff --check
+          git config user.name "heptabao-maintenance-bot"
+          git config user.email "heptabao-maintenance-bot@users.noreply.github.com"
+          git add -A
+          test -n "$(git status --porcelain)"
+          git commit -m "fix(h02): repair rustls fixtures and OpenRaft support pin"
+          git push origin HEAD:codex/h02-final-gap-closure-v1
