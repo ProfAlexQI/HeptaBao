@@ -14,6 +14,7 @@ PLAN_ID = "HEPTABAO-PLAN-2026-08-28"
 REVISION = "1.1"
 PROFILE_ID = "HB-H02-BEHAVIOR-RAFT-OPENRAFT-INMEMORY-0_10_0_ALPHA_33"
 CANDIDATE_ID = "HB-DEP-RAFT-OPENRAFT"
+EFFECTIVE_TOOLCHAINS = ("1.88.0", "1.98.0")
 CASES = [
     "raft-deterministic-apply-and-restart",
     "raft-committed-snapshot-conflict-rejected",
@@ -238,7 +239,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--replay-output", required=True)
     command.add_argument("--execution-exit-code", type=int, required=True)
     command.add_argument("--seed", required=True)
-    command.add_argument("--toolchain", choices=["1.85.0", "1.98.0"], required=True)
+    command.add_argument("--toolchain", choices=EFFECTIVE_TOOLCHAINS, required=True)
     command.add_argument("--manifest", required=True)
     command.add_argument("--cargo-lock", required=True)
     command.add_argument("--source-commit", required=True)
