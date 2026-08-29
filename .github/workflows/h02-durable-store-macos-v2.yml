@@ -1,0 +1,56 @@
+name: h02-durable-store-macos-v2
+
+on:
+  push:
+    branches: ["codex/h02-durable-multiprocess-closure-v2"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: h02-durable-store-macos-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64-smoke:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust 1.98
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+      - name: Compile and execute one durable seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/openraft-durable"
+          cp -a probes/h02/openraft-tokio "$probe"
+          manifest="$probe/Cargo.toml"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/target"
+          rustup run 1.98.0 cargo generate-lockfile --manifest-path "$manifest"
+          rustup run 1.98.0 cargo fmt --manifest-path "$manifest" --all --check
+          rustup run 1.98.0 cargo test --locked --all-targets --manifest-path "$manifest"
+          rustup run 1.98.0 cargo clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+          rustup run 1.98.0 cargo run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-durable-store-lab -- --seed 0x5eed20260828cafe \
+            | tee "$RUNNER_TEMP/durable.json"
+          python - "$RUNNER_TEMP/durable.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert value['status'] == 'EXECUTED_PASS', value
+          assert value['qualification'] is False
+          assert value['selection_effect'] == 'NONE'
+          assert value['authority_effect'] == 'NONE'
+          PY
+      - name: Upload diagnostic output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: h02-durable-store-macos-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/durable.json
+          if-no-files-found: warn
+          retention-days: 30
