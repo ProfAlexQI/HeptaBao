@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::errors::decompose::DecomposeResult;
-use openraft::{Config, ReadPolicy, SnapshotPolicy};
-use openraft_memstore::{ClientRequest, MemStoreStateMachine, TypeConfig};
+use openraft::{Config, LogIdOptionExt, ReadPolicy, SnapshotPolicy};
+use openraft_memstore::{ClientRequest, MemStoreStateMachine};
 use tokio::task::spawn_blocking;
 use tokio::time::{sleep, timeout};
 
@@ -19,8 +19,8 @@ pub type AnyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub struct DurableNode {
     pub raft: DurableRaft,
-    pub log_store: Arc<DurableLogStore>,
-    pub state_machine: Arc<DurableStateMachine>,
+    pub log_store: DurableLogStore,
+    pub state_machine: DurableStateMachine,
 }
 
 pub struct DurableCluster {
@@ -58,14 +58,14 @@ impl DurableCluster {
 
     async fn open_stores(
         root: PathBuf,
-    ) -> AnyResult<(Arc<DurableLogStore>, Arc<DurableStateMachine>)> {
-        spawn_blocking(move || {
+    ) -> AnyResult<(DurableLogStore, DurableStateMachine)> {
+        let stores = spawn_blocking(move || {
             let log_store = DurableLogStore::open(root.join("log"))?;
             let state_machine = DurableStateMachine::open(root.join("state-machine"))?;
             Ok::<_, std::io::Error>((log_store, state_machine))
         })
-        .await??
-        .pipe(Ok)
+        .await??;
+        Ok(stores)
     }
 
     pub async fn start_node(&mut self, id: u64) -> AnyResult<()> {
@@ -310,11 +310,3 @@ impl DurableCluster {
         Ok(())
     }
 }
-
-trait Pipe: Sized {
-    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
-        f(self)
-    }
-}
-
-impl<T> Pipe for T {}
