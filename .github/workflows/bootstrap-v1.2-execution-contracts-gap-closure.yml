@@ -81,6 +81,13 @@ jobs:
                   assert not member.issym() and not member.islnk(), member.name
               payload.extractall(path=".", filter="data")
           PY
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          path.write_text("\n".join(line.rstrip() for line in lines) + "\n", encoding="utf-8")
+          PY
           rm -f \
             .github/workflows/apply-h02-candidate-binding-contract.yml \
             .github/workflows/apply-h02-deterministic-contract-closure.yml \
