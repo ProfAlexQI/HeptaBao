@@ -6,6 +6,7 @@ HeptaBao is an independent clean-room Rust reimplementation program for an OpenB
 
 - Current plan: **V1.2**
 - Current operational amendment: **V1.2.1**
+- Current repository closure overlay: **V1.2.2 unified repository closure**
 - Current maturity: **governance / Oracle / platform bakeoff implementation**
 - Qualification: **false**
 - Compatibility claim: **false**
@@ -19,20 +20,21 @@ The repository contains governance contracts, Oracle inventory/normalization sca
 
 1. `docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md`
 2. `docs/plan/HEPTABAO_PLAN_V1_2_1_EXECUTION_DEEPENING.md`
-3. `docs/plan/HEPTABAO_PLAN_V1_2_1_EXACT_HEAD_EVIDENCE_ADDENDUM.md`
-4. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
-5. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml`
-6. `planning/HEPTABAO_BLOCKER_REGISTER_V1.yaml`
-7. `planning/HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml`
-8. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
-9. `docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md`
-10. `docs/execution/HEPTABAO_H02_EXACT_HEAD_MATRIX_EXECUTION_SPEC_V1.md`
+3. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
+4. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml`
+5. `planning/HEPTABAO_BLOCKER_REGISTER_V1.yaml`
+6. `planning/HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml`
+7. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
+8. `docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md`
+9. `docs/plan/HEPTABAO_PLAN_V1_2_1_PR40_RECONCILIATION_AND_TECHNICAL_CLOSURE.md`
+10. `docs/plan/HEPTABAO_PLAN_V1_2_2_UNIFIED_REPOSITORY_CLOSURE.md`
+11. `planning/HEPTABAO_V1_2_2_UNIFIED_CLOSURE_STATUS_V1.yaml`
 
 A resolved state must be generated from the exact checked-out commit/tree. Historical V1.1 status and queue files are retained for audit history but are not the V1.2 current-state authority.
 
-## Exact-head H02 execution boundary
+## V1.2.2 unified reconciliation boundary
 
-The current H02 aggregate gate must execute **24 fixed entries**: two effective Rust toolchains × three fixed seeds × four OpenRaft probe kinds. Every entry preserves stdout, stderr and exit code, and is independently checked at the application-result layer. A zero process exit cannot hide `EXECUTED_FAIL`, malformed JSON, a failed case or an authority-field drift. The machine summary remains unqualified and authority-free even when all technical entries pass.
+The PR40 exact-head evidence hardening is composed with the PR41 explicit `create/reopen/adopt` lifecycle, initialized-generation fail-closed guards, strict-lint repairs and guarded snapshot source binding. The V1.2.2 status object remains `LOCAL_UNIFIED_PATCH_CANDIDATE_NOT_QUALIFIED` until one remote exact head produces complete execution and independent review evidence.
 
 ## Blocker boundary
 

@@ -233,7 +233,7 @@ pub async fn execute_durable_faults(seed: u64) -> Value {
         });
     }
 
-    let outcome = (|| async {
+    let outcome = async {
         let restart_path = root.join("restart.wal");
         let restart_value = format!("restart-{seed:016x}");
         append_record(&restart_path, 1, &restart_value, true)?;
@@ -314,7 +314,7 @@ pub async fn execute_durable_faults(seed: u64) -> Value {
             "selection_effect": "NONE",
             "authority_effect": "NONE",
         }))
-    })()
+    }
     .await;
 
     let value = match outcome {

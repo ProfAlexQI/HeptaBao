@@ -10,8 +10,6 @@ rules:
 - repository-controlled and external blockers are never conflated
 - automations may not fabricate independent review legal disposition or authority
 - failed executable runs remain immutable evidence
-- process exit success never substitutes for application-level semantic PASS
-- every required toolchain seed and probe outcome must be retained before aggregate gating
 - external blockers remain EXTERNAL_ACTION_REQUIRED until signed completion objects verify
 - critical blocker closure requires an independent reviewer and current unrevoked receipt
 blockers:
@@ -47,13 +45,11 @@ blockers:
   - historical state and queue objects are marked non-normative
   - resolved state is generated from exact source
   - all normative extensions are uniquely indexed
-  - authority flags contain no stale runner-specific assertion
   required_execution:
   - plan-integrity-v4/plan-and-python
   evidence:
   - planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml
   - planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml
-  - planning/AUTHORITY_FLAGS_V2.yaml
   - scripts/render_canonical_project_state_v1.py
   closure_receipt_required: true
 - id: HB-BLK-REPO-003
@@ -134,21 +130,39 @@ blockers:
 - id: HB-BLK-REPO-007
   class: REPOSITORY_CONTROLLED
   severity: CRITICAL
-  title: state machine and snapshot can cross generations
+  title: durable generations can cross, disappear, or roll back through ambiguous reopen semantics
   owner_role: storage-distributed-systems
   state: REMEDIATION_IMPLEMENTED
   closure_criteria:
   - state and snapshot are stored in one atomic versioned bundle or manifest
+  - bootstrap create-new and recovery reopen-existing are distinct operations
+  - missing marker on reopen requires explicit legacy adoption rather than implicit initialization
+  - valid current state retires stale previous state only after validation
+  - corrupt current state never silently falls back to previous
+  - multiple previous generations fail closed as ambiguous
   - interrupted replacement recovery is explicit
   - corruption and reopen fail closed
   - exact-head durable matrix passes across required toolchains and seeds
+  - initialized-store markers distinguish first bootstrap from authoritative generation
+    loss
+  - marker domain and authoritative filename are versioned and validated
+  - missing initialized log or state generations fail closed
+  - corrupt markers and non-regular authoritative generations fail closed
+  - legacy authoritative generations are adopted only after validation and marker
+    publication
+  - interrupted replacement recovery is explicit for generations and markers
+  - whole-directory loss remains bound to an external rollback anchor rather than
+    silent proof
   required_execution:
   - plan-integrity-v4/openraft-exact-graph-and-runtime
   - h02-openraft-blocker-closure
+  - h02-final-gap-closure-arm64/exact-head-single-runner
   evidence:
   - probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
   - probes/h02/openraft-tokio/src/bin/durable_store_lab.rs
-  - .github/workflows/plan-integrity-v4.yml
+  - docs/plan/HEPTABAO_PLAN_V1_2_1_PR40_RECONCILIATION_AND_TECHNICAL_CLOSURE.md
+  - planning/HEPTABAO_PR40_RECONCILIATION_STATUS_V1.yaml
+  - tests/platform/test_h02_openraft_strict_lint_source_v1.py
   closure_receipt_required: true
 - id: HB-BLK-REPO-008
   class: REPOSITORY_CONTROLLED
@@ -158,18 +172,24 @@ blockers:
   state: REMEDIATION_IMPLEMENTED
   closure_criteria:
   - successful stale-snapshot response is followed by bounded state observation
-  - log committed applied snapshot purged membership and application state remain unchanged
+  - log committed applied snapshot purged membership and application state remain
+    unchanged
   - any guarded state change is EXECUTED_FAIL
-  - EXECUTED_FAIL produces a nonzero process result
   - exact-head hostile-snapshot and linearizability matrices PASS
+  - the semantic validator binds hostile_snapshot_guard.rs rather than obsolete unguarded
+    source
+  - negative tests reject a missing or semantically stripped guard implementation
   required_execution:
   - plan-integrity-v4/openraft-exact-graph-and-runtime
   - h02-openraft-fault-lab
+  - plan-integrity-v4/plan-and-python
   evidence:
   - probes/h02/openraft-tokio/src/bin/openraft_fault_lab/hostile_snapshot_guard.rs
   - probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
-  - scripts/h02_exact_head_matrix_v1.py
   - .github/workflows/h02-openraft-fault-lab.yml
+  - probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs
+  - scripts/validate_h02_openraft_fault_lab_v1.py
+  - tests/platform/test_h02_openraft_fault_lab_source_binding_v1.py
   closure_receipt_required: true
 - id: HB-BLK-REPO-009
   class: REPOSITORY_CONTROLLED
@@ -191,17 +211,30 @@ blockers:
 - id: HB-BLK-REPO-010
   class: REPOSITORY_CONTROLLED
   severity: HIGH
-  title: durable-store source was not normalized by the enforced formatter
+  title: exact OpenRaft graph must pass formatter and strict lint without dead compatibility
+    paths
   owner_role: storage-distributed-systems
   state: REMEDIATION_IMPLEMENTED
   closure_criteria:
   - cargo fmt check passes on the exact OpenRaft manifest
-  - Rust 1.88.0 and 1.98.0 tests and Clippy execute after the format gate
+  - the obsolete unguarded stale-snapshot helper is absent rather than lint-suppressed
+  - the durable fault path uses a direct async block rather than an immediately invoked
+    closure
+  - all emitted JSON format arguments use Rust inline capture and pass uninlined-format-args
+  - Rust 1.88.0 and 1.98.0 tests and Clippy -D warnings pass on the same lock graph
   required_execution:
   - plan-integrity-v4/openraft-exact-graph-and-runtime
+  - h02-final-gap-closure-arm64/exact-head-single-runner
   evidence:
   - probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
   - .github/workflows/plan-integrity-v4.yml
+  - probes/h02/openraft-tokio/src/main.rs
+  - probes/h02/openraft-tokio/src/bin/openraft_fault_lab/cluster.rs
+  - probes/h02/openraft-tokio/src/bin/openraft_fault_lab/durable.rs
+  - scripts/validate_h02_openraft_fault_lab_v1.py
+  - tests/platform/test_h02_openraft_fault_lab_source_binding_v1.py
+  - tests/platform/test_h02_openraft_strict_lint_source_v1.py
+  - .github/workflows/h02-final-gap-closure-arm64.yml
   closure_receipt_required: true
 - id: HB-BLK-REPO-011
   class: REPOSITORY_CONTROLLED
@@ -215,9 +248,10 @@ blockers:
   - in-memory hostile blocker and durable application outputs receive independent semantic validation
   - zero process exit cannot hide EXECUTED_FAIL failed cases malformed output or authority drift
   - hostile EXECUTED_FAIL returns nonzero as a defense-in-depth invariant
-  - final gate rejects any failed blocked unknown unexecuted missing or unexpected entry
+  - final gate rejects any failed blocked unknown unexecuted missing duplicate or unexpected entry
   required_execution:
   - plan-integrity-v4/openraft-exact-graph-and-runtime
+  - h02-final-gap-closure-arm64/exact-head-single-runner
   - h02-openraft-fault-lab
   - h02-openraft-blocker-closure
   evidence:
@@ -227,6 +261,7 @@ blockers:
   - tests/platform/test_h02_exact_head_matrix_v1.py
   - probes/h02/openraft-tokio/src/bin/openraft_fault_lab.rs
   - .github/workflows/plan-integrity-v4.yml
+  - .github/workflows/h02-final-gap-closure-arm64.yml
   closure_receipt_required: true
 - id: HB-BLK-REPO-012
   class: REPOSITORY_CONTROLLED
@@ -258,16 +293,13 @@ blockers:
   - normative blocker closure operating contract is indexed
   - closure receipt schema binds exact source plan execution criteria artifacts and review
   - CLOSED receipts require zero failed blocked unknown and unexecuted entries
-  - exact-head matrix summary is schema-valid digest-bound and retained as receipt input
   - retry flake base-drift supersession and stop conditions are fail-closed
   required_execution:
   - plan-integrity-v4/plan-and-python
   - plan-v1.2.1-operational-integrity/operational-contracts
   evidence:
   - docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md
-  - docs/execution/HEPTABAO_H02_EXACT_HEAD_MATRIX_EXECUTION_SPEC_V1.md
   - schemas/heptabao_blocker_closure_receipt_v1.schema.json
-  - schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json
   - scripts/validate_plan_v1_2_1.py
   - tests/plan/test_plan_v1_2_1.py
   closure_receipt_required: true

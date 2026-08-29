@@ -2,7 +2,7 @@ name: h02-final-gap-closure-arm64
 
 on:
   push:
-    branches: ["codex/plan-v1.2.1-final-gap-closure-v1"]
+    branches: ["codex/plan-v1.2.2-unified-gap-closure-v1"]
   workflow_dispatch:
 
 permissions:
@@ -62,6 +62,8 @@ jobs:
           python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
           python3 scripts/validate_h02_openraft_fault_lab_v1.py
           python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 scripts/validate_h02_pr40_reconciliation_v1.py
+          python3 scripts/validate_plan_v1_2_2.py
           python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
           python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
           python3 -m unittest discover -s tests/plan -p 'test_*.py' -v

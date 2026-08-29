@@ -14,6 +14,7 @@ on:
   push:
     branches:
       - "codex/plan-v1.2-execution-contracts-gap-closure-v1"
+      - "codex/plan-v1.2.2-unified-gap-closure-v1"
   workflow_dispatch:
 
 permissions:
@@ -52,7 +53,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-plan.txt
       - run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-      - name: Validate V1.1 history and V1.2/V1.2.1 current contracts
+      - name: Validate V1.1 history and V1.2 current contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -61,6 +62,8 @@ jobs:
           python3 scripts/validate_plan_v1_2.py
           python3 scripts/validate_plan_v1_2_1.py
           python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python3 scripts/validate_h02_pr40_reconciliation_v1.py
+          python3 scripts/validate_plan_v1_2_2.py
           python3 scripts/validate_h01_h02_next_v1.py
           python3 scripts/validate_h02_candidate_adapters_v1.py
           python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
@@ -175,6 +178,8 @@ jobs:
           python3 scripts/validate_plan_v1_2.py
           python3 scripts/validate_plan_v1_2_1.py
           python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python3 scripts/validate_h02_pr40_reconciliation_v1.py
+          python3 scripts/validate_plan_v1_2_2.py
       - name: Compile, test and lint exact graph
         shell: bash
         run: |
@@ -211,7 +216,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: openraft-v1.2-exact-head-${{ github.run_id }}-${{ github.run_attempt }}
+          name: openraft-v1.2.2-exact-head-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openraft-results/
           if-no-files-found: error
           retention-days: 30
@@ -229,55 +234,38 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          from jsonschema import Draft202012Validator
+          from jsonschema import Draft202012Validator, FormatChecker
 
           root = Path.cwd()
-          result_root = Path(os.environ["RUNNER_TEMP"]) / "openraft-results"
-          matrix_root = result_root / "matrix"
-          summary_path = matrix_root / "matrix-summary.json"
-          schema_path = root / "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json"
-          summary = json.loads(summary_path.read_text(encoding="utf-8"))
-          schema = json.loads(schema_path.read_text(encoding="utf-8"))
+          matrix_root = Path(os.environ["RUNNER_TEMP"]) / "openraft-results/matrix"
+          summary = json.loads((matrix_root / "matrix-summary.json").read_text(encoding="utf-8"))
+          schema = json.loads((root / "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json").read_text(encoding="utf-8"))
           errors = sorted(
-              Draft202012Validator(schema).iter_errors(summary),
+              Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(summary),
               key=lambda error: list(error.path),
           )
           assert not errors, [error.message for error in errors]
-
           toolchains = ("1.88.0", "1.98.0")
-          seeds = (
-              "0x5eed20260828cafe",
-              "0x8badf00d12345678",
-              "0xd15ea5e5cafef00d",
-          )
+          seeds = ("0x5eed20260828cafe", "0x8badf00d12345678", "0xd15ea5e5cafef00d")
           kinds = ("inmemory", "hostile", "blocker", "durable")
           expected_ids = {
               f"{kind}-{toolchain}-{seed.removeprefix('0x')}"
-              for toolchain in toolchains
-              for seed in seeds
-              for kind in kinds
+              for toolchain in toolchains for seed in seeds for kind in kinds
           }
           entries = summary["entries"]
           assert len(entries) == 24
           assert {entry["entry_id"] for entry in entries} == expected_ids
           assert summary["source_binding"]["commit"] == os.environ["SOURCE_SHA"]
-          tree = subprocess.run(
-              ["git", "rev-parse", "HEAD^{tree}"],
-              check=True,
-              capture_output=True,
-              text=True,
+          actual_tree = subprocess.run(
+              ["git", "rev-parse", "HEAD^{tree}"], check=True, capture_output=True, text=True
           ).stdout.strip()
-          assert summary["source_binding"]["tree"] == tree
+          assert summary["source_binding"]["tree"] == actual_tree
           assert summary["matrix"]["executed_entry_count"] == 24
           assert summary["matrix"]["missing_entry_ids"] == []
           assert summary["matrix"]["unexpected_entry_ids"] == []
-          assert summary["counts"] == {
-              "pass": 24,
-              "fail": 0,
-              "blocked": 0,
-              "unknown": 0,
-              "unexecuted": 0,
-          }
+          assert summary["matrix"]["duplicate_entry_ids"] == []
+          assert summary["runner_errors"] == []
+          assert summary["counts"] == {"pass": 24, "fail": 0, "blocked": 0, "unknown": 0, "unexecuted": 0}
           assert summary["result"] == "PASS"
           assert summary["qualification"] is False
           assert summary["compatibility_claim"] is False
@@ -292,6 +280,7 @@ jobs:
           assert digest(manifest) == summary["dependency_binding"]["manifest_digest"]
           assert digest(lock) == summary["dependency_binding"]["lock_digest"]
           for entry in entries:
+              assert entry["process_started"] is True, entry
               assert entry["conclusion"] == "PASS", entry
               assert entry["application_status"] == "EXECUTED_PASS", entry
               assert entry["exit_code"] == 0, entry
@@ -303,6 +292,8 @@ jobs:
               assert digest(stdout_path) == entry["stdout_digest"]
               assert digest(stderr_path) == entry["stderr_digest"]
               assert exit_path.read_text(encoding="utf-8").strip() == "0"
+              command = json.dumps(entry["command"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+              assert "sha256:" + hashlib.sha256(command).hexdigest() == entry["command_digest"]
           print("all 24 exact-head application results passed and every artifact digest verified")
           PY
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
@@ -336,6 +327,8 @@ jobs:
           test "$ROOT_RUST" = success
           test "$OPENRAFT" = success
           python3 scripts/validate_plan_v1_2_1.py
+          python3 scripts/validate_h02_pr40_reconciliation_v1.py
+          python3 scripts/validate_plan_v1_2_2.py
           python3 - <<'PY'
           from pathlib import Path
           import yaml
@@ -356,4 +349,4 @@ jobs:
           )
           print("authority graph remains fail-closed after exact-head technical PASS")
           PY
-          echo "V1.2 exact-head technical gates passed; qualification=false compatibility=false selection=0 authority=NONE"
+          echo "V1.2.2 exact-head technical gates passed; qualification=false compatibility=false selection=0 authority=NONE"
