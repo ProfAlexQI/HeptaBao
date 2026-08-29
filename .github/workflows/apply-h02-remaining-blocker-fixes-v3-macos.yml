@@ -1,0 +1,106 @@
+name: apply-h02-remaining-blocker-fixes-v3-macos
+
+on:
+  push:
+    branches: ["codex/h02-final-gap-closure-v1"]
+    paths: [".github/workflows/apply-h02-remaining-blocker-fixes-v3-macos.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-h02-remaining-blocker-fixes-v3
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify-macos:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact closure branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/h02-final-gap-closure-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Extract and execute the canonical patch program
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/apply-h02-remaining-blocker-fixes-v3.yml').read_text(encoding='utf-8')
+          prefix = "          python - <<'PY'\n"
+          suffix = "\n          PY\n\n      - name: Validate plans, schemas and Python semantics"
+          start = source.index(prefix) + len(prefix)
+          end = source.index(suffix, start)
+          program = textwrap.dedent(source[start:end])
+          Path('/tmp/apply_h02_remaining_blockers.py').write_text(program, encoding='utf-8')
+          compile(program, '/tmp/apply_h02_remaining_blockers.py', 'exec')
+          print(f'extracted canonical patch program: {len(program)} bytes')
+          PY
+          python /tmp/apply_h02_remaining_blockers.py
+
+      - name: Validate plans, schemas and Python semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 scripts/validate_h02_candidate_adapters_v1.py
+          python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python3 scripts/validate_h02_openraft_fault_lab_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 scripts/h02_dependency_probe_v1.py validate-matrix
+          python3 -m unittest \
+            tests/platform/test_h02_dependency_probe_v1.py \
+            tests/platform/test_h02_candidate_adapter_harness_v1.py \
+            tests/platform/test_h02_openraft_inmemory_cluster_v1.py \
+            tests/platform/test_h02_linearizability_checker_v1.py \
+            tests/platform/test_h02_openraft_fault_lab_evidence_v1.py \
+            tests/platform/test_h02_blocker_closure_evidence_v1.py \
+            -v
+
+      - name: Compile and execute platform-neutral repaired probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup component add rustfmt --toolchain 1.98.0
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 generate-lockfile --manifest-path "$manifest"
+          cargo +1.98.0 fmt --manifest-path "$manifest" -- --check
+          cargo +1.98.0 test --locked --all-targets --manifest-path "$manifest"
+          cargo +1.98.0 run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-inmemory-cluster -- --seed 0x5eed20260828cafe \
+            > /tmp/inmemory.jsonl
+          cargo +1.98.0 run --quiet --locked --manifest-path "$manifest" \
+            --bin heptabao-h02-openraft-fault-lab -- --mode hostile-snapshot-parent --seed 0x5eed20260828cafe \
+            > /tmp/hostile.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          lines = [json.loads(line) for line in Path('/tmp/inmemory.jsonl').read_text().splitlines() if line.strip().startswith('{')]
+          assert any(row.get('kind') == 'summary' and row.get('status') == 'EXECUTED_PASS' for row in lines), lines[-3:]
+          hostile = json.loads(Path('/tmp/hostile.json').read_text())
+          assert hostile['status'] == 'EXECUTED_PASS', hostile
+          assert hostile['outcome'] == 'REJECTED_IGNORED_OR_ABORTED_AFTER_INJECTION', hostile
+          assert hostile['qualification'] is False
+          print('macOS platform-neutral smoke probes passed; Linux OS-suspend remains exact-head gated')
+          PY
+
+      - name: Commit repairs and remove one-shot workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-h02-remaining-blocker-fixes-v3.yml \
+            .github/workflows/apply-h02-remaining-blocker-fixes-v3-macos.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(h02): close OpenRaft execution and MSRV blockers"
+          git push origin HEAD:codex/h02-final-gap-closure-v1
