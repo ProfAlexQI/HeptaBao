@@ -112,3 +112,21 @@ site: bootstrap uses `CreateNew`, restart uses `ReopenExisting`, and tests that 
 state for recovery or corruption checks use `open_existing`. Repository-level lifecycle
 proof does not establish kernel power-cut, storage-controller cache, filesystem-specific
 crash consistency, independent reproduction, qualification, candidate selection or authority.
+
+## 9. Active-parent integrity and legacy temporary-state rejection
+
+An already opened durable domain MUST NOT recreate its storage root if that directory is
+deleted, replaced by a symlink, or replaced by a non-directory object. Every durable write
+preflights the parent with `symlink_metadata`; failure is surfaced before a temporary file is
+created and before candidate state is published. This rule closes the gap between strict
+`reopen-existing` semantics and writes performed by a still-running process.
+
+Before legacy adoption, both the initialization-marker path and the authoritative data path
+are scanned for unresolved `.tmp` artifacts. Any such artifact makes provenance ambiguous and
+blocks adoption. The operator must preserve and disposition the artifacts explicitly; the
+implementation does not choose one generation, delete evidence, or manufacture a marker.
+
+Before replacement, an existing current path must be a regular file. Symlinks, directories,
+devices, and other non-regular objects fail closed on all platforms. Tests cover active log
+and state-root deletion plus unresolved log/state temporary files. These controls remain
+repository-level logical guarantees and do not replace kernel/VM power-cut evidence.
