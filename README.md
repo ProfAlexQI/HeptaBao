@@ -4,10 +4,11 @@ HeptaBao is an independent clean-room Rust reimplementation program for an OpenB
 
 ## Current truth
 
-- Current plan: **V1.3**
-- Current operational foundation: **V1.2.1 + V1.2.2 unified closure + V1.3 P0/Authbus amendment**
-- Current repository closure state: **PR #41 lifecycle materialized remotely; V1.2.2 unified/V1.3 exact-head and external closure required**
-- Current maturity: **governance / Oracle reconciliation / dependency probes / strict protocol / P0 memory server**
+- Current plan: **V1.3.1 repository gap closure**
+- Canonical integration lane under review: **`codex/plan-v1.3-gap-closure-v2` / PR #45**
+- Current operational foundation: **V1.2.1 + V1.2.2 unified closure + V1.3 P0/Authbus + V1.3.1 repository remediation**
+- Current maturity: **governance / Oracle reconciliation / dependency and OpenRaft probes / strict protocol / P0 memory server**
+- Repository-controlled source remediation: **committed; exact-head execution and independent review required**
 - Qualification: **false**
 - Compatibility claim: **false**
 - Dependency selections: **none**
@@ -18,41 +19,50 @@ The repository contains governance contracts, Oracle inventory/normalization sca
 
 ## Normative entry points
 
-1. `docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_3.md`
-2. `docs/plan/HEPTABAO_PLAN_V1_3_AMENDMENT.md`
-3. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
-4. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3.yaml`
-5. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1_3.yaml`
-6. `planning/HEPTABAO_PLAN_V1_3_STATUS_V1.yaml`
-7. `planning/HEPTABAO_BLOCKER_REGISTER_V1_3.yaml`
-8. `planning/HEPTABAO_H01_ORACLE_EVIDENCE_RECONCILIATION_V1.yaml`
-9. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
-10. `planning/HEPTABAO_WORK_PACKAGE_EXTENSION_V1_3.yaml`
-11. `planning/HEPTABAO_P0_WORK_PACKAGE_CONTRACTS_V1.yaml`
-12. `docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md`
-13. `docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md`
-14. `docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md`
-15. `planning/HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml`
-16. `docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md`
-17. `docs/plan/HEPTABAO_PLAN_V1_2_2_UNIFIED_REPOSITORY_CLOSURE.md`
+1. `docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md`
+2. `planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml`
+3. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml`
+4. `planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml`
+5. `docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md`
+6. `docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md`
+7. `.github/workflows/plan-v1.3-gap-closure.yml`
+8. `docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_3.md`
+9. `docs/plan/HEPTABAO_PLAN_V1_3_AMENDMENT.md`
+10. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml`
+11. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3.yaml`
+12. `planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1_3.yaml`
+13. `planning/HEPTABAO_PLAN_V1_3_STATUS_V1.yaml`
+14. `planning/HEPTABAO_BLOCKER_REGISTER_V1_3.yaml`
+15. `planning/HEPTABAO_H01_ORACLE_EVIDENCE_RECONCILIATION_V1.yaml`
+16. `planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml`
+17. `planning/HEPTABAO_WORK_PACKAGE_EXTENSION_V1_3.yaml`
+18. `planning/HEPTABAO_P0_WORK_PACKAGE_CONTRACTS_V1.yaml`
+19. `docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md`
+20. `docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md`
+21. `docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md`
+22. `planning/HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml`
+23. `docs/execution/HEPTABAO_BLOCKER_CLOSURE_OPERATING_CONTRACT_V1.md`
+24. `docs/plan/HEPTABAO_PLAN_V1_2_2_UNIFIED_REPOSITORY_CLOSURE.md`
 
-A resolved state must be generated from the exact checked-out commit/tree. Historical V1.1/V1.2 status and queue files are retained for audit history but are not the V1.3 current-state authority.
+A resolved state must be generated from the exact checked-out commit/tree. Historical V1.1/V1.2/V1.3 status files are retained for audit history and inherited context; they cannot override the V1.3.1 current repository-closure object.
+
+## V1.3.1 repository closure boundary
+
+V1.3.1 anchors the previously materialized V1.3 source in one ordinary reviewable branch and PR. It adds a total request-read deadline, bounded connection admission, pre-parse request-attempt identity, transport rejection audit, a bounded P0 client request-ID duplicate guard, body-free HTTP 204 responses, H02 active-parent integrity controls, unresolved temporary-artifact guards and one read-only exact-head aggregate workflow.
+
+The Authbus request-ID lifecycle now separates two modes: server-generated P0 audit correlation and client-proposed, assertion-bound production identity. The in-process P0 registry is explicitly not the future HA replay authority. The audit outcome contract records the remaining need for a durable reconciliation ledger and a versioned production audit protocol.
+
+Repository-controlled source markers do not close their blockers by themselves. Technical closure requires one exact remote head to pass all plan/Python checks, Rust 1.98 workspace fmt/test/Clippy, P0 socket and transport behavior, Rust 1.88/1.98 OpenRaft checks and the complete 24-entry application matrix. Critical closure additionally requires current independent review receipts.
 
 ## V1.3 executable foundation boundary
 
 V1.3 adds a strict provider-neutral HTTP/request contract, an Authbus authentication-only assertion contract and `HB-P0-DEV-MEMORY`, a disposable loopback-only in-memory server. The profile exercises request canonicalization, seal/init guards, development authentication, KV v1 and audit happens-before semantics. It has no durable storage, compatibility claim, production support or authority.
 
-The effective work-package count is 306: 301 inherited V1.2 packages plus five Authbus packages. Four newly discovered repository defects are `REMEDIATION_IMPLEMENTED_LOCAL`; all exact-head Rust/matrix and independent-review evidence remains required.
+The effective work-package count is 306: 301 inherited V1.2 packages plus five Authbus packages. The H01 Oracle reconciliation records four locally claimed vectors but zero repository-verifiable transferred vectors. A project issue is not a signed fixture transfer.
 
-The H01 Oracle reconciliation records four locally claimed vectors but zero repository-verifiable transferred vectors. A project issue is not a signed fixture transfer.
+## External blocker boundary
 
-## V1.2.2 unified reconciliation boundary
-
-The PR40 exact-head evidence hardening is composed with the PR41 explicit `create/reopen/adopt` lifecycle, initialized-generation fail-closed guards, strict-lint repairs and guarded snapshot source binding. PR #41's materializer subsequently executed successfully and published lifecycle head `cd56d815f03c0a62ecb3572fb0ba635e9c5f6b93`; the bot-triggered follow-up checks remain `action_required`, and that branch still does not contain the PR #40/V1.2.2 unified composition or V1.3. The V1.2.2 unified status therefore remains unqualified until one unified remote exact head produces complete execution and independent review evidence.
-
-## Blocker boundary
-
-Repository-controlled remediation is not closed until exact-head CI, complete matrix evidence and required independent review exist. Repository settings, reviewer identities, legal conclusions, incident operations, isolated signing, restricted Oracle capture, power-cut laboratories and independent reproduction remain `EXTERNAL_ACTION_REQUIRED` until their one-to-one action packages produce signed, current and independently verified completion objects.
+Repository settings, independent reviewer identities, legal and clean-room conclusions, private disclosure and incident operations, isolated signing, restricted Oracle capture, filesystem/power-cut laboratories and independently operated reproduction remain `EXTERNAL_ACTION_REQUIRED`. They can close only through their declared signed, current and independently verifiable completion objects. Repository automation must not manufacture or self-attest them.
 
 ## Security boundary
 
