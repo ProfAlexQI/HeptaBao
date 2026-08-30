@@ -9,12 +9,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: materialize-v1.3-exact-overlay-pr-macos-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  group: materialize-v1.3-exact-overlay-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   materialize-validate-commit:
-    runs-on: macos-15
+    runs-on: ubuntu-slim
     timeout-minutes: 90
     steps:
       - name: Checkout exact transport head
@@ -73,7 +73,6 @@ jobs:
           import hashlib
           import json
           import os
-          import shutil
           from pathlib import Path
 
           repo = Path.cwd()
