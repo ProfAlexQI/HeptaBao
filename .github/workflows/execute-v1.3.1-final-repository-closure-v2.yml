@@ -14,7 +14,7 @@ concurrency:
 
 env:
   TARGET_BRANCH: codex/plan-v1.3-gap-closure-v2
-  EXPECTED_TARGET_HEAD: 8c62af154ea11fb38fe2fc4abc03e99ab01bed3d
+  EXPECTED_TARGET_HEAD: 352a5397d36a93e33715148de4616c5e43bc2bf1
 
 jobs:
   close:
