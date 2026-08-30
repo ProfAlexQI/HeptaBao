@@ -56,7 +56,13 @@ def output(seed: str, fail_case: str | None = None) -> str:
 
 
 class EvidenceTests(unittest.TestCase):
-    def collect(self, first: str, second: str | None = None, exit_code: int = 0):
+    def collect(
+        self,
+        first: str,
+        second: str | None = None,
+        exit_code: int = 0,
+        toolchain: str = "1.98.0",
+    ):
         td = tempfile.TemporaryDirectory()
         root = Path(td.name)
         adapter = root / "adapter.jsonl"
@@ -72,7 +78,7 @@ class EvidenceTests(unittest.TestCase):
             replay_output=str(replay),
             execution_exit_code=exit_code,
             seed="0x5eed20260828cafe",
-            toolchain="1.98.0",
+            toolchain=toolchain,
             manifest=str(manifest),
             cargo_lock=str(lockfile),
             source_commit="1" * 40,
@@ -153,6 +159,13 @@ class EvidenceTests(unittest.TestCase):
         value["scope"]["real_full_snapshot_rpc"] = False
         errors = list(Draft202012Validator(SCHEMA).iter_errors(value))
         self.assertTrue(errors)
+
+    def test_effective_floor_is_188_and_185_is_only_a_boundary_probe(self):
+        td, value = self.collect(output("0x5eed20260828cafe"), toolchain="1.88.0")
+        self.addCleanup(td.cleanup)
+        self.assert_schema(value)
+        value["environment"]["rust_toolchain"] = "1.85.0"
+        self.assertTrue(list(Draft202012Validator(SCHEMA).iter_errors(value)))
 
 
 if __name__ == "__main__":
