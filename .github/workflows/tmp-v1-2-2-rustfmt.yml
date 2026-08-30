@@ -1,4 +1,4 @@
-name: tmp-v1-2-2-rustfmt
+name: tmp-v1-2-2-rustfmt-macos
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   format-and-commit:
-    runs-on: ubuntu-24.04-arm
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - name: Checkout exact transition head
@@ -47,6 +47,8 @@ jobs:
           sort -o "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/expected-paths"
           diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
           cargo +1.98.0 fmt --manifest-path probes/h02/openraft-tokio/Cargo.toml --all -- --check
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs)" = "0fccaf0d9f3bfe358c75300a8564e0e9ba81eb63"
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs)" = "a4f90d29f981175637668f7fd44e758d6aa9c63c"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "style(h02): normalize durable lifecycle sources"
