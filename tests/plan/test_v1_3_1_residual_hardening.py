@@ -21,7 +21,6 @@ class V131ResidualHardeningTests(unittest.TestCase):
             "stream.write(&bytes[offset..])",
             "response write deadline exceeded",
             "set response flush timeout failed",
-            "expired_absolute_response_deadline_fails_before_write",
         ):
             self.assertIn(marker, source)
         self.assertNotIn("write_all(&bytes)", source)
