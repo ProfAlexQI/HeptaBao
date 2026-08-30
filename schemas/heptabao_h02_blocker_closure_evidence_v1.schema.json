@@ -57,7 +57,7 @@
       "required": ["seed", "toolchain", "target", "exit_code", "environment_id", "executor_kind", "runner_id", "runner_name"],
       "properties": {
         "seed": {"type": "string", "pattern": "^0x[0-9a-f]{16}$"},
-        "toolchain": {"enum": ["1.85.0", "1.98.0"]},
+        "toolchain": {"enum": ["1.88.0", "1.98.0"]},
         "target": {"const": "x86_64-unknown-linux-gnu"},
         "exit_code": {"type": "integer"},
         "environment_id": {"type": "string", "minLength": 1},
