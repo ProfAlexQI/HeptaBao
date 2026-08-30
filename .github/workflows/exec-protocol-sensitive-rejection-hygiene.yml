@@ -1,0 +1,57 @@
+name: exec-protocol-sensitive-rejection-hygiene
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-protocol-hygiene-v1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-protocol-sensitive-rejection-hygiene-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-validate-commit:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact execution head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind parent and apply exact patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git merge-base HEAD 352a5397d36a93e33715148de4616c5e43bc2bf1)" = 352a5397d36a93e33715148de4616c5e43bc2bf1
+          patch=bootstrap/exec/protocol-sensitive-rejection-hygiene.patch
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+
+      - name: Validate sensitive rejection contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/plan -p 'test_sensitive_parse_rejection_hygiene.py' -v
+          python3 scripts/validate_plan_v1_3.py
+          python3 scripts/validate_plan_v1_3_1.py
+
+      - name: Commit only the verified protocol blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --short
+          git add crates/heptabao-protocol/src/lib.rs
+          test "$(git diff --cached --name-only)" = crates/heptabao-protocol/src/lib.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(protocol): zeroize rejected duplicate inputs"
+          git push origin "HEAD:refs/heads/exec/v1-3-protocol-hygiene-v1"
