@@ -341,7 +341,7 @@ fn serve_one(
         guard.handle(envelope, now)
     };
 
-    if let Err(error) = write_response(stream, &response) {
+    if let Err(error) = write_response_with_timeout(stream, &response) {
         let _audit_result = record_delivery_failure(audit, request_id, response.committed);
         eprintln!("response delivery failed: {error}");
     }
@@ -495,18 +495,54 @@ fn write_response_with_timeout(
     stream: &mut TcpStream,
     response: &P0Response,
 ) -> Result<(), String> {
-    stream
-        .set_write_timeout(Some(TOTAL_REQUEST_TIMEOUT))
-        .map_err(|error| format!("set response write timeout failed: {error}"))?;
-    write_response(stream, response)
+    let absolute_deadline = Instant::now()
+        .checked_add(TOTAL_REQUEST_TIMEOUT)
+        .ok_or_else(|| "response write deadline overflow".to_owned())?;
+    write_response_until(stream, response, absolute_deadline)
 }
 
-fn write_response(stream: &mut TcpStream, response: &P0Response) -> Result<(), String> {
+fn write_response_until(
+    stream: &mut TcpStream,
+    response: &P0Response,
+    absolute_deadline: Instant,
+) -> Result<(), String> {
     let mut bytes = render_response(response);
-    let result = stream
-        .write_all(&bytes)
-        .and_then(|()| stream.flush())
-        .map_err(|error| format!("response write failed: {error}"));
+    let result = (|| -> Result<(), String> {
+        let mut offset = 0_usize;
+        while offset < bytes.len() {
+            let remaining = absolute_deadline
+                .checked_duration_since(Instant::now())
+                .filter(|value| !value.is_zero())
+                .ok_or_else(|| "response write deadline exceeded".to_owned())?;
+            stream
+                .set_write_timeout(Some(remaining))
+                .map_err(|error| format!("set response write timeout failed: {error}"))?;
+            match stream.write(&bytes[offset..]) {
+                Ok(0) => return Err("response write returned zero bytes".to_owned()),
+                Ok(count) => offset += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err("response write deadline exceeded".to_owned());
+                }
+                Err(error) => return Err(format!("response write failed: {error}")),
+            }
+        }
+        let remaining = absolute_deadline
+            .checked_duration_since(Instant::now())
+            .filter(|value| !value.is_zero())
+            .ok_or_else(|| "response write deadline exceeded".to_owned())?;
+        stream
+            .set_write_timeout(Some(remaining))
+            .map_err(|error| format!("set response flush timeout failed: {error}"))?;
+        stream
+            .flush()
+            .map_err(|error| format!("response flush failed: {error}"))
+    })();
     bytes.fill(0);
     result
 }

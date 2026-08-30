@@ -80,7 +80,7 @@ impl RequestBinding<'_> {
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, AuthbusError> {
         let canonical_target = CanonicalTarget::parse(self.canonical_target)
             .map_err(|_| AuthbusError::InvalidRequestBinding)?;
-        if canonical_target.canonical_string() != self.canonical_target
+        if !canonical_target.matches_canonical(self.canonical_target)
             || self.host.is_empty()
             || self.host.len() > 255
             || !self.host.is_ascii()

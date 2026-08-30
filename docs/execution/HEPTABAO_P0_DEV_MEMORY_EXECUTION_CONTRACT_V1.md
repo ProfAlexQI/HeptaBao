@@ -28,6 +28,15 @@ P0 request bodies intentionally accept only a bounded single-field JSON subset:
 
 General JSON whitespace, arbitrary object fields, arrays, Unicode escapes and the full OpenBao request schema are not implemented and must not be inferred from P0 success. Raw unescaped quotes, unsupported escapes, non-ASCII bytes and trailing syntax fail closed.
 
+The body contract is exact per operation:
+
+- init accepts exactly `{}`;
+- unseal accepts only a non-empty registered `key` object;
+- KV write accepts only a non-empty registered `value` object;
+- health, seal status, seal, KV read, KV list and KV delete accept no body.
+
+Unexpected or otherwise ignored bodies are rejected with `operation-body-forbidden`, audited as `RequestRejected / NotAttempted`, and never reach authentication, state transition or storage mutation.
+
 ## Connection and deadline contract
 
 - each accepted TCP connection carries exactly one HTTP/1.1 request and receives `Connection: close`;
@@ -35,7 +44,9 @@ General JSON whitespace, arbitrary object fields, arrays, Unicode escapes and th
 - admission beyond that bound returns 429 after a transport-rejection audit, or 503 when the audit cannot be persisted;
 - the complete request must arrive within one five-second absolute read lifetime;
 - every read uses the remaining lifetime, so byte trickling cannot reset or extend the deadline;
-- every normal or rejection response configures a five-second socket write timeout before writing bytes, including capacity rejection in the listener thread;
+- every normal or rejection response has one five-second absolute write lifetime;
+- before each partial response write and the final flush, the implementation recalculates the remaining lifetime and configures the socket with that remainder, so successful short writes cannot restart the deadline;
+- capacity rejection in the listener thread and parser rejection in a worker use the same absolute-deadline writer;
 - no error path may perform an unbounded blocking write on the listener or worker;
 - each admitted connection uses a fallibly created bounded worker; a worker-allocation failure releases the active count, audits `connection-worker-spawn-failed`, closes the accepted socket and does not panic the listener process;
 - the validated envelope then carries a dispatch deadline expressed as nanoseconds from the same process-local monotonic clock epoch;
@@ -50,11 +61,14 @@ A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after p
 
 ## Owned secret-material lifetime
 
+- canonical request targets own path/query strings, redact `Debug` and overwrite those owned strings on drop;
+- canonical target equality can be checked without constructing a duplicate target string, and Authbus request binding uses that path;
 - parsed header values use owned byte vectors and are overwritten by their controlled destructor;
 - parsed request types do not implement implicit `Clone` and their `Debug` output excludes target text, header values and body bytes;
 - parsed request bodies are overwritten when the request is dropped;
 - the raw socket accumulation vector and fixed read buffer are overwritten on every controlled success or error return;
 - `SecretBytes` rejects implicit cloning, redacts `Debug`, overwrites rejected constructor input and overwrites owned bytes on drop;
+- in-memory KV paths use an owned redacted wrapper and overwrite their owned string buffer on entry removal or server-state drop;
 - in-memory server-state `Debug` reports only initialized/sealed flags, KV entry count and generation; it never renders KV paths or values;
 - P0 response bodies do not implement implicit `Clone`, are redacted in `Debug`, and are overwritten on drop;
 - an old response body is overwritten before replacement after a response-audit failure;
@@ -70,6 +84,7 @@ These are best-effort controlled-path guarantees. They do not prove compiler-res
 
 - malformed framing, parser failures, Host mismatch, request-read timeout and admission saturation are audited before their error response;
 - worker-allocation failure is audited against the pre-parse attempt ID before the connection is closed;
+- operation/body mismatches are audited and rejected before dispatch;
 - rejected valid envelopes are audited; if rejection audit is unavailable, the response is 503;
 - accepted requests are audited before dispatch;
 - request-audit failure prevents mutation;
@@ -87,13 +102,15 @@ Every response carries an exact `Content-Length`. HTTP 204 is represented as bod
 ## Test matrix
 
 - fresh health = 501 and sealed;
-- init = committed, credentials not returned;
+- init = committed, credentials not returned, and requires exactly `{}`;
 - unseal wrong/correct key;
 - authenticated and unauthenticated KV operations;
+- empty-body enforcement for health, seal status, seal, KV read/list/delete;
 - sealed rejection;
 - exact Host, duplicate Host and request-smuggling negatives;
 - invalid equal/earlier deadline and expired dispatch request non-dispatch;
 - total socket-read deadline under partial and byte-trickled input;
+- total response-write deadline under partial progress and a non-reading peer;
 - bounded concurrent connection admission;
 - bounded rejection-response writes;
 - fallible worker creation with fail-closed capacity release and no panic;
@@ -103,7 +120,7 @@ Every response carries an exact `Content-Length`. HTTP 204 is represented as bod
 - new absolute audit file and symlink rejection;
 - request/response/server-state/Authbus diagnostic redaction;
 - raw unescaped quote rejection in the P0 JSON subset;
-- explicit controlled-path overwrite markers for request, response, wire, digest-preimage and signature-payload buffers;
+- explicit controlled-path overwrite markers for target, KV path, request, response, wire, digest-preimage and signature-payload buffers;
 - process startup rejects missing/equal/weak credentials and non-loopback bind.
 
 Machine-readable transport cases are maintained in `planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml`.

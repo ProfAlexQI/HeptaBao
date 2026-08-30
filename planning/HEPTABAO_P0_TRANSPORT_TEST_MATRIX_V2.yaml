@@ -60,9 +60,9 @@ cases:
   - response-delivery-failed-before-commit
   - response-delivery-failed-after-commit
 - id: P0-TRANSPORT-011
-  title: every transport rejection response has a bounded write lifetime
-  vector: capacity rejection and parser rejection both route through write_response_with_timeout
-  expected: NO_UNBOUNDED_ACCEPT_LOOP_OR_WORKER_WRITE
+  title: every response has one absolute bounded write lifetime
+  vector: normal, capacity-rejection and parser-rejection responses use a remaining-time write loop
+  expected: PARTIAL_PROGRESS_CANNOT_RESET_DEADLINE
   maximum_write_seconds: 5
 - id: P0-TRANSPORT-012
   title: connection worker creation failure cannot panic or leak admission capacity
@@ -70,13 +70,25 @@ cases:
   expected_status: CONNECTION_CLOSED_FAIL_CLOSED
   expected_detail_code: connection-worker-spawn-failed
   expected_capacity_release: true
+- id: P0-TRANSPORT-013
+  title: operation-specific body policy rejects ignored payloads
+  vector: body on health, seal status, seal, KV read, KV list or KV delete; non-exact init body
+  expected_status: 400
+  expected_detail_code: operation-body-forbidden
+  expected_dispatch: false
+- id: P0-TRANSPORT-014
+  title: canonical target and in-memory KV path use controlled owned lifetimes
+  vector: target/query and KV-path wrappers are redacted and overwritten on controlled drop
+  expected: BEST_EFFORT_CONTROLLED_PATH_OVERWRITE
+  production_qualification_effect: NONE
 resource_bounds:
   total_request_timeout_seconds: 5
+  total_response_write_timeout_seconds: 5
   maximum_concurrent_connections: 32
   maximum_client_request_ids: 4096
   client_request_id_ttl_seconds: 60
   per_connection_worker_spawn: FALLIBLE_NO_PANIC
-  rejection_response_write_timeout_seconds: 5
+  response_write_deadline_mode: ABSOLUTE_REMAINING_TIME_PER_WRITE_AND_FLUSH
 exact_head_requirements:
   rust_toolchain: 1.98.0
   fmt: true

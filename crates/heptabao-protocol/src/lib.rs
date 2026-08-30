@@ -87,6 +87,11 @@ impl Operation {
     }
 }
 
+fn zeroize_string(value: &mut String) {
+    let mut bytes = std::mem::take(value).into_bytes();
+    bytes.fill(0);
+}
+
 #[derive(Eq, PartialEq)]
 pub struct CanonicalTarget {
     path: String,
@@ -100,6 +105,16 @@ impl fmt::Debug for CanonicalTarget {
             .field("path_bytes", &self.path.len())
             .field("query_pairs", &self.query.len())
             .finish()
+    }
+}
+
+impl Drop for CanonicalTarget {
+    fn drop(&mut self) {
+        zeroize_string(&mut self.path);
+        for (name, value) in &mut self.query {
+            zeroize_string(name);
+            zeroize_string(value);
+        }
     }
 }
 
@@ -146,6 +161,31 @@ impl CanonicalTarget {
             result.push_str(value);
         }
         result
+    }
+
+    pub fn matches_canonical(&self, raw: &str) -> bool {
+        if self.query.is_empty() {
+            return self.path == raw;
+        }
+        let Some((path, query)) = raw.split_once('?') else {
+            return false;
+        };
+        if path != self.path {
+            return false;
+        }
+        let mut actual_pairs = query.split('&');
+        for (expected_name, expected_value) in &self.query {
+            let Some(actual_pair) = actual_pairs.next() else {
+                return false;
+            };
+            let Some((actual_name, actual_value)) = actual_pair.split_once('=') else {
+                return false;
+            };
+            if actual_name != expected_name || actual_value != expected_value {
+                return false;
+            }
+        }
+        actual_pairs.next().is_none()
     }
 }
 
@@ -776,11 +816,13 @@ mod tests {
     }
 
     #[test]
-    fn query_keys_are_unique_and_sorted() {
+    fn query_keys_are_unique_sorted_and_exactly_matchable() {
         let target = CanonicalTarget::parse("/v1/secret/a?b=2&a=1");
         assert!(target.is_ok());
         if let Ok(value) = target {
             assert_eq!(value.canonical_string(), "/v1/secret/a?a=1&b=2");
+            assert!(value.matches_canonical("/v1/secret/a?a=1&b=2"));
+            assert!(!value.matches_canonical("/v1/secret/a?b=2&a=1"));
         }
         assert_eq!(
             CanonicalTarget::parse("/v1/secret/a?a=1&a=2"),

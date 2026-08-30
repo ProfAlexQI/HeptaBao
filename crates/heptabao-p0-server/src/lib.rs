@@ -7,6 +7,7 @@
 //! audit contracts. It is loopback/development only, has no durable storage,
 //! no compatibility claim and no production authority.
 
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -193,10 +194,46 @@ impl<A: AuditSink> fmt::Debug for P0Server<A> {
     }
 }
 
+fn zeroize_string(value: &mut String) {
+    let mut bytes = std::mem::take(value).into_bytes();
+    bytes.fill(0);
+}
+
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct SecretPath(String);
+
+impl SecretPath {
+    fn new(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for SecretPath {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Debug for SecretPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretPath([REDACTED])")
+    }
+}
+
+impl Drop for SecretPath {
+    fn drop(&mut self) {
+        zeroize_string(&mut self.0);
+    }
+}
+
 struct ServerState {
     initialized: bool,
     sealed: bool,
-    kv: BTreeMap<String, SecretBytes>,
+    kv: BTreeMap<SecretPath, SecretBytes>,
     generation: u64,
 }
 
@@ -321,6 +358,15 @@ impl<A: AuditSink> P0Server<A> {
             }
         };
 
+        if !operation_body_is_valid(operation, &envelope.request.body) {
+            return self.reject_before_dispatch(
+                request_id,
+                Some(operation),
+                400,
+                "operation-body-forbidden",
+                r#"{"errors":["request body is not valid for this operation"]}"#,
+            );
+        }
         if self.state.sealed && !operation.allowed_while_sealed() {
             return self.reject_before_dispatch(
                 request_id,
@@ -552,7 +598,7 @@ impl<A: AuditSink> P0Server<A> {
             Ok(value) => value,
             Err(error) => return body_error_response(error),
         };
-        self.state.kv.insert(kv_key(target).to_owned(), secret);
+        self.state.kv.insert(SecretPath::new(kv_key(target)), secret);
         self.state.generation = self.state.generation.saturating_add(1);
         P0Response::no_content(true)
     }
@@ -571,7 +617,7 @@ impl<A: AuditSink> P0Server<A> {
             .state
             .kv
             .keys()
-            .filter_map(|key| key.strip_prefix(prefix))
+            .filter_map(|key| key.as_str().strip_prefix(prefix))
             .filter_map(|suffix| suffix.strip_prefix('/'))
             .filter(|suffix| !suffix.is_empty())
             .map(|suffix| suffix.split('/').next().unwrap_or(suffix))
@@ -588,6 +634,19 @@ impl<A: AuditSink> P0Server<A> {
             200,
             format!("{{\"data\":{{\"keys\":[{body}]}},\"production_supported\":false}}"),
         )
+    }
+}
+
+fn operation_body_is_valid(operation: Operation, body: &[u8]) -> bool {
+    match operation {
+        Operation::SysInit => body == b"{}",
+        Operation::SysUnseal | Operation::KvWrite => !body.is_empty(),
+        Operation::SysHealth
+        | Operation::SysSealStatus
+        | Operation::SysSeal
+        | Operation::KvRead
+        | Operation::KvList
+        | Operation::KvDelete => body.is_empty(),
     }
 }
 
@@ -972,6 +1031,65 @@ mod tests {
                 assert!(!response.committed);
             }
         }
+    }
+
+    #[test]
+    fn ignored_operation_bodies_fail_closed_before_dispatch() {
+        let server = initialized_unsealed_server();
+        assert!(server.is_ok());
+        if let Ok(mut server) = server {
+            let before = server.generation();
+            let read = envelope(
+                "GET /v1/secret/example HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\nContent-Length: 2\r\n\r\n{}",
+                "request-body-policy-0001",
+            );
+            assert!(read.is_ok());
+            if let Ok(read) = read {
+                let response = server.handle(read, MonotonicTick(20));
+                assert_eq!(response.status_code, 400);
+                assert!(!response.committed);
+                assert_eq!(server.generation(), before);
+                assert_eq!(
+                    server
+                        .audit()
+                        .events()
+                        .last()
+                        .map(|event| event.detail_code),
+                    Some("operation-body-forbidden")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn init_requires_the_exact_empty_object_body() {
+        let credentials = credentials();
+        assert!(credentials.is_ok());
+        if let Ok(credentials) = credentials {
+            let mut server = P0Server::new(credentials, MemoryAuditSink::default());
+            let body = r#"{"x":"y"}"#;
+            let init = envelope(
+                &format!(
+                    "POST /v1/sys/init HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(), body
+                ),
+                "request-init-body-policy-0001",
+            );
+            assert!(init.is_ok());
+            if let Ok(init) = init {
+                let response = server.handle(init, MonotonicTick(20));
+                assert_eq!(response.status_code, 400);
+                assert_eq!(server.generation(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn secret_path_debug_is_redacted() {
+        let path = SecretPath::new("internal-secret-path");
+        let rendered = format!("{path:?}");
+        assert!(!rendered.contains("internal-secret-path"));
+        assert!(rendered.contains("[REDACTED]"));
     }
 
     #[test]
