@@ -1,0 +1,85 @@
+name: exec-v1-3-1-rustfmt-95805
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-1-rustfmt-95805-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1-3-1-rustfmt-95805
+  cancel-in-progress: false
+
+env:
+  SOURCE_PARENT: 95805d1af4492ffecd1860fb8645050e94cf8e47
+  RESULT_BRANCH: exec/v1-3-1-rustfmt-result-v1
+
+jobs:
+  format-test-and-publish-tree:
+    runs-on: ubuntu-slim
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated execution head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind isolated execution ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "8e863d777fb7fe4a193762dec3d77cd9be7a54b9"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+
+      - name: Format and verify complete root workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Emit pure source commit with exact PR parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/exec-v1-3-1-rustfmt-95805.yml
+          git add -A
+          git diff --cached --check
+          actual="$(git diff --cached --name-only "$SOURCE_PARENT" | LC_ALL=C sort)"
+          expected="$(printf '%s\n' \
+            crates/heptabao-authbus-contracts/src/lib.rs \
+            crates/heptabao-p0-server/src/lib.rs \
+            crates/heptabao-p0-server/src/main.rs \
+            crates/heptabao-protocol/src/lib.rs \
+            | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          tree="$(git write-tree)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          commit="$(printf '%s\n' 'style(v1.3.1): apply exact Rust 1.98 formatting' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
+          test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$commit^{tree}")" = "$tree"
+          commit_files="$(git diff-tree --no-commit-id --name-only -r "$commit" | LC_ALL=C sort)"
+          test "$commit_files" = "$expected"
+          printf 'source_parent=%s\nresult_commit=%s\nresult_tree=%s\n' "$SOURCE_PARENT" "$commit" "$tree"
+          git push origin "$commit:refs/heads/$RESULT_BRANCH"
