@@ -104,28 +104,33 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
 
         let mut first = DurableCluster::new(&root)?;
         first.bootstrap_three_voters().await?;
+        let mut first_leader = first.consensus_leader().await?;
         let mut last_index = 0_u64;
         for (offset, serial) in serials.iter().copied().enumerate() {
             last_index = first
-                .write(1, serial, format!("durable-seeded-{offset}-{serial}"))
+                .write(first_leader, serial, format!("durable-seeded-{offset}-{serial}"))
                 .await?;
+            first_leader = first.consensus_leader().await?;
         }
         first.wait_all_applied(last_index).await?;
-        first.read_index(1).await?;
+        first_leader = first.consensus_leader().await?;
+        first.read_index(first_leader).await?;
         let replicated_before_restart = first.all_states_equal().await;
         let expected_before_restart = first.state(1).await;
-        first.trigger_snapshot(1, last_index).await?;
+        first.trigger_snapshot(first_leader, last_index).await?;
         let first_rpc_counts = first.rpc_counts().await;
         let first_artifacts = first.artifact_paths();
         let all_log_and_state_artifacts_nonempty = first_artifacts
             .iter()
             .filter(|(name, _)| !name.ends_with("snapshot"))
             .all(|(_, path)| fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0));
-        let (partition_rejected, committed_not_advanced) = first.exercise_partition(1).await?;
+        first_leader = first.consensus_leader().await?;
+        let (partition_rejected, committed_not_advanced) =
+            first.exercise_partition(first_leader).await?;
         first.shutdown().await?;
 
         let mut reopened = DurableCluster::new(&root)?;
-        let reopened_leader = reopened.reopen_three_voters().await?;
+        let mut reopened_leader = reopened.reopen_three_voters().await?;
         reopened.read_index(reopened_leader).await?;
         let recovered_equal = reopened.all_states_equal().await;
         let recovered_state = reopened.state(reopened_leader).await;
@@ -139,6 +144,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
             )
             .await?;
         reopened.wait_all_applied(post_restart_index).await?;
+        reopened_leader = reopened.consensus_leader().await?;
         reopened.trigger_snapshot(reopened_leader, post_restart_index).await?;
         let expected_after_restart = reopened.state(reopened_leader).await;
         let snapshot_source = root

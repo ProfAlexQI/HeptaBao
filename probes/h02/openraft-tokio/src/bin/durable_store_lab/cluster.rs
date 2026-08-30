@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::errors::decompose::DecomposeResult;
+use openraft::errors::{ClientWriteError, LinearizableReadError};
 use openraft::{Config, LogIdOptionExt, ReadPolicy, SnapshotPolicy};
 use openraft_memstore::{ClientRequest, MemStoreStateMachine};
 use tokio::task::spawn_blocking;
@@ -16,6 +17,15 @@ use super::network::{DurableNetworkFactory, DurableRaft, DurableRouter};
 use super::store::{DurableLogStore, DurableStateMachine};
 
 pub type AnyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+// A leadership transition can race a client request immediately after a
+// restart/bootstrap.  Keep retries short and bounded: this is a probe, not an
+// unbounded client loop, and every retry reuses the same client serial so the
+// state machine's idempotency contract remains intact.
+const LEADER_RETRY_ATTEMPTS: usize = 40;
+const LEADER_RETRY_DELAY: Duration = Duration::from_millis(50);
+const LEADER_REFRESH_TIMEOUT: Duration = Duration::from_millis(250);
+const SNAPSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug)]
 enum StoreLifecycle {
@@ -183,18 +193,65 @@ impl DurableCluster {
         .map_err(Into::into)
     }
 
+    /// Resolve a fresh leader hint without allowing a transient election to
+    /// turn a bounded probe operation into an unbounded wait.  OpenRaft's
+    /// ForwardToLeader hint is authoritative when it names a live node; when
+    /// it is absent, briefly sample consensus and retain the current candidate
+    /// if the cluster is still between elections.
+    async fn retry_leader(&self, fallback: u64, hinted: Option<u64>) -> u64 {
+        if let Some(id) = hinted
+            .filter(|id| self.nodes.contains_key(id))
+            .filter(|id| *id != fallback)
+        {
+            return id;
+        }
+        match timeout(LEADER_REFRESH_TIMEOUT, self.consensus_leader()).await {
+            Ok(Ok(id)) if self.nodes.contains_key(&id) => id,
+            _ => fallback,
+        }
+    }
+
     pub async fn write(&self, leader: u64, serial: u64, status: String) -> AnyResult<u64> {
-        let response = self.nodes[&leader]
-            .raft
-            .client_write(ClientRequest {
-                client: "heptabao-h02-durable".to_owned(),
-                serial,
-                status,
-            })
-            .await
-            .decompose()
-            .unwrap()?;
-        Ok(response.log_id.index)
+        let mut candidate = leader;
+        let mut last_error = String::from("no response");
+        for attempt in 0..LEADER_RETRY_ATTEMPTS {
+            let node = self
+                .nodes
+                .get(&candidate)
+                .ok_or_else(|| format!("durable write target node is unavailable: {candidate}"))?;
+            match node
+                .raft
+                .client_write(ClientRequest {
+                    client: "heptabao-h02-durable".to_owned(),
+                    serial,
+                    status: status.clone(),
+                })
+                .await
+                .decompose()
+            {
+                Err(fatal) => return Err(Box::new(fatal)),
+                Ok(Ok(response)) => return Ok(response.log_id.index),
+                Ok(Err(error)) => {
+                    // ClientWriteError is an API-level, recoverable response
+                    // (including a short membership-change window).  Retry
+                    // it against the freshest leader while preserving the
+                    // same client serial and payload for idempotence.
+                    let hinted = match &error {
+                        ClientWriteError::ForwardToLeader(forward) => forward.leader_id,
+                        ClientWriteError::ChangeMembershipError(_) => None,
+                    };
+                    last_error = error.to_string();
+                    candidate = self.retry_leader(candidate, hinted).await;
+                }
+            }
+            if attempt + 1 < LEADER_RETRY_ATTEMPTS {
+                sleep(LEADER_RETRY_DELAY).await;
+            }
+        }
+        Err(format!(
+            "durable write did not observe a stable leader after {LEADER_RETRY_ATTEMPTS} attempts: {last_error}"
+        )
+        .into())
     }
 
     pub async fn wait_all_applied(&self, index: u64) -> AnyResult<()> {
@@ -208,39 +265,97 @@ impl DurableCluster {
     }
 
     pub async fn read_index(&self, leader: u64) -> AnyResult<()> {
-        self.nodes[&leader]
-            .raft
-            .ensure_linearizable(ReadPolicy::ReadIndex)
-            .await
-            .decompose()
-            .unwrap()?;
-        Ok(())
+        let mut candidate = leader;
+        let mut last_error = String::from("no response");
+        for attempt in 0..LEADER_RETRY_ATTEMPTS {
+            let node = self.nodes.get(&candidate).ok_or_else(|| {
+                format!("durable read-index target node is unavailable: {candidate}")
+            })?;
+            match node
+                .raft
+                .ensure_linearizable(ReadPolicy::ReadIndex)
+                .await
+                .decompose()
+            {
+                Err(fatal) => return Err(Box::new(fatal)),
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(error)) => {
+                    let hinted = match &error {
+                        LinearizableReadError::ForwardToLeader(forward) => forward.leader_id,
+                        LinearizableReadError::QuorumNotEnough(_) => None,
+                    };
+                    last_error = error.to_string();
+                    candidate = self.retry_leader(candidate, hinted).await;
+                }
+            }
+            if attempt + 1 < LEADER_RETRY_ATTEMPTS {
+                sleep(LEADER_RETRY_DELAY).await;
+            }
+        }
+        Err(format!(
+            "durable read-index did not converge after {LEADER_RETRY_ATTEMPTS} attempts: {last_error}"
+        )
+        .into())
     }
 
     pub async fn trigger_snapshot(&self, leader: u64, minimum_index: u64) -> AnyResult<()> {
-        self.nodes[&leader].raft.trigger().snapshot().await?;
-        self.nodes[&leader]
-            .raft
-            .wait(Some(Duration::from_secs(12)))
-            .metrics(
-                |metrics| {
-                    metrics
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|log_id| log_id.index >= minimum_index)
-                },
-                "durable snapshot contains committed writes",
-            )
-            .await?;
-        let snapshot_path = self.nodes[&leader].state_machine.snapshot_path();
-        if !snapshot_path.is_file() || fs::metadata(snapshot_path)?.len() == 0 {
-            return Err(format!(
-                "snapshot was not durably published: {}",
-                snapshot_path.display()
-            )
-            .into());
+        let mut candidate = leader;
+        let mut last_error = String::from("no response");
+        for attempt in 0..LEADER_RETRY_ATTEMPTS {
+            let node = self.nodes.get(&candidate).ok_or_else(|| {
+                format!("durable snapshot target node is unavailable: {candidate}")
+            })?;
+            if let Err(error) = node.raft.trigger().snapshot().await {
+                return Err(Box::new(error));
+            }
+            match node
+                .raft
+                .wait(Some(SNAPSHOT_WAIT_TIMEOUT))
+                .metrics(
+                    |metrics| {
+                        metrics
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|log_id| log_id.index >= minimum_index)
+                    },
+                    "durable snapshot contains committed writes",
+                )
+                .await
+            {
+                Ok(_) => {
+                    let snapshot_path = node.state_machine.snapshot_path();
+                    match fs::metadata(snapshot_path) {
+                        Ok(metadata) if snapshot_path.is_file() && metadata.len() > 0 => {
+                            return Ok(());
+                        }
+                        Ok(metadata) => {
+                            last_error = format!(
+                                "snapshot is not durably published ({} bytes): {}",
+                                metadata.len(),
+                                snapshot_path.display()
+                            );
+                        }
+                        Err(error) => {
+                            last_error = format!(
+                                "snapshot metadata unavailable at {}: {error}",
+                                snapshot_path.display()
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    last_error = error.to_string();
+                }
+            }
+            candidate = self.retry_leader(candidate, None).await;
+            if attempt + 1 < LEADER_RETRY_ATTEMPTS {
+                sleep(LEADER_RETRY_DELAY).await;
+            }
         }
-        Ok(())
+        Err(format!(
+            "durable snapshot did not converge after {LEADER_RETRY_ATTEMPTS} attempts: {last_error}"
+        )
+        .into())
     }
 
     pub async fn state(&self, id: u64) -> MemStoreStateMachine {

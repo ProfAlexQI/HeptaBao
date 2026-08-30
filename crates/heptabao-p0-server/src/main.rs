@@ -90,6 +90,13 @@ fn run() -> Result<(), String> {
         let previous = active_connections.fetch_add(1, Ordering::AcqRel);
         if previous >= MAX_CONCURRENT_CONNECTIONS {
             active_connections.fetch_sub(1, Ordering::AcqRel);
+            // The client may already have sent bytes, but the capacity gate
+            // rejects before a worker is allocated.  Drain only bytes already
+            // available with a tiny bounded read window.  Closing a TCP stream
+            // while unread ingress remains can produce a kernel RST and erase
+            // the rejection response; the bounded drain preserves the wire
+            // contract without allowing a slow client to hold the listener.
+            discard_available_ingress(&mut stream);
             let audit_ok = record_transport_rejection(
                 &shared_audit,
                 attempt_id,
@@ -161,6 +168,29 @@ fn run() -> Result<(), String> {
 
 fn is_loopback(address: IpAddr) -> bool {
     address.is_loopback()
+}
+
+fn discard_available_ingress(stream: &mut TcpStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(2)));
+    let mut buffer = [0_u8; 4096];
+    for _ in 0..64 {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => buffer[..count].fill(0),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Interrupted
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    buffer.fill(0);
 }
 
 #[derive(Clone, Debug)]

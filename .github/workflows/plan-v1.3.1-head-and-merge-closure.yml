@@ -2,9 +2,7 @@ name: plan-v1.3.1-head-and-merge-closure
 
 on:
   pull_request:
-  push:
-    branches:
-      - "codex/plan-v1.3-gap-closure-v2"
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:

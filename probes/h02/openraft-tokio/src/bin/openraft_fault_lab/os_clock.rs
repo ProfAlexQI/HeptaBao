@@ -15,10 +15,10 @@ fn read_json(path: &Path) -> Result<Value, String> {
 async fn wait_for_file(path: &Path, deadline: Duration) -> Result<Value, String> {
     timeout(deadline, async {
         loop {
-            if path.is_file() {
-                if let Ok(value) = read_json(path) {
-                    return value;
-                }
+            if path.is_file()
+                && let Ok(value) = read_json(path)
+            {
+                return value;
             }
             sleep(Duration::from_millis(25)).await;
         }
@@ -30,14 +30,13 @@ async fn wait_for_file(path: &Path, deadline: Duration) -> Result<Value, String>
 async fn wait_for_progress(path: &Path, minimum: u64, deadline: Duration) -> Result<Value, String> {
     timeout(deadline, async {
         loop {
-            if let Ok(value) = read_json(path) {
-                if value
+            if let Ok(value) = read_json(path)
+                && value
                     .get("step")
                     .and_then(Value::as_u64)
                     .is_some_and(|step| step >= minimum)
-                {
-                    return value;
-                }
+            {
+                return value;
             }
             sleep(Duration::from_millis(25)).await;
         }
@@ -59,8 +58,64 @@ async fn signal(pid: u32, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn proc_status_path(pid: u32) -> Result<PathBuf, String> {
+    let direct = PathBuf::from(format!("/proc/{pid}/status"));
+    if direct.is_file() {
+        return Ok(direct);
+    }
+
+    // In a nested PID namespace (for example, the Codex sandbox),
+    // `Child::id()` and `std::process::id()` are namespace-local values while
+    // the mounted `/proc` is keyed by the outer namespace's PID.  Resolving
+    // only `/proc/{pid}/status` therefore reports a false "No such file" even
+    // though the child is alive.  Search the mounted procfs for the process
+    // whose *innermost* NSpid matches and whose PID namespace is ours.  The
+    // namespace check is important: unrelated nested sandboxes can reuse the
+    // same local PID.
+    let own_namespace = fs::read_link("/proc/self/ns/pid").map_err(|error| {
+        format!("read /proc/self/ns/pid while resolving namespace PID {pid}: {error}")
+    })?;
+    let entries = fs::read_dir("/proc")
+        .map_err(|error| format!("scan /proc while resolving namespace PID {pid}: {error}"))?;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !name.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let candidate = entry.path();
+        let candidate_namespace = match fs::read_link(candidate.join("ns/pid")) {
+            Ok(namespace) => namespace,
+            Err(_) => continue,
+        };
+        if candidate_namespace != own_namespace {
+            continue;
+        }
+        let status_path = candidate.join("status");
+        let Ok(text) = fs::read_to_string(&status_path) else {
+            continue;
+        };
+        let matches_namespace_pid = text
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .and_then(|line| line.split_whitespace().last())
+            .and_then(|value| value.parse::<u32>().ok())
+            == Some(pid);
+        if matches_namespace_pid {
+            return Ok(status_path);
+        }
+    }
+
+    Err(format!(
+        "read {}: process was not found in the current PID namespace",
+        direct.display()
+    ))
+}
+
 fn proc_state(pid: u32) -> Result<String, String> {
-    let status_path = PathBuf::from(format!("/proc/{pid}/status"));
+    let status_path = proc_status_path(pid)?;
     let text = fs::read_to_string(&status_path)
         .map_err(|error| format!("read {}: {error}", status_path.display()))?;
     text.lines()

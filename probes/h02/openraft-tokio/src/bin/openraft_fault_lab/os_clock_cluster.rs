@@ -71,6 +71,19 @@ impl Cluster {
         Ok(())
     }
 
+    async fn wait_membership_committed(&self, context: &str) -> AnyResult<()> {
+        for node in self.nodes.values() {
+            node.raft
+                .wait(Some(Duration::from_secs(8)))
+                .metrics(
+                    |metrics| metrics.membership_config == metrics.committed_membership_config,
+                    context,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn bootstrap_three_voters(&mut self) -> AnyResult<()> {
         self.start_node(1).await?;
         self.nodes[&1]
@@ -82,13 +95,19 @@ impl Cluster {
             .wait(Some(Duration::from_secs(5)))
             .current_leader(1, "os-clock single-node initialization")
             .await?;
+        self.wait_membership_committed("os-clock initial membership committed")
+            .await?;
         for id in [2_u64, 3] {
             self.start_node(id).await?;
             self.nodes[&1].raft.add_learner(id, (), true).await?;
+            self.wait_membership_committed("os-clock learner membership committed")
+                .await?;
         }
         self.nodes[&1]
             .raft
             .change_membership(BTreeSet::from([1_u64, 2, 3]), false)
+            .await?;
+        self.wait_membership_committed("os-clock voter membership committed")
             .await?;
         for node in self.nodes.values() {
             node.raft
@@ -108,12 +127,11 @@ impl Cluster {
                         reported.insert(leader);
                     }
                 }
-                if reported.len() == 1 {
-                    if let Some(leader) = reported.iter().next().copied() {
-                        if self.nodes.contains_key(&leader) {
-                            return leader;
-                        }
-                    }
+                if reported.len() == 1
+                    && let Some(leader) = reported.iter().next().copied()
+                    && self.nodes.contains_key(&leader)
+                {
+                    return leader;
                 }
                 sleep(Duration::from_millis(25)).await;
             }
@@ -123,10 +141,10 @@ impl Cluster {
         Ok(leader)
     }
 
-    async fn write_and_read(
+    async fn write_and_read_once(
         &self,
         serial: u64,
-        value: String,
+        value: &str,
     ) -> AnyResult<(u64, Option<String>, u64)> {
         let leader = self.consensus_leader().await?;
         let node = self
@@ -138,7 +156,7 @@ impl Cluster {
             .client_write(ClientRequest {
                 client: REGISTER_KEY.to_owned(),
                 serial,
-                status: value,
+                status: value.to_owned(),
             })
             .await?;
         node.raft
@@ -154,6 +172,61 @@ impl Cluster {
             .get(REGISTER_KEY)
             .cloned();
         Ok((response.log_id.index, observed, leader))
+    }
+
+    /// Retry a post-suspend write/read while OpenRaft settles a legal leader
+    /// election.  SIGSTOP advances the monotonic clock while all three
+    /// in-process nodes are paused, so the first request after SIGCONT can
+    /// legitimately observe a stale leader (or a forwarding target of
+    /// `None`).  The retry is deliberately bounded and keeps the original
+    /// serial/value pair so a committed request remains idempotent.  A
+    /// permanent failure is returned with the final diagnostic instead of
+    /// being converted into a pass.
+    async fn write_and_read(
+        &self,
+        serial: u64,
+        value: String,
+    ) -> AnyResult<(u64, Option<String>, u64)> {
+        const RETRY_WINDOW: Duration = Duration::from_secs(10);
+        const RETRY_DELAY: Duration = Duration::from_millis(50);
+
+        let deadline = Instant::now() + RETRY_WINDOW;
+        let mut attempts = 0_u32;
+        let mut last_error = "no attempt completed".to_owned();
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline.duration_since(now);
+            attempts = attempts.saturating_add(1);
+            match timeout(remaining, self.write_and_read_once(serial, &value)).await {
+                Ok(Ok(result)) => return Ok(result),
+                Ok(Err(error)) => last_error = error.to_string(),
+                Err(_) => {
+                    last_error = format!(
+                        "write/read attempt timed out after {} ms",
+                        remaining.as_millis()
+                    );
+                }
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline.duration_since(now);
+            if remaining <= RETRY_DELAY {
+                break;
+            }
+            sleep(RETRY_DELAY).await;
+        }
+
+        Err(format!(
+            "bounded post-resume write/read retry exhausted after {attempts} attempts: {last_error}"
+        )
+        .into())
     }
 
     async fn shutdown(self) {
