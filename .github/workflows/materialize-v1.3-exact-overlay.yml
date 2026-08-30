@@ -35,17 +35,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          base_commit=cedb6c95a5323f7004551087d75e2f57a1ec484a
+          base_tree=e0032b54bad2048802cd61f6bbc7d6d1f9ce4003
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-          test "$(git rev-parse HEAD^)" = "cedb6c95a5323f7004551087d75e2f57a1ec484a"
-          test "$(git rev-parse 'HEAD^^{tree}')" = "e0032b54bad2048802cd61f6bbc7d6d1f9ce4003"
+          test "$(git merge-base HEAD "$base_commit")" = "$base_commit"
+          test "$(git rev-parse "$base_commit^{tree}")" = "$base_tree"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           mkdir -p "$RUNNER_TEMP/v13"
           python3 - <<'PY'
           import base64
           import hashlib
           import os
+          import subprocess
           import tarfile
           from pathlib import Path
+
+          base = "cedb6c95a5323f7004551087d75e2f57a1ec484a"
+          allowed = {
+              ".github/workflows/materialize-v1.3-exact-overlay.yml",
+              "schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json",
+              "schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json",
+              "tests/platform/test_h02_blocker_closure_evidence_v1.py",
+              "tests/platform/test_h02_openraft_inmemory_cluster_v1.py",
+              *(f"bootstrap/v1.3-overlay/part-{index:02d}.b64" for index in range(25)),
+          }
+          actual = set(
+              subprocess.run(
+                  ["git", "diff", "--name-only", f"{base}...HEAD"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.splitlines()
+          )
+          assert actual == allowed, {
+              "missing": sorted(allowed - actual),
+              "unexpected": sorted(actual - allowed),
+          }
 
           root = Path(os.environ["RUNNER_TEMP"]) / "v13"
           parts = sorted(Path("bootstrap/v1.3-overlay").glob("part-*.b64"))
