@@ -1,0 +1,58 @@
+-A valid client-proposed `X-HeptaBao-Request-Id` may replace the attempt ID after strict parsing and exact Host verification. The original attempt ID is transport-local metadata; future structured audit schemas must preserve the mapping when both identities exist.
++A valid client-proposed `X-HeptaBao-Request-Id` may replace the attempt ID after strict parsing and exact Host verification. Client values using the reserved internal `p0-` prefix are rejected with `client-request-id-reserved-prefix`, so they cannot collide with generated attempt identities. The original attempt ID is transport-local metadata; future structured audit schemas must preserve the mapping when both identities exist. Request-ID diagnostic views are redacted, clones share one owned value, and the temporary formatted audit line is overwritten after the write/flush/sync attempt even when that attempt fails.
+ 
+ ## 3. Stable phases
+ 
+@@ -51,6 +51,7 @@ The P0 transport and request pipeline use bounded identifiers including:
+ - `host-listener-mismatch`;
+ - `client-request-id-invalid`;
+ - `client-request-id-replayed`;
++- `client-request-id-reserved-prefix`;
+ - `request-id-registry-unavailable`;
+ - `request-id-registry-saturated`;
+ - `protocol-duplicate-header`;
+diff --git a/docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md b/docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md
+index 7a534947144637dfe8d565b2d25e5243ac2fb168..d848ebba1149dcdc9ad500a69f1f4503ce1c10ed 100644
+--- a/docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md
++++ b/docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md
+@@ -27,7 +27,7 @@ This prevents method/path/body/Host confusion and assertion reuse across request
+ 
+ A production Authbus-capable client must create an unpredictable request ID before assertion issuance, present that same ID in `X-HeptaBao-Request-Id`, and send the exact request bytes represented by the canonical binding. A server-generated post-receive P0 attempt ID cannot be retroactively signed by Authbus. The complete acquisition, retry and HA forwarding sequence is normative in `HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md`.
+ 
+-`RequestBinding` safe `Debug` reports only the request ID, method and field byte counts; it does not render the target, Host or body. The target parser verifies that the supplied text already equals its canonical form without constructing another target string. The temporary canonical request byte vector is overwritten immediately after the digest provider returns, before digest errors are propagated. The temporary unsigned assertion payload, which contains the subject and binding digest, is likewise overwritten immediately after the signature verifier returns and before verifier errors are propagated. Providers must not retain either borrowed preimage after returning.
++`RequestBinding` safe `Debug` reports only a redacted request-ID marker, the method and field byte counts; it does not render the request-ID value, target, Host or body. Request-ID clones share one owned allocation and the final owned value is overwritten on last drop. The target parser verifies that the supplied text already equals its canonical form without constructing another target string. The temporary canonical request byte vector is overwritten immediately after the digest provider returns, before digest errors are propagated. The temporary unsigned assertion payload, which contains the subject and binding digest, is likewise overwritten immediately after the signature verifier returns and before verifier errors are propagated. Providers must not retain either borrowed preimage after returning.
+ 
+ ## Time model
+ 
+diff --git a/docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md b/docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md
+index 511ee48c90a46d169f9d921092091a16fdf77f40..4619ff9d25a7a9f7aa859396fa06f3d0b94a1309 100644
+--- a/docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md
++++ b/docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md
+@@ -34,7 +34,9 @@ The request ID is 8–128 ASCII bytes containing only:
+ ALPHA / DIGIT / "-" / "_"
+ ```
+ 
+-Header-name comparison is case-insensitive, but the request-ID value is byte-exact and case-sensitive. Duplicate request-ID headers are rejected by the strict HTTP parser before Authbus evaluation.
++Header-name comparison is case-insensitive, but the request-ID value is byte-exact and case-sensitive. Duplicate request-ID headers are rejected by the strict HTTP parser before Authbus evaluation. The lowercase `p0-` prefix is reserved for server-generated development attempt identities and is rejected on every client-proposed identifier; production profiles must publish and version any additional reserved namespace.
++
++The Rust request-ID value uses shared owned storage for clones, redacts `Debug` and overwrites its final owned string when the last reference drops. This is best-effort process-memory hygiene and does not change the requirement that production Authbus IDs carry at least 128 bits of unpredictability.
+ 
+ ## 4. Message sequence
+ 
+diff --git a/docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md b/docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md
+index ca18694f7b923206b3d40571522fcf0f0149fc4c..b88119613f5ce61f71875c67466492b1a540d296 100644
+--- a/docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md
++++ b/docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md
+@@ -57,7 +57,7 @@ Unexpected or otherwise ignored bodies are rejected with `operation-body-forbidd
+ 
+ The ingress allocates a request-attempt ID immediately after `accept` and before reading request bytes. Parser, framing, Host, timeout and socket errors therefore have an auditable identity without retaining raw request bytes.
+ 
+-A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after parsing and exact Host verification. The P0 registry permits at most 4096 live identifiers for 60 seconds and rejects duplicate use with 409 or saturation with 503. It is process-local development machinery, not the Authbus HA replay authority, and it is intentionally lost on restart. Registry `Debug` redacts the entire active-ID map and reports only capacity and TTL configuration.
++A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after parsing and exact Host verification. Client values beginning with the reserved internal `p0-` prefix are rejected with 400 before entering the registry. The P0 registry permits at most 4096 live identifiers for 60 seconds and rejects duplicate use with 409 or saturation with 503. It stores shared `RequestId` values rather than duplicate plain strings. It is process-local development machinery, not the Authbus HA replay authority, and it is intentionally lost on restart. Registry and request-ID `Debug` redact all live identifier values and report only capacity/TTL or a fixed redaction marker.
+ 
+ ## Owned secret-material lifetime
+ 
+@@ -65,12 +65,13 @@ A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after p
+ - canonical target equality can be checked without constructing a duplicate target string, and Authbus request binding uses that path;
+ - parsed header values use owned byte vectors and are overwritten by their controlled destructor;
+ - parsed request types do not implement implicit `Clone` and their `Debug` output excludes target text, header values and body bytes;
