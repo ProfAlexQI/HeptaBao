@@ -9,13 +9,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: exec-protocol-sensitive-rejection-hygiene-${{ github.ref }}
+  group: exec-protocol-sensitive-rejection-hygiene-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   apply-validate-commit:
     if: ${{ github.actor != 'github-actions[bot]' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-slim
     timeout-minutes: 15
     steps:
       - name: Checkout exact execution head
