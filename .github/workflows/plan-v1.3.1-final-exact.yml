@@ -29,7 +29,7 @@ env:
 
 jobs:
   root-and-plan:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - name: Checkout exact source
@@ -103,7 +103,7 @@ jobs:
 
   p0-final-transport:
     needs: root-and-plan
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout exact source
@@ -154,7 +154,7 @@ jobs:
           retention-days: 30
 
   h02-final-exact-head:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
       - name: Checkout exact source
@@ -246,7 +246,7 @@ jobs:
   authority-sentinel:
     needs: [root-and-plan, p0-final-transport, h02-final-exact-head]
     if: ${{ always() }}
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Require technical lanes and preserve authority boundary
