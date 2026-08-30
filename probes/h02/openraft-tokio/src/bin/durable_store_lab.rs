@@ -122,22 +122,55 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         let snapshot_copy = root.join("snapshot-recovery-copy");
         copy_tree(&snapshot_source, &snapshot_copy)?;
         let expected_snapshot_state = expected_after_restart.client_status.clone();
-        let snapshot_recovered = spawn_blocking(move || DurableStateMachine::open_existing(snapshot_copy))
-            .await??;
+        let snapshot_recovered =
+            spawn_blocking(move || DurableStateMachine::open_existing(snapshot_copy)).await??;
         let snapshot_recovery_matches =
             snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
                 && snapshot_recovered.has_current_snapshot().await
                 && snapshot_recovered.generation().await > 1;
 
+        let legacy_log_root = root.join("legacy-log-adoption-copy");
+        copy_tree(&root.join("node-1").join("log"), &legacy_log_root)?;
+        fs::remove_file(legacy_log_root.join("initialized.bin"))?;
+        let legacy_log_task_root = legacy_log_root.clone();
+        let legacy_log_adopted =
+            spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;
+        let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()
+            && legacy_log_root.join("initialized.bin").is_file();
+
+        let legacy_state_root = root.join("legacy-state-adoption-copy");
+        copy_tree(
+            &root.join("node-1").join("state-machine"),
+            &legacy_state_root,
+        )?;
+        fs::remove_file(legacy_state_root.join("initialized.bin"))?;
+        let legacy_state_task_root = legacy_state_root.clone();
+        let expected_legacy_state = expected_after_restart.client_status.clone();
+        let legacy_state_adopted = spawn_blocking(move || {
+            DurableStateMachine::adopt_legacy(legacy_state_task_root)
+        })
+        .await??;
+        let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()
+            && legacy_state_root.join("initialized.bin").is_file()
+            && legacy_state_adopted
+                .get_state_machine()
+                .await
+                .client_status
+                == expected_legacy_state;
+
         let corrupt_log_root = root.join("corrupt-log-copy");
         copy_tree(&root.join("node-1").join("log"), &corrupt_log_root)?;
         flip_first_payload_byte(&corrupt_log_root.join("raft-log.bin"))?;
-        let corrupt_log_rejected = spawn_blocking(move || DurableLogStore::open_existing(corrupt_log_root))
-            .await?
-            .is_err();
+        let corrupt_log_rejected =
+            spawn_blocking(move || DurableLogStore::open_existing(corrupt_log_root))
+                .await?
+                .is_err();
 
         let corrupt_state_root = root.join("corrupt-state-copy");
-        copy_tree(&root.join("node-1").join("state-machine"), &corrupt_state_root)?;
+        copy_tree(
+            &root.join("node-1").join("state-machine"),
+            &corrupt_state_root,
+        )?;
         flip_first_payload_byte(&corrupt_state_root.join("state-bundle.bin"))?;
         let corrupt_state_rejected =
             spawn_blocking(move || DurableStateMachine::open_existing(corrupt_state_root))
@@ -175,8 +208,14 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
             ),
             case(
                 "durable-snapshot-state-atomic-generation-reopen",
-                snapshot_recovery_matches,
-                json!({"matches": snapshot_recovery_matches}),
+                snapshot_recovery_matches
+                    && legacy_log_adoption_matches
+                    && legacy_state_adoption_matches,
+                json!({
+                    "snapshot_matches": snapshot_recovery_matches,
+                    "legacy_log_adopted": legacy_log_adoption_matches,
+                    "legacy_state_adopted": legacy_state_adoption_matches,
+                }),
             ),
             case(
                 "durable-log-corruption-fails-closed",
@@ -218,6 +257,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 "state_machine_persisted_before_responder": true,
                 "snapshot_state_atomic_bundle_publish": true,
                 "state_publish_after_durable_write": true,
+                "explicit_legacy_adoption_executed": true,
                 "full_cluster_disk_restart": true,
                 "read_index_after_restart": true,
                 "corruption_rejected": true,
