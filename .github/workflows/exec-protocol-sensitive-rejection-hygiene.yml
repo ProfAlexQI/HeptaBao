@@ -25,12 +25,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install pinned validation dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-
       - name: Bind parent and apply exact patch
         shell: bash
         run: |
@@ -47,8 +41,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests/plan -p 'test_sensitive_parse_rejection_hygiene.py' -v
-          python3 scripts/validate_plan_v1_3.py
-          python3 scripts/validate_plan_v1_3_1.py
+          python3 scripts/validate_rust_source_surface_v1.py \
+            crates/heptabao-protocol/src/lib.rs
 
       - name: Commit only the verified protocol blob
         shell: bash
