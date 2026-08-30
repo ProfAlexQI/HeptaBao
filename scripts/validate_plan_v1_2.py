@@ -430,8 +430,12 @@ def validate_docs() -> None:
             if token.lower() not in text.lower():
                 fail(f"{path}: required concept missing: {token}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
-    if "current plan: **v1.2**" not in readme and "current plan: **v1.3**" not in readme:
+    current = re.search(r"current plan:\s*\*\*v(\d+)\.(\d+)(?:\.(\d+))?", readme)
+    if current is None:
         fail("README.md: current plan marker is missing")
+    version = tuple(int(part or 0) for part in current.groups())
+    if version < (1, 2, 0):
+        fail(f"README.md: current plan regressed below V1.2: {version!r}")
     deployability = (
         "not yet a deployable secrets server",
         "not a production-deployable secrets server",

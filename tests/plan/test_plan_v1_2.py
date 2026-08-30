@@ -33,6 +33,11 @@ class PlanV12Tests(unittest.TestCase):
         self.assertFalse(result["qualification"])
         self.assertEqual(result["authority_effect"], "NONE")
 
+    def test_inherited_validator_accepts_current_v131_readme_marker(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+        self.assertIn("current plan: **v1.3.1", readme)
+        validator.validate_docs()
+
     def test_duplicate_manifest_path_fails_closed(self):
         value = validator.load_yaml("planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml")
         value = copy.deepcopy(value)

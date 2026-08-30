@@ -175,7 +175,12 @@ def validate_protocol(path: Path = PROTOCOL) -> None:
         "self.0.fill(0)",
     ):
         require(token in text, f"protocol invariant missing: {token}")
-    require("#[derive(Clone, Debug, Eq, PartialEq)]\npub struct SecretBytes" not in text, "secret Debug leaks owned bytes")
+    secret_derive = re.search(
+        r"#\[derive\(([^)]*)\)\]\s*pub struct SecretBytes", text
+    )
+    if secret_derive is not None:
+        traits = {item.strip() for item in secret_derive.group(1).split(",")}
+        require("Debug" not in traits, "secret Debug leaks owned bytes")
     require("pub fn parse_http_request" in text and "pub fn classify_operation" in text, "protocol entry points missing")
 
 
