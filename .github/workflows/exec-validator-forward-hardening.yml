@@ -42,15 +42,19 @@ jobs:
           git apply "$patch"
           git diff --check
 
-      - name: Execute inherited and current validation
+      - name: Execute validation against the intended final tree
         shell: bash
         run: |
           set -euo pipefail
+          workflow=.github/workflows/exec-validator-forward-hardening.yml
+          patch=bootstrap/exec/validator-forward-hardening.patch
+          rm -f "$workflow" "$patch"
           python3 scripts/validate_plan_v1_2.py
           python3 scripts/validate_plan_v1_3.py
           python3 scripts/validate_plan_v1_3_1.py
           python3 -m unittest discover -s tests/plan -p 'test_plan_v1_2.py' -v
           python3 -m unittest discover -s tests/plan -p 'test_plan_v1_3.py' -v
+          git checkout -- "$workflow" "$patch"
 
       - name: Commit only the verified validator surface
         shell: bash
