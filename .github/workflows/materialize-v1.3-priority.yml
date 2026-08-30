@@ -1,0 +1,216 @@
+name: materialize-v1.3-priority
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-materialize-priority-v1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-v1.3-exact-overlay-pr-44
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact priority transport
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact Python environment
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Verify source, reconstruct and materialize overlay
+        shell: bash
+        env:
+          BASE_COMMIT: cedb6c95a5323f7004551087d75e2f57a1ec484a
+          BASE_TREE: e0032b54bad2048802cd61f6bbc7d6d1f9ce4003
+          TARGET_BRANCH: codex/plan-v1.3-foundation-closure-v1
+          EXPECTED_TARGET_HEAD: 42841e6e6d753b2031b74888992ec167e66aafd1
+          PAYLOAD_SHA256: 99bea9f712ecd6dcc587b80a8d774e091f6e79184ca105c74a36d65ed8d12e05
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git merge-base HEAD "$BASE_COMMIT")" = "$BASE_COMMIT"
+          test "$(git rev-parse "$BASE_COMMIT^{tree}")" = "$BASE_TREE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$EXPECTED_TARGET_HEAD"
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import tarfile
+          from pathlib import Path
+
+          base = os.environ["BASE_COMMIT"]
+          allowed = {
+              ".github/workflows/materialize-v1.3-exact-overlay.yml",
+              ".github/workflows/materialize-v1.3-priority.yml",
+              "schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json",
+              "schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json",
+              "tests/platform/test_h02_blocker_closure_evidence_v1.py",
+              "tests/platform/test_h02_openraft_inmemory_cluster_v1.py",
+              *(f"bootstrap/v1.3-overlay/part-{index:02d}.b64" for index in range(25)),
+          }
+          actual = set(
+              subprocess.run(
+                  ["git", "diff", "--name-only", f"{base}...HEAD"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.splitlines()
+          )
+          assert actual == allowed, {
+              "missing": sorted(allowed - actual),
+              "unexpected": sorted(actual - allowed),
+          }
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "v13-priority"
+          root.mkdir(parents=True, exist_ok=True)
+          parts = sorted(Path("bootstrap/v1.3-overlay").glob("part-*.b64"))
+          assert len(parts) == 25
+          encoded = b"".join(
+              path.read_bytes().replace(b"\r", b"").replace(b"\n", b"")
+              for path in parts
+          )
+          payload = base64.b64decode(encoded, validate=True)
+          assert hashlib.sha256(payload).hexdigest() == os.environ["PAYLOAD_SHA256"]
+          archive = root / "overlay.tar.xz"
+          archive.write_bytes(payload)
+          with tarfile.open(archive, "r:xz") as tar:
+              members = tar.getmembers()
+              assert members
+              for member in members:
+                  target = (root / member.name).resolve()
+                  assert target == root.resolve() or root.resolve() in target.parents
+                  assert not member.issym() and not member.islnk()
+              tar.extractall(root, filter="data")
+
+          overlay = root / "overlay"
+          manifest = json.loads((root / "OVERLAY_MANIFEST.json").read_text(encoding="utf-8"))
+          assert manifest["schema"] == "heptabao.v1-3-pr40-overlay-manifest.v1"
+          assert manifest["exact_base"]["commit"] == base
+          assert manifest["exact_base"]["tree"] == os.environ["BASE_TREE"]
+          assert manifest["qualification"] is False
+          assert manifest["compatibility_claim"] is False
+          assert manifest["selected_candidates"] == []
+          assert manifest["selection_effect"] == "NONE"
+          assert manifest["authority_effect"] == "NONE"
+          assert manifest["deletions"] == []
+          assert len(manifest["entries"]) == 61
+          expected = set()
+          for entry in manifest["entries"]:
+              relative = Path(entry["path"])
+              assert not relative.is_absolute() and ".." not in relative.parts
+              assert relative.as_posix() not in expected
+              expected.add(relative.as_posix())
+              source = overlay / relative
+              content = source.read_bytes()
+              assert len(content) == entry["bytes"]
+              assert hashlib.sha256(content).hexdigest() == entry["sha256"]
+              destination = Path.cwd() / relative
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              temporary = destination.with_name(f".{destination.name}.v13.tmp")
+              temporary.write_bytes(content)
+              os.replace(temporary, destination)
+              destination.chmod(0o755 if entry["executable"] else 0o644)
+          actual_overlay = {
+              path.relative_to(overlay).as_posix()
+              for path in overlay.rglob("*")
+              if path.is_file()
+          }
+          assert actual_overlay == expected
+          PY
+          rm -rf bootstrap/v1.3-overlay
+          rm -f .github/workflows/materialize-v1.3-exact-overlay.yml
+          rm -f .github/workflows/materialize-v1.3-priority.yml
+          git add -A
+          git diff --cached --check
+          test -z "$(git ls-files 'bootstrap/v1.3-overlay/*')"
+          test -z "$(git ls-files '.github/workflows/materialize-v1.3-*.yml')"
+
+      - name: Validate materialized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 scripts/validate_plan_v2.py
+          python3 scripts/validate_plan_v2_extensions.py
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_plan_v1_2_1.py
+          python3 scripts/validate_plan_v1_2_2.py
+          python3 scripts/validate_plan_v1_3.py
+          python3 scripts/validate_h01_h02_next_v1.py
+          python3 scripts/validate_h02_candidate_adapters_v1.py
+          python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python3 scripts/validate_h02_openraft_fault_lab_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python3 scripts/validate_rust_source_surface_v1.py \
+            crates/heptabao-authbus-contracts/src/lib.rs \
+            crates/heptabao-p0-server/src/lib.rs \
+            crates/heptabao-p0-server/src/main.rs \
+            crates/heptabao-protocol/src/lib.rs
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+
+          for path in (
+              Path("schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json"),
+              Path("schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json"),
+          ):
+              schema = json.loads(path.read_text(encoding="utf-8"))
+              Draft202012Validator.check_schema(schema)
+          blocker = json.loads(Path("schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json").read_text())
+          cluster = json.loads(Path("schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json").read_text())
+          assert blocker["properties"]["execution"]["properties"]["toolchain"]["enum"] == ["1.88.0", "1.98.0"]
+          assert cluster["properties"]["environment"]["properties"]["rust_toolchain"]["enum"] == ["1.88.0", "1.98.0"]
+
+          patterns = [
+              re.compile(r"(?mi)^\s*contents\s*:\s*write\s*$"),
+              re.compile(r"(?mi)^\s*persist-credentials\s*:\s*true\s*$"),
+              re.compile(r"(?mi)^\s*git\s+(?:commit|push|rebase|merge)\b"),
+          ]
+          findings = []
+          for path in sorted(Path(".github/workflows").glob("*.y*ml")):
+              text = path.read_text(encoding="utf-8")
+              if any(pattern.search(text) for pattern in patterns):
+                  findings.append(str(path))
+          assert findings == [], findings
+          PY
+          git diff --cached --check
+          git write-tree | tee "$RUNNER_TEMP/v13-priority/materialized-tree.txt"
+
+      - name: Commit and exact-lease fast-forward PR branch
+        shell: bash
+        env:
+          TARGET_BRANCH: codex/plan-v1.3-foundation-closure-v1
+          EXPECTED_TARGET_HEAD: 42841e6e6d753b2031b74888992ec167e66aafd1
+        run: |
+          set -euo pipefail
+          expected_tree="$(cat "$RUNNER_TEMP/v13-priority/materialized-tree.txt")"
+          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$EXPECTED_TARGET_HEAD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(plan): materialize V1.3 protocol Authbus and P0 foundation"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
