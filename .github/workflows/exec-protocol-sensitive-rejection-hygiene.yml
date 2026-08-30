@@ -15,7 +15,7 @@ concurrency:
 jobs:
   apply-validate-commit:
     if: ${{ github.actor != 'github-actions[bot]' }}
-    runs-on: ubuntu-slim
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - name: Checkout exact execution head
