@@ -1,4 +1,4 @@
-name: exec-materialize-v13-a1e894-slim
+name: exec-materialize-v13-a1e894-arm64
 
 on:
   push:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   materialize:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - name: Checkout exact transport source
