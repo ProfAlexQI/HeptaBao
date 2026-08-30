@@ -1,0 +1,55 @@
+name: tmp-v1-2-2-rustfmt-arm2
+
+on:
+  push:
+    branches: ["codex/tmp-v1.2.2-rustfmt-arm2"]
+    paths:
+      - ".github/workflows/tmp-v1-2-2-rustfmt-arm2.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-v1-2-2-rustfmt-arm2
+  cancel-in-progress: true
+
+jobs:
+  format-and-commit:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact transition head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Format exact OpenRaft workspace and self-remove
+        shell: bash
+        env:
+          EXACT_BASE: 65a32638b4c2ed677a293b26dc8c0c2ed1ad5cc6
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$EXACT_BASE" HEAD
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          cargo +1.98.0 fmt --manifest-path probes/h02/openraft-tokio/Cargo.toml --all
+          rm -f .github/workflows/tmp-v1-2-2-rustfmt-arm2.yml
+          git add -A
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$RUNNER_TEMP/actual-paths"
+          cat > "$RUNNER_TEMP/expected-paths" <<'PATHS'
+          .github/workflows/tmp-v1-2-2-rustfmt-arm2.yml
+          probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs
+          probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs
+          PATHS
+          sort -o "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/expected-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          cargo +1.98.0 fmt --manifest-path probes/h02/openraft-tokio/Cargo.toml --all -- --check
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs)" = "0fccaf0d9f3bfe358c75300a8564e0e9ba81eb63"
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs)" = "a4f90d29f981175637668f7fd44e758d6aa9c63c"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "style(h02): normalize durable lifecycle sources"
+          git push origin HEAD:codex/tmp-v1.2.2-rustfmt-arm2
