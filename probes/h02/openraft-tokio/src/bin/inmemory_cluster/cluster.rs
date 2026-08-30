@@ -43,7 +43,7 @@ impl Cluster {
             heartbeat_interval: 40,
             election_timeout_min: 120,
             election_timeout_max: 240,
-            snapshot_policy: SnapshotPolicy::LogsSinceLast(3),
+            snapshot_policy: SnapshotPolicy::Never,
             max_in_snapshot_log_to_keep: 0,
             enable_pre_vote: Some(true),
             ..Config::default()

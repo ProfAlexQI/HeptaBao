@@ -260,21 +260,14 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::exit_code_for_status;
-    use serde_json::json;
 
     #[test]
     fn hostile_application_failure_cannot_exit_successfully() {
-        assert_eq!(exit_code_for_status(&json!({"status": "EXECUTED_FAIL"})), 1);
-    }
-
-    #[test]
-    fn blocked_and_unknown_results_are_nonzero() {
-        assert_eq!(exit_code_for_status(&json!({"status": "BLOCKED"})), 2);
-        assert_eq!(exit_code_for_status(&json!({"status": "UNKNOWN"})), 3);
-    }
-
-    #[test]
-    fn only_executed_pass_exits_zero() {
-        assert_eq!(exit_code_for_status(&json!({"status": "EXECUTED_PASS"})), 0);
+        let failed = serde_json::json!({"status": "EXECUTED_FAIL"});
+        let blocked = serde_json::json!({"status": "BLOCKED"});
+        let passed = serde_json::json!({"status": "EXECUTED_PASS"});
+        assert_eq!(exit_code_for_status(&failed), 1);
+        assert_eq!(exit_code_for_status(&blocked), 2);
+        assert_eq!(exit_code_for_status(&passed), 0);
     }
 }

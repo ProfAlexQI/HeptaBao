@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "heptabao-authbus-contracts"
+version = "0.1.0"
+dependencies = [
+ "heptabao-protocol",
+]
+
+[[package]]
 name = "heptabao-governance"
 version = "0.1.0"
 
@@ -11,9 +18,20 @@ name = "heptabao-oracle-observer"
 version = "0.1.0"
 
 [[package]]
+name = "heptabao-p0-server"
+version = "0.1.0"
+dependencies = [
+ "heptabao-protocol",
+]
+
+[[package]]
 name = "heptabao-platform-bakeoff"
 version = "0.1.0"
 
 [[package]]
 name = "heptabao-platform-contracts"
+version = "0.1.0"
+
+[[package]]
+name = "heptabao-protocol"
 version = "0.1.0"

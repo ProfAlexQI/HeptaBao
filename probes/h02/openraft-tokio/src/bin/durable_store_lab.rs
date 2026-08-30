@@ -122,7 +122,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         let snapshot_copy = root.join("snapshot-recovery-copy");
         copy_tree(&snapshot_source, &snapshot_copy)?;
         let expected_snapshot_state = expected_after_restart.client_status.clone();
-        let snapshot_recovered = spawn_blocking(move || DurableStateMachine::open(snapshot_copy))
+        let snapshot_recovered = spawn_blocking(move || DurableStateMachine::open_existing(snapshot_copy))
             .await??;
         let snapshot_recovery_matches =
             snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
@@ -132,7 +132,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         let corrupt_log_root = root.join("corrupt-log-copy");
         copy_tree(&root.join("node-1").join("log"), &corrupt_log_root)?;
         flip_first_payload_byte(&corrupt_log_root.join("raft-log.bin"))?;
-        let corrupt_log_rejected = spawn_blocking(move || DurableLogStore::open(corrupt_log_root))
+        let corrupt_log_rejected = spawn_blocking(move || DurableLogStore::open_existing(corrupt_log_root))
             .await?
             .is_err();
 
@@ -140,7 +140,7 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         copy_tree(&root.join("node-1").join("state-machine"), &corrupt_state_root)?;
         flip_first_payload_byte(&corrupt_state_root.join("state-bundle.bin"))?;
         let corrupt_state_rejected =
-            spawn_blocking(move || DurableStateMachine::open(corrupt_state_root))
+            spawn_blocking(move || DurableStateMachine::open_existing(corrupt_state_root))
                 .await?
                 .is_err();
 

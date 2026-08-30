@@ -17,6 +17,12 @@ use super::store::{DurableLogStore, DurableStateMachine};
 
 pub type AnyResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+#[derive(Clone, Copy, Debug)]
+enum StoreLifecycle {
+    CreateNew,
+    ReopenExisting,
+}
+
 pub struct DurableNode {
     pub raft: DurableRaft,
     pub log_store: DurableLogStore,
@@ -56,21 +62,33 @@ impl DurableCluster {
         self.root.join(format!("node-{id}"))
     }
 
-    async fn open_stores(root: PathBuf) -> AnyResult<(DurableLogStore, DurableStateMachine)> {
+    async fn open_stores(
+        root: PathBuf,
+        lifecycle: StoreLifecycle,
+    ) -> AnyResult<(DurableLogStore, DurableStateMachine)> {
         let stores = spawn_blocking(move || {
-            let log_store = DurableLogStore::open(root.join("log"))?;
-            let state_machine = DurableStateMachine::open(root.join("state-machine"))?;
+            let (log_store, state_machine) = match lifecycle {
+                StoreLifecycle::CreateNew => (
+                    DurableLogStore::create(root.join("log"))?,
+                    DurableStateMachine::create(root.join("state-machine"))?,
+                ),
+                StoreLifecycle::ReopenExisting => (
+                    DurableLogStore::open_existing(root.join("log"))?,
+                    DurableStateMachine::open_existing(root.join("state-machine"))?,
+                ),
+            };
             Ok::<_, std::io::Error>((log_store, state_machine))
         })
         .await??;
         Ok(stores)
     }
 
-    pub async fn start_node(&mut self, id: u64) -> AnyResult<()> {
+    async fn start_node(&mut self, id: u64, lifecycle: StoreLifecycle) -> AnyResult<()> {
         if self.nodes.contains_key(&id) {
             return Err(format!("node {id} is already started").into());
         }
-        let (log_store, state_machine) = Self::open_stores(self.node_root(id)).await?;
+        let (log_store, state_machine) =
+            Self::open_stores(self.node_root(id), lifecycle).await?;
         let network = DurableNetworkFactory::new(id, self.router.clone());
         let raft = DurableRaft::new(
             id,
@@ -93,7 +111,7 @@ impl DurableCluster {
     }
 
     pub async fn bootstrap_three_voters(&mut self) -> AnyResult<()> {
-        self.start_node(1).await?;
+        self.start_node(1, StoreLifecycle::CreateNew).await?;
         self.nodes[&1]
             .raft
             .initialize(BTreeMap::from([(1_u64, ())]))
@@ -107,7 +125,7 @@ impl DurableCluster {
             .await?;
 
         for id in [2_u64, 3] {
-            self.start_node(id).await?;
+            self.start_node(id, StoreLifecycle::CreateNew).await?;
             self.nodes[&1]
                 .raft
                 .add_learner(id, (), true)
@@ -133,7 +151,8 @@ impl DurableCluster {
 
     pub async fn reopen_three_voters(&mut self) -> AnyResult<u64> {
         for id in [1_u64, 2, 3] {
-            self.start_node(id).await?;
+            self.start_node(id, StoreLifecycle::ReopenExisting)
+                .await?;
         }
         let leader = self.consensus_leader().await?;
         for node in self.nodes.values() {

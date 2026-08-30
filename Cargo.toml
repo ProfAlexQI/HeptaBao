@@ -1,9 +1,12 @@
 [workspace]
 members = [
+    "crates/heptabao-authbus-contracts",
     "crates/heptabao-governance",
     "crates/heptabao-oracle-observer",
+    "crates/heptabao-p0-server",
     "crates/heptabao-platform-bakeoff",
     "crates/heptabao-platform-contracts",
+    "crates/heptabao-protocol",
 ]
 resolver = "3"
 

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use openraft::{Config, Raft, ReadPolicy, SnapshotPolicy};
 use openraft_memstore::{ClientRequest, MemLogStore, MemStateMachine, TypeConfig, new_mem_store};
 use serde_json::{Value, json};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 use super::network::{InMemoryNetworkFactory, InMemoryRouter, MemRaft};
 
@@ -99,8 +99,41 @@ impl Cluster {
         Ok(())
     }
 
-    async fn write_and_read(&self, serial: u64, value: String) -> AnyResult<(u64, Option<String>)> {
-        let response = self.nodes[&1]
+    async fn consensus_leader(&self) -> AnyResult<u64> {
+        let leader = timeout(Duration::from_secs(20), async {
+            loop {
+                let mut reported = BTreeSet::new();
+                for node in self.nodes.values() {
+                    if let Some(leader) = node.raft.current_leader().await {
+                        reported.insert(leader);
+                    }
+                }
+                if reported.len() == 1 {
+                    if let Some(leader) = reported.iter().next().copied() {
+                        if self.nodes.contains_key(&leader) {
+                            return leader;
+                        }
+                    }
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .map_err(|_| "timed out waiting for one post-resume consensus leader")?;
+        Ok(leader)
+    }
+
+    async fn write_and_read(
+        &self,
+        serial: u64,
+        value: String,
+    ) -> AnyResult<(u64, Option<String>, u64)> {
+        let leader = self.consensus_leader().await?;
+        let node = self
+            .nodes
+            .get(&leader)
+            .ok_or("consensus leader is not a local node")?;
+        let response = node
             .raft
             .client_write(ClientRequest {
                 client: REGISTER_KEY.to_owned(),
@@ -108,23 +141,21 @@ impl Cluster {
                 status: value,
             })
             .await?;
-        self.nodes[&1]
-            .raft
-            .wait(Some(Duration::from_secs(5)))
+        node.raft
+            .wait(Some(Duration::from_secs(10)))
             .applied_index_at_least(Some(response.log_id.index), "os-clock write applied")
             .await?;
-        self.nodes[&1]
-            .raft
+        node.raft
             .ensure_linearizable(ReadPolicy::ReadIndex)
             .await?;
-        let observed = self.nodes[&1]
+        let observed = node
             .state_machine
             .get_state_machine()
             .await
             .client_status
             .get(REGISTER_KEY)
             .cloned();
-        Ok((response.log_id.index, observed))
+        Ok((response.log_id.index, observed, leader))
     }
 
     async fn shutdown(self) {
@@ -177,10 +208,9 @@ pub async fn execute_os_suspend_child(seed: u64, work_dir: &Path) -> AnyResult<(
 
     for step in 1_u64..=100_000 {
         let value = format!("os-resume-{step}-{seed:016x}");
-        let (committed_index, observed) = cluster
+        let (committed_index, observed, current_leader) = cluster
             .write_and_read(300_000 + step, value.clone())
             .await?;
-        let current_leader = cluster.nodes[&1].raft.current_leader().await;
         let progress = json!({
             "kind": "progress",
             "step": step,
@@ -230,14 +260,13 @@ pub async fn execute_clock_faults(seed: u64) -> AnyResult<Value> {
         let projected_before = projected_wall_seconds(offset)?;
         let started = Instant::now();
         let expected = format!("clock-{ordinal}-{offset}-{seed:016x}");
-        let (committed_index, observed) = cluster
+        let (committed_index, observed, current_leader) = cluster
             .write_and_read(400_000 + ordinal as u64, expected.clone())
             .await?;
         let monotonic_elapsed_ms = started.elapsed().as_millis();
         let projected_after = projected_wall_seconds(offset)?;
-        let current_leader = cluster.nodes[&1].raft.current_leader().await;
         let pass = observed.as_deref() == Some(expected.as_str())
-            && current_leader == Some(1)
+            && cluster.nodes.contains_key(&current_leader)
             && projected_after >= projected_before
             && monotonic_elapsed_ms < 5_000;
         all_pass &= pass;

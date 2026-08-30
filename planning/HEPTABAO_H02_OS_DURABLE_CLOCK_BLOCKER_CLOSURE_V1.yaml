@@ -67,6 +67,14 @@ durable_storage:
       append_IOFlushed_after_sync_all: true
       state_machine_persisted_before_client_responder: true
       snapshot_metadata_and_membership_validated: true
+      explicit_create_reopen_lifecycle: true
+      validated_current_discards_single_stale_previous: true
+      corrupt_current_never_falls_back_to_previous: true
+      multiple_previous_generations_fail_closed: true
+      initialized_store_marker_persisted: true
+      missing_initialized_generation_fails_closed: true
+      legacy_generation_adoption_requires_full_validation: true
+      marker_domain_and_file_binding_validated: true
     implemented_cases:
       - three-node replicated writes with non-empty durable artifacts
       - logical full-cluster shutdown and disk reopen in the same OS process
@@ -75,6 +83,16 @@ durable_storage:
       - snapshot recovery when the state-machine file is missing
       - log corruption rejected on reopen
       - state-machine corruption rejected on reopen
+      - bootstrap uses explicit create-new while restart uses explicit reopen-existing
+      - initialized log generation deletion rejected on reopen
+      - initialized state generation deletion rejected on reopen
+      - corrupt or domain-mismatched initialization marker rejected
+      - interrupted marker replacement recovered before classification
+      - deleted initialized directory is not silently recreated by reopen-existing
+      - legacy authoritative generation requires explicit validated adoption
+      - valid current generation discards one stale previous only after validation
+      - corrupt current generation never falls back silently to previous
+      - multiple previous generations fail closed as ambiguous
       - isolated writer cannot advance committed state
     scope_limit:
       production_selected: false
@@ -82,6 +100,8 @@ durable_storage:
       kernel_power_cut: false
       storage_controller_cache_flush_proven: false
       filesystem_crash_consistency_lab: false
+      silent_fresh_reinitialization_on_reopen: false
+      whole_directory_loss_detectable_without_external_anchor: false
   storage_fault_seam:
     state: IMPLEMENTED_UNQUALIFIED
     format_magic: HBWAL001
@@ -176,4 +196,9 @@ invariants:
   - Application wall-clock projection cannot be represented as kernel-clock mutation evidence.
   - A second GitHub-hosted OS is cross-environment evidence but is not independent attestation by itself.
   - Missing external approvals and signed receipts remain real blockers and are never fabricated.
+  - Once an initialization marker exists, an absent authoritative generation is corruption and cannot be interpreted as a fresh store.
+  - Loss of both a storage directory and its marker requires a separately qualified external rollback anchor; this prototype does not claim otherwise.
+  - Bootstrap creation, existing-store reopen and legacy adoption are distinct caller-selected operations.
+  - A missing marker or authoritative generation on reopen-existing is corruption, never permission to initialize empty state.
+  - A validated current generation may retire one stale previous file; corrupt current state never rolls back silently.
   - qualification=false, selection_effect=NONE and authority_effect=NONE are immutable.

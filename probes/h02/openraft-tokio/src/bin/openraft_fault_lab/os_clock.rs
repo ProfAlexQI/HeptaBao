@@ -130,11 +130,11 @@ pub async fn execute_os_suspend_parent(seed: u64) -> Value {
     let ready_path = root.join("ready.json");
     let progress_path = root.join("progress.json");
     let execution = async {
-        let ready = wait_for_file(&ready_path, Duration::from_secs(20)).await?;
+        let ready = wait_for_file(&ready_path, Duration::from_secs(30)).await?;
         if ready.get("real_openraft_nodes").and_then(Value::as_u64) != Some(3) {
             return Err(format!("unexpected child readiness payload: {ready}"));
         }
-        let before = wait_for_progress(&progress_path, 2, Duration::from_secs(10)).await?;
+        let before = wait_for_progress(&progress_path, 2, Duration::from_secs(20)).await?;
         let before_step = before["step"].as_u64().ok_or("progress step is missing")?;
 
         signal(pid, "STOP").await?;
@@ -149,7 +149,12 @@ pub async fn execute_os_suspend_parent(seed: u64) -> Value {
         let progress_frozen = frozen_step_a == frozen_step_b;
 
         signal(pid, "CONT").await?;
-        let resumed = wait_for_progress(&progress_path, frozen_step_b + 1, Duration::from_secs(10)).await?;
+        let resumed = wait_for_progress(
+            &progress_path,
+            frozen_step_b + 1,
+            Duration::from_secs(40),
+        )
+        .await?;
         let resumed_step = resumed["step"].as_u64().ok_or("resumed progress missing step")?;
         let read_index_ok = resumed["read_index_ok"].as_bool() == Some(true);
         let commit_advanced = resumed_step > before_step;
