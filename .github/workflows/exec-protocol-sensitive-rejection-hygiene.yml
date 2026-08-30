@@ -25,6 +25,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
       - name: Bind parent and apply exact patch
         shell: bash
         run: |
