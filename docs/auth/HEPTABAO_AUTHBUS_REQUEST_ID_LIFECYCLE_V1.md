@@ -55,7 +55,7 @@ Authbus never grants a HeptaBao capability, token, lease, namespace, seal operat
 ## 5. Retry and outcome rules
 
 - A request rejected before mutation may be retried only with a new request ID and a new assertion.
-- A timeout or connection loss after dispatch is an unknown outcome; blind replay of the same ID is rejected.
+- A timeout or connection loss after dispatch is an unknown outcome; Blind replay of the same ID is rejected.
 - The client must query a future outcome/reconciliation endpoint using the recovery reference or submit a new idempotency operation defined by that endpoint.
 - A committed response whose delivery fails retains the original request ID in audit evidence.
 - Retrying with the same request ID but a different method, target, Host or body is a binding conflict and fails closed.
