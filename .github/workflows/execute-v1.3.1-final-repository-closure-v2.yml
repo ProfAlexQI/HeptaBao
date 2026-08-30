@@ -37,16 +37,27 @@ jobs:
           test "$remote_head" = "$EXPECTED_TARGET_HEAD"
           cp bootstrap/v1.3.1-final-repository-closure/patch.py "$RUNNER_TEMP/patch.py"
           cp bootstrap/v1.3.1-final-repository-closure/patch_e3f_delta.py "$RUNNER_TEMP/patch_e3f_delta.py"
-          sha256sum "$RUNNER_TEMP/patch.py" "$RUNNER_TEMP/patch_e3f_delta.py"
-          git checkout --detach "$EXPECTED_TARGET_HEAD"
+          cp bootstrap/v1.3.1-final-repository-closure/normalize_patch_programs.py "$RUNNER_TEMP/normalize_patch_programs.py"
+          cp bootstrap/v1.3.1-final-repository-closure/patch_gate_delta.py "$RUNNER_TEMP/patch_gate_delta.py"
+          sha256sum \
+            "$RUNNER_TEMP/patch.py" \
+            "$RUNNER_TEMP/patch_e3f_delta.py" \
+            "$RUNNER_TEMP/normalize_patch_programs.py" \
+            "$RUNNER_TEMP/patch_gate_delta.py"
+          git checkout --force --detach "$EXPECTED_TARGET_HEAD"
+          git reset --hard "$EXPECTED_TARGET_HEAD"
+          git clean -ffdx
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Apply final repository-controlled closure
         shell: bash
         run: |
           set -euo pipefail
+          python3 "$RUNNER_TEMP/normalize_patch_programs.py" \
+            "$RUNNER_TEMP/patch.py" "$RUNNER_TEMP/patch_e3f_delta.py"
           python3 "$RUNNER_TEMP/patch.py"
           python3 "$RUNNER_TEMP/patch_e3f_delta.py"
+          python3 "$RUNNER_TEMP/patch_gate_delta.py"
           git diff --check
           test -z "$(git diff --name-only -- '.github/workflows/**')"
 
