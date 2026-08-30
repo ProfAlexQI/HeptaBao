@@ -1,0 +1,132 @@
+name: v1.3.1-rust-arm64-preflight
+
+on:
+  push:
+    branches:
+      - "exec/v1.3.1-rust-arm64-preflight-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1.3.1-rust-arm64-preflight
+  cancel-in-progress: true
+
+env:
+  SUBJECT_SHA: 7a81d94967376ffb5f27879d0003dbb9dd0cd680
+  SUBJECT_TREE: 163e1b95a3138f1ca28029941e567a419f0ec6cf
+
+jobs:
+  exact-source-rust:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact canonical subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact subject
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SUBJECT_TREE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          mkdir -p "$RUNNER_TEMP/v1.3.1-arm64"
+          printf 'executor_commit=%s\nsubject_commit=%s\nsubject_tree=%s\nrunner=%s\nos=%s\narch=%s\n' \
+            "$GITHUB_SHA" "$SUBJECT_SHA" "$SUBJECT_TREE" "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" \
+            | tee "$RUNNER_TEMP/v1.3.1-arm64/source-binding.txt"
+
+      - name: Install Rust 1.88 and 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          for toolchain in 1.88.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          done
+          rustc +1.98.0 --version --verbose | tee "$RUNNER_TEMP/v1.3.1-arm64/rustc-1.98.txt"
+          cargo +1.98.0 --version --verbose | tee "$RUNNER_TEMP/v1.3.1-arm64/cargo-1.98.txt"
+
+      - name: Root workspace format test and strict Clippy
+        shell: bash
+        run: |
+          set +e
+          root="$RUNNER_TEMP/v1.3.1-arm64"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/v1.3.1-arm64-root-target"
+          cargo +1.98.0 fmt --all -- --check >"$root/root-fmt.log" 2>&1
+          fmt_rc=$?
+          cargo +1.98.0 test --locked --workspace --all-targets >"$root/root-test.log" 2>&1
+          test_rc=$?
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings \
+            >"$root/root-clippy.log" 2>&1
+          clippy_rc=$?
+          rm -rf "$CARGO_TARGET_DIR"
+          printf 'root_fmt=%s\nroot_test=%s\nroot_clippy=%s\n' \
+            "$fmt_rc" "$test_rc" "$clippy_rc" >"$root/root-exits.txt"
+          exit 0
+
+      - name: OpenRaft format test and strict Clippy on both toolchains
+        shell: bash
+        run: |
+          set +e
+          root="$RUNNER_TEMP/v1.3.1-arm64"
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check \
+            >"$root/h02-fmt.log" 2>&1
+          fmt_rc=$?
+          test_188=0
+          clippy_188=0
+          test_198=0
+          clippy_198=0
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/v1.3.1-arm64-h02-1.88"
+          cargo +1.88.0 test --locked --all-targets --manifest-path "$manifest" \
+            >"$root/h02-test-1.88.log" 2>&1 || test_188=$?
+          cargo +1.88.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings \
+            >"$root/h02-clippy-1.88.log" 2>&1 || clippy_188=$?
+          rm -rf "$CARGO_TARGET_DIR"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/v1.3.1-arm64-h02-1.98"
+          cargo +1.98.0 test --locked --all-targets --manifest-path "$manifest" \
+            >"$root/h02-test-1.98.log" 2>&1 || test_198=$?
+          cargo +1.98.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings \
+            >"$root/h02-clippy-1.98.log" 2>&1 || clippy_198=$?
+          rm -rf "$CARGO_TARGET_DIR"
+          printf 'h02_fmt=%s\nh02_test_1_88=%s\nh02_clippy_1_88=%s\nh02_test_1_98=%s\nh02_clippy_1_98=%s\n' \
+            "$fmt_rc" "$test_188" "$clippy_188" "$test_198" "$clippy_198" \
+            >"$root/h02-exits.txt"
+          exit 0
+
+      - name: Upload all diagnostics before final gate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1.3.1-arm64-rust-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.3.1-arm64/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require every Rust gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v1.3.1-arm64"
+          grep -qx 'root_fmt=0' "$root/root-exits.txt"
+          grep -qx 'root_test=0' "$root/root-exits.txt"
+          grep -qx 'root_clippy=0' "$root/root-exits.txt"
+          grep -qx 'h02_fmt=0' "$root/h02-exits.txt"
+          grep -qx 'h02_test_1_88=0' "$root/h02-exits.txt"
+          grep -qx 'h02_clippy_1_88=0' "$root/h02-exits.txt"
+          grep -qx 'h02_test_1_98=0' "$root/h02-exits.txt"
+          grep -qx 'h02_clippy_1_98=0' "$root/h02-exits.txt"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "V1.3.1 exact-source ARM64 Rust preflight PASS; qualification=false authority=NONE"
