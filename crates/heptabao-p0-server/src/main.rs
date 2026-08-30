@@ -14,8 +14,8 @@ use heptabao_p0_server::{
     AuditError, AuditSink, DevelopmentCredentials, FileAuditSink, P0Response, P0Server,
 };
 use heptabao_protocol::{
-    AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError, RequestEnvelope,
-    RequestId, parse_http_request,
+    parse_http_request, AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError,
+    RequestEnvelope, RequestId,
 };
 
 const TOTAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -91,19 +91,19 @@ fn run() -> Result<(), String> {
         let previous = active_connections.fetch_add(1, Ordering::AcqRel);
         if previous >= MAX_CONCURRENT_CONNECTIONS {
             active_connections.fetch_sub(1, Ordering::AcqRel);
-            let status = if record_transport_rejection(
+            let audit_ok = record_transport_rejection(
                 &shared_audit,
-                attempt_id.clone(),
-                503,
+                attempt_id,
+                429,
                 "connection-capacity-exhausted",
             )
-            .is_ok()
-            {
-                503
+            .is_ok();
+            let (status, message) = if audit_ok {
+                (429, "connection capacity exhausted")
             } else {
-                503
+                (503, "transport rejection audit unavailable")
             };
-            let response = error_response(status, "connection capacity exhausted");
+            let response = error_response(status, message);
             let _write_result = write_response(&mut stream, &response);
             continue;
         }
@@ -317,16 +317,7 @@ fn serve_one(
     };
 
     if let Err(error) = write_response(stream, &response) {
-        let _audit_result = record_transport_rejection(
-            audit,
-            request_id,
-            503,
-            if response.committed {
-                "response-delivery-failed-after-commit"
-            } else {
-                "response-delivery-failed-before-commit"
-            },
-        );
+        let _audit_result = record_delivery_failure(audit, request_id, response.committed);
         eprintln!("response delivery failed: {error}");
     }
     Ok(())
@@ -400,8 +391,7 @@ fn read_request(
             }
         };
         if count == 0 {
-            return parse_http_request(&input)
-                .map_err(ServeError::from_protocol);
+            return parse_http_request(&input).map_err(ServeError::from_protocol);
         }
         input.extend_from_slice(&buffer[..count]);
     }
@@ -421,6 +411,34 @@ fn record_transport_rejection(
         commit: CommitDisposition::NotAttempted,
         status_code,
         detail_code,
+    })
+}
+
+fn record_delivery_failure(
+    audit: &SharedAuditSink,
+    request_id: RequestId,
+    committed: bool,
+) -> Result<(), AuditError> {
+    let mut sink = audit.clone();
+    sink.record(&AuditEvent {
+        request_id,
+        operation: None,
+        phase: if committed {
+            AuditPhase::ResponseCommitted
+        } else {
+            AuditPhase::ResponsePrepared
+        },
+        commit: if committed {
+            CommitDisposition::Committed
+        } else {
+            CommitDisposition::NotCommitted
+        },
+        status_code: 503,
+        detail_code: if committed {
+            "response-delivery-failed-after-commit"
+        } else {
+            "response-delivery-failed-before-commit"
+        },
     })
 }
 
@@ -579,7 +597,7 @@ fn escape_json(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestIdRegistry, render_response};
+    use super::{render_response, RequestIdRegistry};
     use heptabao_p0_server::P0Response;
     use std::time::{Duration, Instant};
 
@@ -593,7 +611,10 @@ mod tests {
         };
         let wire = render_response(&response);
         assert!(wire.starts_with(b"HTTP/1.1 204 No Content\r\n"));
-        assert!(wire.windows(19).any(|window| window == b"Content-Length: 0\r\n"));
+        assert!(
+            wire.windows(19)
+                .any(|window| window == b"Content-Length: 0\r\n")
+        );
         assert!(wire.ends_with(b"\r\n\r\n"));
     }
 
