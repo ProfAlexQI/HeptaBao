@@ -83,8 +83,8 @@ class PlanV12Tests(unittest.TestCase):
                 root=str(ROOT),
                 repository="ProfHepta/HeptaBao",
                 ref="test/ref",
-                commit="1" * 40,
-                tree="2" * 40,
+                commit=renderer.git(ROOT, "rev-parse", "HEAD"),
+                tree=renderer.git(ROOT, "rev-parse", "HEAD^{tree}"),
                 environment_id="test-environment",
                 runner_id="runner-1",
                 runner_name="test-runner",
@@ -95,12 +95,124 @@ class PlanV12Tests(unittest.TestCase):
             )
             value = renderer.resolve(args)
             output.write_text(json.dumps(value), encoding="utf-8")
-            self.assertEqual(value["binding"]["commit"], "1" * 40)
-            self.assertEqual(value["binding"]["tree"], "2" * 40)
+            self.assertEqual(value["binding"]["commit"], args.commit)
+            self.assertEqual(value["binding"]["tree"], args.tree)
             self.assertFalse(value["qualification"])
             self.assertFalse(value["compatibility_claim"])
             self.assertEqual(value["authority_effect"], "NONE")
             self.assertGreaterEqual(len(value["resolved_documents"]), 20)
+
+    def test_renderer_can_resolve_active_v131_state_and_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "state.json"
+            args = Namespace(
+                root=str(ROOT),
+                repository="ProfHepta/HeptaBao",
+                state_input="planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml",
+                manifest="planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
+                ref="test/v131",
+                commit=renderer.git(ROOT, "rev-parse", "HEAD"),
+                tree=renderer.git(ROOT, "rev-parse", "HEAD^{tree}"),
+                environment_id="test-environment-v131",
+                runner_id="runner-v131",
+                runner_name="test-runner-v131",
+                job_id="job-v131",
+                run_id="run-v131",
+                require_clean=False,
+                output=str(output),
+            )
+            value = renderer.resolve(args)
+            self.assertEqual(
+                value["resolution_inputs"]["state_input"],
+                "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml",
+            )
+            self.assertEqual(
+                value["resolution_inputs"]["manifest"],
+                "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
+            )
+            self.assertIn(
+                "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml",
+                {entry["path"] for entry in value["resolved_documents"]},
+            )
+            self.assertFalse(value["qualification"])
+            self.assertEqual(value["authority_effect"], "NONE")
+
+    def test_renderer_rejects_input_paths_that_escape_repository(self):
+        with self.assertRaises(renderer.Failure):
+            renderer.repository_file(
+                ROOT,
+                "../outside.yaml",
+                renderer.DEFAULT_STATE_INPUT,
+                "state input",
+            )
+
+    def test_renderer_rejects_repository_identity_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "state.json"
+            args = Namespace(
+                root=str(ROOT),
+                repository="attacker/other",
+                ref="test/ref",
+                commit="1" * 40,
+                tree="2" * 40,
+                environment_id="test-environment",
+                runner_id="runner-1",
+                runner_name="test-runner",
+                job_id="job-1",
+                run_id="run-1",
+                require_clean=False,
+                output=str(output),
+            )
+            with self.assertRaises(renderer.Failure):
+                renderer.resolve(args)
+
+    def test_renderer_rejects_declared_source_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "state.json"
+            args = Namespace(
+                root=str(ROOT),
+                repository="ProfHepta/HeptaBao",
+                ref="test/ref",
+                commit="1" * 40,
+                tree="2" * 40,
+                environment_id="test-environment",
+                runner_id="runner-1",
+                runner_name="test-runner",
+                job_id="job-1",
+                run_id="run-1",
+                require_clean=False,
+                output=str(output),
+            )
+            with self.assertRaises(renderer.Failure):
+                renderer.resolve(args)
+
+    def test_renderer_yaml_loader_rejects_duplicate_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "duplicate.yaml"
+            path.write_text("one: 1\none: 2\n", encoding="utf-8")
+            with self.assertRaises(renderer.Failure):
+                renderer.read_mapping(path, "duplicate fixture")
+
+    def test_renderer_rejects_active_pointer_drift(self):
+        state = yaml.safe_load(
+            (ROOT / "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        manifest = yaml.safe_load(
+            (ROOT / "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        manifest["current_state_input"] = "planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml"
+        with self.assertRaises(renderer.Failure):
+            renderer.validate_inputs(
+                ROOT,
+                state,
+                "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml",
+                manifest,
+                "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
+            )
 
     def test_work_package_removal_fails_closed(self):
         value = validator.load_yaml("planning/HEPTABAO_WORK_PACKAGE_CATALOG_V1_2.yaml")

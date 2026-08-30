@@ -85,6 +85,7 @@ POSIX entry 使用独立 process group。超时后终止完整 process group 并
 - toolchain、seed、probe kind；
 - 最多 24 个 retained entry；
 - command digest、process_started、exit、application status；
+- entry ID 与 canonical kind/toolchain/seed/binary/argv tuple 的一一绑定；
 - stdout/stderr digest；
 - duplicate/missing/unexpected IDs；
 - runner_errors；

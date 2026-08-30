@@ -171,9 +171,17 @@ fn is_loopback(address: IpAddr) -> bool {
 }
 
 fn discard_available_ingress(stream: &mut TcpStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(2)));
+    // Bound the *whole* drain window, not each individual read.  Repeated
+    // per-read timeouts could otherwise stretch a saturated rejection into
+    // roughly 128ms on a peer that keeps trickling bytes.
+    let deadline = Instant::now() + Duration::from_millis(2);
     let mut buffer = [0_u8; 4096];
     for _ in 0..64 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let _ = stream.set_read_timeout(Some(remaining));
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => buffer[..count].fill(0),
@@ -708,11 +716,19 @@ fn internal_serve_error(message: String) -> ServeError {
 }
 
 fn escape_json(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+    let mut output = String::new();
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if character.is_control() => output.push_str("\\uFFFD"),
+            character => output.push(character),
+        }
+    }
+    output
 }
 
 #[cfg(test)]

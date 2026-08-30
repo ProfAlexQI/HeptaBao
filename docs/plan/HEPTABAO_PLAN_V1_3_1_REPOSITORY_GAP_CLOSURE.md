@@ -117,3 +117,60 @@ No transition is implicit. V1.3.1 fixes `qualification=false`, `compatibility_cl
 ## 6. Stop conditions
 
 The repository-controlled patch is technically complete only when Gates A–D pass on one exact head. It is review-complete only when Gate E receipts exist. Program-wide gap closure additionally requires all eight external/control completion objects. Until then the truthful state remains technical remediation in review with external action required.
+
+## 7. Current pointers, ratification and workflow arbitration
+
+The V1.3.1 manifest explicitly overrides the `current_plan` and
+`current_state_input` pointers inherited from the V1.2 manifest.  Its
+`current_plan` is this V1.3.1 closure document, `current_state` is the
+V1.3.1 gap-closure status object, and `current_state_input` is the final
+closure input.  The V1.2 manifest and its status objects remain indexed as
+historical evidence; they are not deleted or silently rewritten.
+
+Static status and manifest objects never carry a commit, tree, author or
+runner claim.  Ratification authenticity is resolved only from the exact
+head Git object: the subject is exactly
+`chore(provenance): owner-ratify V1.3.1 canonical source tree`, both author and
+committer identities are non-automation identities, the commit has one parent,
+and its tree equals the parent's tree.  This source check is provenance
+binding, not a signature, independent review or qualification receipt.
+
+Gate A resolves the active state-input and normative-manifest paths explicitly
+and records their hashes alongside the exact source binding.  Historical V1.2
+defaults are retained for audit compatibility, but cannot silently become the
+active V1.3.1 resolution input.
+
+The consolidated workflow is the sole canonical technical evidence lane for
+this revision.  It covers two pull-request source lanes (`head` and the
+distinct synthetic `merge`) and all four technical gate groups (plan and
+Python, root Rust 1.98, classified P0, and the 24-entry H02 matrix).  Legacy
+workflows may still run for historical or diagnostic purposes, but their
+results are non-authoritative and cannot satisfy this lane's closure
+arbitration.  Duplicate or stale evidence is arbitrated fail-closed: a newer
+head cancels an older run while retaining its history, ancestor-only artifacts
+are rejected, duplicate matrix entry IDs fail the aggregate, and a technical
+result is usable only when both source lanes complete.  Each lane's technical
+receipt additionally binds the digest and fields of the GitHub REST identity
+record used for owner-ratification checks and records a locally recomputed
+arbitration key (PR/dispatch, head SHA and source lane) plus the required lane
+set.  These fields support deterministic head/merge aggregation without
+trusting a run-listing API.  These rules select evidence; they do not grant
+authority.
+
+### Post-run lane arbitration
+
+The canonical workflow runs `scripts/arbitrate_v1_3_1_lanes_v1.py` after the
+matrix jobs with `always()`.  Its strict aggregate schema requires exactly the
+`head` and synthetic `merge` receipts for a pull request, the same immutable
+head SHA/base/event-merge binding, a distinct merge source commit, and
+digest-bound PASS technical receipts.  Current run/attempt IDs, numeric job
+and runner identities, duplicate keys/digests and superseded artifacts are
+checked fail-closed.  Missing or malformed artifacts produce a schema-valid
+`FAIL` aggregate and a non-zero job; they are never treated as success.  The
+aggregate retains `qualification=false`, `compatibility_claim=false` and
+`authority_effect=NONE`.
+
+The active normative manifest is independently validated against
+`schemas/heptabao_normative_document_manifest_v1_3_1.schema.json`.  Inherited
+legacy workflows are explicitly indexed as `HISTORICAL` with
+`authority_effect: NONE`; they remain audit lineage, not active evidence.

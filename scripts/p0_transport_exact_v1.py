@@ -15,6 +15,7 @@ import os
 import re
 import socket
 import struct
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -26,10 +27,32 @@ MAX_OBSERVED_SECONDS = 8.0
 MAX_CONCURRENT_CONNECTIONS = 32
 MAX_CLIENT_REQUEST_IDS = 4096
 SATURATION_WORKERS = 24
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 
 class MatrixFailure(RuntimeError):
     """Raised when one fail-closed transport invariant is not observed."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        # ``execute`` keeps a live list while the ordered matrix is running.
+        # Capture a shallow snapshot at the failure boundary so the CLI can
+        # preserve already completed cases instead of rewriting them all as
+        # UNEXECUTED.  The list is intentionally absent when failure occurs
+        # before the listener/matrix is initialized.
+        active = _ACTIVE_RESULTS
+        # Keep ``None`` distinct from an initialized-but-empty matrix.  The
+        # execution policy classifies a process/listener startup failure as
+        # UNEXECUTED, while an initialized matrix with zero completed cases
+        # has crossed the executable boundary and can identify its first
+        # failed assertion as FAIL.
+        self.partial_results = (
+            None if active is None else [dict(item) for item in active]
+        )
+
+
+P0_CASE_ORDER = tuple(f"P0-TRANSPORT-{index:03d}" for index in range(1, 15))
+_ACTIVE_RESULTS: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +67,48 @@ class HttpResponse:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise MatrixFailure(message)
+
+
+def git_value(root: Path, *arguments: str) -> str:
+    """Read an exact source value from the checkout used by the runner."""
+
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), *arguments],
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise MatrixFailure(f"unable to resolve source binding: git {' '.join(arguments)}") from error
+
+
+def resolve_source_binding(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Bind the P0 report to the immutable checkout, not only an env string."""
+
+    repository = getattr(args, "repository", None) or os.environ.get("GITHUB_REPOSITORY")
+    commit = getattr(args, "commit", None) or os.environ.get("SOURCE_SHA")
+    tree = getattr(args, "tree", None)
+    if not repository:
+        repository = "unknown"
+    actual_commit = git_value(root, "rev-parse", "HEAD")
+    actual_tree = git_value(root, "rev-parse", "HEAD^{tree}")
+    if commit is None:
+        commit = actual_commit
+    if tree is None:
+        tree = actual_tree
+    require(repository == "ProfHepta/HeptaBao", "unexpected repository identity")
+    require(isinstance(commit, str) and SHA40.fullmatch(commit) is not None, "P0 source commit is malformed")
+    require(isinstance(tree, str) and SHA40.fullmatch(tree) is not None, "P0 source tree is malformed")
+    require(commit == actual_commit, "P0 source commit does not match checked-out HEAD")
+    require(tree == actual_tree, "P0 source tree does not match checked-out HEAD tree")
+    clean_tree = git_value(root, "status", "--porcelain=v1", "--untracked-files=all") == ""
+    require(clean_tree, "P0 source checkout is not clean")
+    return {
+        "repository": repository,
+        "commit": commit,
+        "tree": tree,
+        "clean_tree": clean_tree,
+    }
 
 
 def wait_for_address(stderr_path: Path, timeout_seconds: float = 30.0) -> tuple[str, int]:
@@ -327,9 +392,15 @@ def require_source_markers(root: Path, relative: str, markers: tuple[str, ...]) 
 
 
 def execute(args: argparse.Namespace) -> dict[str, Any]:
+    global _ACTIVE_RESULTS
+    # A failed invocation must not inherit a prefix captured by an earlier
+    # invocation in the same interpreter (the module is exercised directly by
+    # unit tests as well as by the one-shot workflow process).
+    _ACTIVE_RESULTS = None
     stderr_path = args.stderr.resolve()
     audit_path = args.audit.resolve()
     root = Path(__file__).resolve().parents[1]
+    source = resolve_source_binding(args, root)
     token = os.environ.get("HEPTABAO_P0_DEV_TOKEN")
     unseal_key = os.environ.get("HEPTABAO_P0_DEV_UNSEAL_KEY")
     require(bool(token), "HEPTABAO_P0_DEV_TOKEN is required by the matrix")
@@ -338,6 +409,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     host, port = wait_for_address(stderr_path)
     address = f"{host}:{port}"
     results: list[dict[str, Any]] = []
+    _ACTIVE_RESULTS = results
     observed_response_seconds: list[float] = []
 
     start = len(audit_lines(audit_path))
@@ -686,13 +758,20 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         {"controlled_target_drop": True, "controlled_kv_path_drop": True, "qualification_effect": "NONE"},
     )
 
+    # Re-check the immutable source after the last probe.  A test harness or
+    # helper that mutates the checkout during execution must not leave a
+    # report claiming the clean tree observed at startup.
+    require(git_value(root, "rev-parse", "HEAD") == source["commit"], "P0 source commit changed during execution")
+    require(git_value(root, "rev-parse", "HEAD^{tree}") == source["tree"], "P0 source tree changed during execution")
+    require(
+        git_value(root, "status", "--porcelain=v1", "--untracked-files=all") == "",
+        "P0 source checkout became dirty during execution",
+    )
+
     require(len(results) == 14, f"matrix result count drift: {len(results)}")
-    return {
+    report = {
         "schema": "heptabao.p0-transport-exact-result.v1",
-        "source": {
-            "repository": os.environ.get("GITHUB_REPOSITORY", "unknown"),
-            "commit": os.environ.get("SOURCE_SHA") or os.environ.get("GITHUB_SHA", "unknown"),
-        },
+        "source": source,
         "profile": "HB-P0-DEV-MEMORY",
         "server": {"loopback": True, "port": port},
         "result": "PASS",
@@ -703,24 +782,129 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "compatibility_claim": False,
         "authority_effect": "NONE",
     }
+    _ACTIVE_RESULTS = None
+    return report
+
+
+def failure_cases(error: BaseException) -> list[dict[str, Any]]:
+    """Turn an ordered partial run into a complete, explicit failure matrix."""
+
+    partial = getattr(error, "partial_results", None)
+    if partial is None:
+        # Socket-level failures are commonly surfaced as OSError subclasses
+        # (for example ConnectionResetError) rather than MatrixFailure.  The
+        # live execution list is therefore the authoritative fallback at the
+        # failure boundary; without it, already observed PASS cases would be
+        # incorrectly rewritten as UNEXECUTED.
+        active = _ACTIVE_RESULTS
+        if active is None:
+            # No listener/matrix was initialized.  Per
+            # HEPTABAO_TEST_EXECUTION_POLICY_V1 this is UNEXECUTED, not a
+            # synthetic code failure.
+            return [
+                {
+                    "case_id": case_id,
+                    "status": "UNEXECUTED",
+                    "evidence": {"runner_error": str(error)},
+                }
+                for case_id in P0_CASE_ORDER
+            ]
+        partial = [dict(item) for item in active]
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in partial:
+        if not isinstance(item, dict):
+            continue
+        case_id = item.get("case_id")
+        if isinstance(case_id, str) and case_id in P0_CASE_ORDER and case_id not in by_id:
+            by_id[case_id] = dict(item)
+
+    preserved: list[dict[str, Any]] = []
+    for case_id in P0_CASE_ORDER:
+        item = by_id.get(case_id)
+        if item is None or item.get("status") != "PASS":
+            break
+        preserved.append(item)
+
+    failure_index = len(preserved)
+    if failure_index >= len(P0_CASE_ORDER):
+        # A post-matrix invariant failed after all cases were appended.  Keep
+        # the prior observations visible but invalidate one case explicitly so
+        # the failure artifact cannot be mistaken for a complete PASS.
+        failure_index = len(P0_CASE_ORDER) - 1
+        preserved = preserved[:failure_index]
+
+    cases = list(preserved)
+    failed_case = P0_CASE_ORDER[failure_index]
+    cases.append(
+        {
+            "case_id": failed_case,
+            "status": "FAIL",
+            "evidence": {
+                "runner_error": str(error),
+                "executed_before_failure": bool(preserved),
+            },
+        }
+    )
+    for case_id in P0_CASE_ORDER[failure_index + 1 :]:
+        cases.append(
+            {
+                "case_id": case_id,
+                "status": "UNEXECUTED",
+                "evidence": {"runner_error": str(error)},
+            }
+        )
+    return cases
 
 
 def main() -> int:
+    global _ACTIVE_RESULTS
     parser = argparse.ArgumentParser()
     parser.add_argument("--stderr", type=Path, required=True)
     parser.add_argument("--audit", type=Path, required=True)
+    parser.add_argument("--repository", default=None)
+    parser.add_argument("--commit", default=None)
+    parser.add_argument("--tree", default=None)
     args = parser.parse_args()
     try:
         report = execute(args)
     except (MatrixFailure, OSError, ValueError) as error:
+        # Preserve an explicit machine-readable failure artifact so the
+        # workflow can classify and upload the observed failure even when the
+        # shell gate stops at the first non-zero exit.
+        try:
+            # ``execute`` always binds against the canonical checkout that
+            # contains this runner.  Repeat that same binding on the failure
+            # path; using the caller's cwd would otherwise manufacture a
+            # zero/unknown source record when the script is invoked from a
+            # temporary evidence directory.
+            source = resolve_source_binding(args, Path(__file__).resolve().parents[1])
+        except Exception:
+            source = {
+                "repository": getattr(args, "repository", None)
+                or os.environ.get("GITHUB_REPOSITORY", "unknown"),
+                "commit": getattr(args, "commit", None) or "0" * 40,
+                "tree": getattr(args, "tree", None) or "0" * 40,
+                "clean_tree": False,
+            }
+        partial_cases = failure_cases(error)
+        statuses = [case["status"] for case in partial_cases]
         report = {
             "schema": "heptabao.p0-transport-exact-result.v1",
             "result": "FAIL",
             "reason": str(error),
+            "source": source,
+            "counts": {
+                "pass": statuses.count("PASS"),
+                "fail": statuses.count("FAIL"),
+                "blocked": statuses.count("BLOCKED"),
+                "unexecuted": statuses.count("UNEXECUTED") + statuses.count("UNKNOWN"),
+            },
+            "cases": partial_cases,
             "qualification": False,
             "compatibility_claim": False,
             "authority_effect": "NONE",
         }
+        _ACTIVE_RESULTS = None
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
         return 1
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))

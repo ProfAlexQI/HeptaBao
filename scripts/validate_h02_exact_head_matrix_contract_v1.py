@@ -88,6 +88,34 @@ def validate_schema() -> None:
     entry_properties = entries.get("items", {}).get("properties", {})
     for field in ("process_started", "command_digest", "application_status"):
         require(field in entry_properties, f"entry schema missing {field}")
+    require(
+        entry_properties.get("entry_id", {}).get("pattern")
+        == "^(inmemory|hostile|blocker|durable)-(1\\.88\\.0|1\\.98\\.0)-(5eed20260828cafe|8badf00d12345678|d15ea5e5cafef00d)$",
+        "entry schema entry_id matrix pattern drift",
+    )
+    require(
+        entry_properties.get("binary", {}).get("enum")
+        == [
+            "heptabao-h02-openraft-inmemory-cluster",
+            "heptabao-h02-openraft-fault-lab",
+            "heptabao-h02-openraft-blocker-closure-lab",
+            "heptabao-h02-openraft-durable-store-lab",
+        ],
+        "entry schema binary matrix drift",
+    )
+    tuple_rules = entries.get("items", {}).get("allOf", [])
+    require(len(tuple_rules) >= 9, "entry schema must bind ID tuple fields")
+    tuple_rules_text = json.dumps(tuple_rules, sort_keys=True)
+    for token in (
+        "heptabao-h02-openraft-inmemory-cluster",
+        "heptabao-h02-openraft-fault-lab",
+        "heptabao-h02-openraft-blocker-closure-lab",
+        "heptabao-h02-openraft-durable-store-lab",
+        "0x5eed20260828cafe",
+        "0x8badf00d12345678",
+        "0xd15ea5e5cafef00d",
+    ):
+        require(token in tuple_rules_text, f"entry schema tuple binding missing: {token}")
 
     pass_rule = json.dumps(schema.get("allOf", []), sort_keys=True)
     for token in (
@@ -115,6 +143,21 @@ def validate_runner() -> None:
         == ("inmemory", "hostile", "blocker", "durable"),
         "runner probe-kind order drift",
     )
+    require(
+        tuple(module.PROBES_BY_KIND)
+        == ("inmemory", "hostile", "blocker", "durable"),
+        "runner canonical probe lookup drift",
+    )
+    require(
+        tuple(probe.binary for probe in module.PROBES)
+        == (
+            "heptabao-h02-openraft-inmemory-cluster",
+            "heptabao-h02-openraft-fault-lab",
+            "heptabao-h02-openraft-blocker-closure-lab",
+            "heptabao-h02-openraft-durable-store-lab",
+        ),
+        "runner canonical binary matrix drift",
+    )
     require(len(module.expected_entry_ids()) == 24, "runner must define 24 unique entries")
     require_tokens(
         RUNNER,
@@ -138,6 +181,12 @@ def validate_runner() -> None:
             "matrix-summary.json",
             '"qualification": False',
             '"authority_effect": "NONE"',
+            "parse_entry_id",
+            "canonical_command",
+            "validate_command_tuple",
+            "validate_entry_tuple",
+            "entry command_digest does not match exact argv",
+            "tuple invalid",
         ),
     )
     tests = RUNNER_TEST.read_text(encoding="utf-8")
@@ -147,6 +196,8 @@ def validate_runner() -> None:
         "test_spawn_failure_is_unexecuted",
         "test_timeout_is_blocked_even_with_partial_pass_json",
         "test_duplicate_entry_id_forces_failure",
+        "test_entry_tuple_fields_are_bound_to_canonical_matrix",
+        "test_command_digest_and_argv_are_bound_to_canonical_tuple",
         "test_runner_error_forces_schema_valid_failure",
         "test_source_binding_rejects_declared_head_mismatch",
         "test_output_inside_repository_is_rejected",
@@ -230,6 +281,8 @@ def validate_normative_links() -> None:
             "Application result",
             "Aggregate result",
             "EXECUTED_FAIL",
+            "canonical kind",
+            "exact argv",
             "authority_effect=NONE",
         ),
     )
@@ -240,6 +293,7 @@ def validate_normative_links() -> None:
             "24/24",
             "REMEDIATION_IMPLEMENTED",
             "EXTERNAL_ACTION_REQUIRED",
+            "canonical kind/toolchain/seed/binary/argv tuple",
             "authority_effect=NONE",
         ),
     )

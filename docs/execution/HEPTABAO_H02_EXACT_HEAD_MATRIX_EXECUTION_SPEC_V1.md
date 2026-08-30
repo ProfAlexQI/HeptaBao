@@ -138,10 +138,10 @@ persist-credentials: false
 - command 与 SHA-256；
 - stdout 原文与 SHA-256；
 - stderr 原文与 SHA-256；
-- exit 文件；
+- exit 文件与 `exit_digest`；
 - process/application/final conclusion。
 
-输出文件以唯一 entry ID 命名，禁止覆盖。失败、blocked、unknown、unexecuted 与通过输出具有相同保留优先级。
+输出文件以唯一 entry ID 命名，禁止覆盖。失败、blocked、unknown、unexecuted 与通过输出具有相同保留优先级。生产调用必须传入独立的 evidence directory；runner 在写出摘要前重新打开每个 `<entry_id>.stdout`、`<entry_id>.stderr`、`<entry_id>.exit`，拒绝缺失、目录、符号链接、路径穿越、重复别名或 digest 不相等的文件。`exit` sidecar 的字节内容还必须精确等于记录的退出码加换行（退出码不可用时为 `UNAVAILABLE\n`）。没有完整重读证据时，生产 runner 只能产生 `FAIL`，不能产生 `PASS`。
 
 ## 7. Machine summary
 
@@ -174,7 +174,7 @@ selection_effect = NONE
 authority_effect = NONE
 ```
 
-Schema-valid 只证明对象结构。Final gate 必须重新计算 entry ID 集合、command digest、stdout/stderr digest、exit file、source/tree 与 authority constants。summary 本身不是签名 closure receipt。
+Schema-valid 只证明对象结构。Final gate 必须重新计算 entry ID 集合，并将每个 ID 绑定到 canonical kind、toolchain、seed、binary 与 exact argv；同时从实际 checkout 重算 manifest 与 committed `Cargo.lock` digest，并从传入的 evidence root 重算 stdout/stderr/exit digest 与 exit sidecar 内容、source/tree 与 authority constants。summary 本身不是签名 closure receipt。Receipt validator 的 `--h02-evidence-dir` 应指向包含 `matrix-summary.json` 及其 72 个 sidecar 的目录；省略该目录时只能做结构性检查，不能通过 completion receipt。
 
 ## 8. Workflow ordering 与低扇出备用 lane
 
