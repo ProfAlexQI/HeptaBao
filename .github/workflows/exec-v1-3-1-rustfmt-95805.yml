@@ -15,6 +15,7 @@ concurrency:
 
 env:
   SOURCE_PARENT: 95805d1af4492ffecd1860fb8645050e94cf8e47
+  SOURCE_TREE: 8e863d777fb7fe4a193762dec3d77cd9be7a54b9
   RESULT_BRANCH: exec/v1-3-1-rustfmt-result-v1
 
 jobs:
@@ -33,8 +34,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$SOURCE_PARENT"
-          test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "8e863d777fb7fe4a193762dec3d77cd9be7a54b9"
+          test "$(git merge-base HEAD "$SOURCE_PARENT")" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "$SOURCE_TREE"
+          actual="$(git diff --name-only "$SOURCE_PARENT...HEAD" | LC_ALL=C sort)"
+          test "$actual" = ".github/workflows/exec-v1-3-1-rustfmt-95805.yml"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Install exact Rust 1.98
@@ -50,10 +53,20 @@ jobs:
           fi
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
 
-      - name: Format and verify complete root workspace
+      - name: Apply exact Clippy repair, format and verify complete root workspace
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/heptabao-p0-server/src/main.rs")
+          text = path.read_text(encoding="utf-8")
+          old = "fn clear_request_buffers(input: &mut Vec<u8>, buffer: &mut [u8]) {"
+          new = "fn clear_request_buffers(input: &mut [u8], buffer: &mut [u8]) {"
+          assert text.count(old) == 1, "unexpected clear_request_buffers source surface"
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
           cargo +1.98.0 fmt --all
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
@@ -76,7 +89,7 @@ jobs:
           tree="$(git write-tree)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          commit="$(printf '%s\n' 'style(v1.3.1): apply exact Rust 1.98 formatting' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
+          commit="$(printf '%s\n' 'fix(v1.3.1): apply exact Rust 1.98 format and Clippy repair' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
           test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
           test "$(git rev-parse "$commit^{tree}")" = "$tree"
           commit_files="$(git diff-tree --no-commit-id --name-only -r "$commit" | LC_ALL=C sort)"
