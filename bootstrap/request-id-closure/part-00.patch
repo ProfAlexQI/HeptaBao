@@ -1,0 +1,194 @@
+diff --git a/crates/heptabao-p0-server/src/lib.rs b/crates/heptabao-p0-server/src/lib.rs
+index 54a33d8ef55bdf3d0ae1adaa5c882dde08bf9981..f9380ab69bf749dbd4447dcfa9984421ce6b842f 100644
+--- a/crates/heptabao-p0-server/src/lib.rs
++++ b/crates/heptabao-p0-server/src/lib.rs
+@@ -160,7 +160,7 @@ impl AuditSink for FileAuditSink {
+             .operation
+             .map(|value| format!("{value:?}"))
+             .unwrap_or_else(|| "NONE".to_owned());
+-        let line = format!(
++        let mut line = format!(
+             "request_id={} operation={} phase={:?} commit={:?} status={} detail={}\n",
+             event.request_id.as_str(),
+             operation,
+@@ -169,11 +169,15 @@ impl AuditSink for FileAuditSink {
+             event.status_code,
+             event.detail_code,
+         );
+-        self.file
+-            .write_all(line.as_bytes())
+-            .map_err(AuditError::Io)?;
+-        self.file.flush().map_err(AuditError::Io)?;
+-        self.file.sync_data().map_err(AuditError::Io)
++        let result = (|| -> Result<(), AuditError> {
++            self.file
++                .write_all(line.as_bytes())
++                .map_err(AuditError::Io)?;
++            self.file.flush().map_err(AuditError::Io)?;
++            self.file.sync_data().map_err(AuditError::Io)
++        })();
++        zeroize_string(&mut line);
++        result
+     }
+ }
+ 
+@@ -287,6 +291,9 @@ impl fmt::Debug for P0Response {
+ impl Drop for P0Response {
+     fn drop(&mut self) {
+         self.body.fill(0);
++        if let Some(reference) = &mut self.recovery_reference {
++            zeroize_string(reference);
++        }
+     }
+ }
+ 
+diff --git a/crates/heptabao-p0-server/src/main.rs b/crates/heptabao-p0-server/src/main.rs
+index 84f97203765613befd52a8e418125c5ab5d6fc5e..8aa141d7a9870db014e472c6a217ed00f249c230 100644
+--- a/crates/heptabao-p0-server/src/main.rs
++++ b/crates/heptabao-p0-server/src/main.rs
+@@ -207,7 +207,7 @@ impl Drop for ConnectionGuard {
+ }
+ 
+ struct RequestIdRegistry {
+-    entries: Mutex<BTreeMap<String, Instant>>,
++    entries: Mutex<BTreeMap<RequestId, Instant>>,
+     max_entries: usize,
+     ttl: Duration,
+ }
+@@ -233,6 +233,13 @@ impl RequestIdRegistry {
+     }
+ 
+     fn claim(&self, raw: &str, now: Instant) -> Result<RequestId, ServeError> {
++        if raw.starts_with("p0-") {
++            return Err(ServeError {
++                status_code: 400,
++                detail_code: "client-request-id-reserved-prefix",
++                message: "client request ID uses the reserved internal namespace".to_owned(),
++            });
++        }
+         let request_id = RequestId::new(raw.to_owned()).map_err(|error| ServeError {
+             status_code: 400,
+             detail_code: "client-request-id-invalid",
+@@ -250,7 +257,7 @@ impl RequestIdRegistry {
+             detail_code: "request-id-expiry-overflow",
+             message: "request ID expiry overflow".to_owned(),
+         })?;
+-        match entries.entry(request_id.as_str().to_owned()) {
++        match entries.entry(request_id.clone()) {
+             Entry::Occupied(_) => Err(ServeError {
+                 status_code: 409,
+                 detail_code: "client-request-id-replayed",
+@@ -727,6 +734,17 @@ mod tests {
+         assert!(rendered.contains("[REDACTED]"));
+     }
+ 
++    #[test]
++    fn client_request_id_cannot_use_internal_p0_namespace() {
++        let registry = RequestIdRegistry::new(2, Duration::from_secs(60));
++        let result = registry.claim("p0-client-spoof-0001", Instant::now());
++        assert!(result.is_err());
++        if let Err(error) = result {
++            assert_eq!(error.status_code, 400);
++            assert_eq!(error.detail_code, "client-request-id-reserved-prefix");
++        }
++    }
++
++    #[test]
+     fn client_request_id_is_single_use_inside_the_p0_window() {
+         let registry = RequestIdRegistry::new(2, Duration::from_secs(60));
+diff --git a/crates/heptabao-protocol/src/lib.rs b/crates/heptabao-protocol/src/lib.rs
+index 32868e6f99ff430d47fd34970f2178e808ccdab5..dee6a28314c0682426a4457cddc15c3598a11a68 100644
+--- a/crates/heptabao-protocol/src/lib.rs
++++ b/crates/heptabao-protocol/src/lib.rs
+@@ -5,9 +5,11 @@
+ //! The crate intentionally has no HTTP framework, runtime or cryptographic
+ //! dependency. It is suitable for the non-production P0 development slice.
+ 
++use std::borrow::Borrow;
+ use std::collections::BTreeMap;
+ use std::error::Error;
+ use std::fmt;
++use std::sync::Arc;
+ use std::time::Duration;
+ 
+ pub const MAX_HTTP_HEAD_BYTES: usize = 16 * 1024;
+@@ -615,24 +617,45 @@ impl RequestEnvelope {
+     }
+ }
+ 
+-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+-pub struct RequestId(String);
++#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
++pub struct RequestId(Arc<String>);
++
++impl fmt::Debug for RequestId {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        formatter.write_str("RequestId([REDACTED])")
++    }
++}
++
++impl Borrow<str> for RequestId {
++    fn borrow(&self) -> &str {
++        self.as_str()
++    }
++}
++
++impl Drop for RequestId {
++    fn drop(&mut self) {
++        if let Some(value) = Arc::get_mut(&mut self.0) {
++            zeroize_string(value);
++        }
++    }
++}
+ 
+ impl RequestId {
+-    pub fn new(value: String) -> Result<Self, ProtocolError> {
++    pub fn new(mut value: String) -> Result<Self, ProtocolError> {
+         if value.len() < 8
+             || value.len() > 128
+             || !value
+                 .bytes()
+                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+         {
++            zeroize_string(&mut value);
+             return Err(ProtocolError::InvalidRequestId);
+         }
+-        Ok(Self(value))
++        Ok(Self(Arc::new(value)))
+     }
+ 
+     pub fn as_str(&self) -> &str {
+-        &self.0
++        self.0.as_str()
+     }
+ }
+ 
+@@ -973,6 +996,20 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn request_id_debug_is_redacted_and_clones_share_one_owned_value() {
++        let request_id = RequestId::new("client-request-private-0001".to_owned());
++        assert!(request_id.is_ok());
++        if let Ok(request_id) = request_id {
++            let shared = request_id.clone();
++            assert!(Arc::ptr_eq(&request_id.0, &shared.0));
++            let rendered = format!("{request_id:?}");
++            assert!(!rendered.contains("client-request-private-0001"));
++            assert!(rendered.contains("[REDACTED]"));
++            assert_eq!(shared.as_str(), "client-request-private-0001");
++        }
++    }
++
+     #[test]
+     fn secret_debug_is_redacted_and_compare_is_length_aware() {
+         let secret = SecretBytes::new(b"correct horse".to_vec());
+diff --git a/docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md b/docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md
+index fd281fc17660237182a276aeb8ef0800777fb366..f753c9a3e97fbcb8fd48a7bc4fb3ee99aaee0dc0 100644
+--- a/docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md
++++ b/docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md
+@@ -8,7 +8,7 @@ This contract defines the audit ordering and outcome vocabulary for `HB-P0-DEV-M
+ 
+ A request-attempt ID is allocated immediately after `accept` and before any request bytes are parsed. Therefore malformed framing, duplicate headers, Host mismatch, read timeout, read I/O failure, connection-capacity rejection and worker-allocation failure can be correlated without storing raw secret-bearing bytes.
+ 
