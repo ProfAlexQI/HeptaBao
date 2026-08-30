@@ -87,8 +87,7 @@ impl DurableCluster {
         if self.nodes.contains_key(&id) {
             return Err(format!("node {id} is already started").into());
         }
-        let (log_store, state_machine) =
-            Self::open_stores(self.node_root(id), lifecycle).await?;
+        let (log_store, state_machine) = Self::open_stores(self.node_root(id), lifecycle).await?;
         let network = DurableNetworkFactory::new(id, self.router.clone());
         let raft = DurableRaft::new(
             id,
@@ -151,8 +150,7 @@ impl DurableCluster {
 
     pub async fn reopen_three_voters(&mut self) -> AnyResult<u64> {
         for id in [1_u64, 2, 3] {
-            self.start_node(id, StoreLifecycle::ReopenExisting)
-                .await?;
+            self.start_node(id, StoreLifecycle::ReopenExisting).await?;
         }
         let leader = self.consensus_leader().await?;
         for node in self.nodes.values() {
