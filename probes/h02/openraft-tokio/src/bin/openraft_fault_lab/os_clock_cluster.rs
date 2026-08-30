@@ -145,9 +145,7 @@ impl Cluster {
             .wait(Some(Duration::from_secs(10)))
             .applied_index_at_least(Some(response.log_id.index), "os-clock write applied")
             .await?;
-        node.raft
-            .ensure_linearizable(ReadPolicy::ReadIndex)
-            .await?;
+        node.raft.ensure_linearizable(ReadPolicy::ReadIndex).await?;
         let observed = node
             .state_machine
             .get_state_machine()

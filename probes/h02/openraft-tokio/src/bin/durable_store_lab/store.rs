@@ -1165,8 +1165,7 @@ mod tests {
             &PersistentLogState::default(),
         )
         .expect("legacy log generation");
-        fs::write(root.join(".raft-log.bin.1.1.tmp"), b"unresolved")
-            .expect("legacy log temporary");
+        fs::write(root.join(".raft-log.bin.1.1.tmp"), b"unresolved").expect("legacy log temporary");
 
         let error = DurableLogStore::adopt_legacy(&root)
             .expect_err("legacy adoption must reject unresolved data temporary files");

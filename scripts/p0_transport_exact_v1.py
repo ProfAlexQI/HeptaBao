@@ -477,17 +477,30 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             except OSError:
                 pass
     release_deadline = time.monotonic() + 10.0
+    release_resets = 0
     while True:
-        probe = exchange(host, port, request_bytes(address, "GET", "/v1/sys/seal-status"))
+        require(time.monotonic() < release_deadline, "connection admission capacity was not released")
+        try:
+            probe = exchange(
+                host, port, request_bytes(address, "GET", "/v1/sys/seal-status")
+            )
+        except (ConnectionResetError, BrokenPipeError):
+            release_resets += 1
+            time.sleep(0.05)
+            continue
         if probe.status != 429:
             require(probe.status == 200, f"capacity-release probe returned {probe.status}")
             break
-        require(time.monotonic() < release_deadline, "connection admission capacity was not released")
         time.sleep(0.05)
     append_case(
         results,
         "P0-TRANSPORT-007",
-        {"status": 429, "detail": "connection-capacity-exhausted", "limit": 32},
+        {
+            "status": 429,
+            "detail": "connection-capacity-exhausted",
+            "limit": 32,
+            "capacity_release_resets": release_resets,
+        },
     )
 
     unseal_body = json.dumps({"key": unseal_key}, separators=(",", ":")).encode("ascii")
