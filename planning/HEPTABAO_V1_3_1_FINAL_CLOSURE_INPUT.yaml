@@ -1,0 +1,55 @@
+schema: heptabao.v1-3-1-final-closure-input.v1
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.3.1-final-closure'
+status: REPOSITORY_CONTROLLED_SOURCE_CLOSURE_IMPLEMENTED_EXACT_HEAD_AND_MERGE_EXECUTION_REQUIRED
+canonical_integration:
+  repository: ProfHepta/HeptaBao
+  branch: codex/plan-v1.3-gap-closure-v2
+  pull_request: 45
+  source_identity: RESOLVE_FROM_EVENT_AND_GIT_NOT_FROM_STATIC_DOCUMENT
+  synthetic_merge_identity: RESOLVE_FROM_PULL_REQUEST_EVENT_AND_VERIFY_TWO_PARENTS
+repository_controlled_closure:
+  p0_runtime_vs_source_evidence_classification: IMPLEMENTED_SOURCE
+  p0_runtime_observed_cases: 11
+  p0_exact_head_compiled_source_bound_cases: 2
+  p0_best_effort_source_bound_cases: 1
+  h02_legacy_log_bytes_vote_commit_entries_membership_equivalence: IMPLEMENTED_SOURCE
+  h02_legacy_log_reopen_reader_replay: IMPLEMENTED_SOURCE
+  h02_legacy_state_applied_membership_reopen_equivalence: IMPLEMENTED_SOURCE
+  exact_head_and_distinct_synthetic_merge_workflow: IMPLEMENTED_SOURCE
+  machine_readable_technical_receipt: IMPLEMENTED_SOURCE
+  ordinary_owner_source_ratification: REQUIRED_FINAL_COMMIT
+execution_required:
+  exact_head_plan_python_root_rust_p0_h02: REQUIRED_EXACT_HEAD
+  distinct_synthetic_merge_plan_python_root_rust_p0_h02: REQUIRED_EXACT_HEAD
+  exact_head_p0_classified_evidence_v2: REQUIRED_EXACT_HEAD
+  synthetic_merge_p0_classified_evidence_v2: REQUIRED_EXACT_HEAD
+  exact_head_h02_24_entry_matrix: REQUIRED_EXACT_HEAD
+  synthetic_merge_h02_24_entry_matrix: REQUIRED_EXACT_HEAD
+  owner_ratification_commit_check: REQUIRED_EXACT_HEAD
+  independent_program_security_storage_review: REQUIRED_EXTERNAL_IDENTITY
+external_open:
+- HB-BLK-CTRL-001
+- HB-BLK-EXT-001
+- HB-BLK-EXT-002
+- HB-BLK-EXT-003
+- HB-BLK-EXT-004
+- HB-BLK-EXT-005
+- HB-BLK-EXT-006
+- HB-BLK-EXT-007
+claims:
+  qualification: false
+  compatibility_claim: false
+  selected_candidates: []
+  selection_effect: NONE
+  production_authority: false
+  migration_authority: false
+  release_authority: false
+  authority_effect: NONE
+closure_semantics:
+  source_presence_is_runtime_execution: false
+  source_bound_evidence_is_preserved_not_discarded: true
+  exact_head_success_is_independent_review: false
+  merge_candidate_success_is_qualification: false
+  qualification_is_authority: false
+  external_evidence_cannot_be_self_attested: true

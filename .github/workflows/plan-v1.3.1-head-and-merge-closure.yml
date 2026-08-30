@@ -1,0 +1,362 @@
+name: plan-v1.3.1-head-and-merge-closure
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "codex/plan-v1.3-gap-closure-v2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-v1.3.1-head-and-merge-closure-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-technical-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        source_kind: ${{ fromJSON(github.event_name == 'pull_request' && '["head","merge"]' || '["head"]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      SOURCE_KIND: ${{ matrix.source_kind }}
+      SOURCE_SHA: ${{ matrix.source_kind == 'merge' && github.sha || (github.event.pull_request.head.sha || github.sha) }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+      HEPTABAO_P0_BIND: 127.0.0.1:0
+      HEPTABAO_P0_DEV_TOKEN: v1-3-1-final-development-root-token-000001
+      HEPTABAO_P0_DEV_UNSEAL_KEY: v1-3-1-final-development-unseal-key-00001
+    steps:
+      - name: Checkout exact head or GitHub synthetic merge
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind source, ancestry and ordinary owner ratification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND"
+          mkdir -p "$evidence/root" "$evidence/p0" "$evidence/h02"
+
+          ratification_subject="$(git show -s --format=%s "$HEAD_SHA")"
+          test "$ratification_subject" = "chore(provenance): owner-ratify V1.3.1 canonical source tree"
+          ratification_author="$(git show -s --format='%an <%ae>' "$HEAD_SHA")"
+          case "$ratification_author" in
+            *github-actions*|*"[bot]"*)
+              echo "owner ratification was authored by a bot: $ratification_author" >&2
+              exit 1
+              ;;
+          esac
+          read -r ratified_commit ratified_parent ratified_extra <<<"$(git rev-list --parents -n 1 "$HEAD_SHA")"
+          test "$ratified_commit" = "$HEAD_SHA"
+          test -n "$ratified_parent"
+          test -z "${ratified_extra:-}"
+          test "$(git rev-parse "$HEAD_SHA^{tree}")" = "$(git rev-parse "$ratified_parent^{tree}")"
+
+          if [[ "$SOURCE_KIND" == "merge" ]]; then
+            test "$SOURCE_SHA" != "$HEAD_SHA"
+            test "${GITHUB_EVENT_NAME}" = "pull_request"
+            read -r merge_commit parent_one parent_two parent_extra <<<"$(git rev-list --parents -n 1 HEAD)"
+            test "$merge_commit" = "$SOURCE_SHA"
+            test -n "$parent_one"
+            test -n "$parent_two"
+            test -z "${parent_extra:-}"
+            test "$parent_one" = "$BASE_SHA"
+            test "$parent_two" = "$HEAD_SHA"
+          else
+            test "$SOURCE_SHA" = "$HEAD_SHA"
+          fi
+
+          printf 'repository=%s\nsource_kind=%s\ncommit=%s\ntree=%s\nhead=%s\nbase=%s\nevent_merge=%s\nratification_author=%s\nratification_parent=%s\n' \
+            "$GITHUB_REPOSITORY" "$SOURCE_KIND" "$SOURCE_SHA" "$(git rev-parse 'HEAD^{tree}')" \
+            "$HEAD_SHA" "$BASE_SHA" "$GITHUB_SHA" "$ratification_author" "$ratified_parent" \
+            | tee "$evidence/root/source-binding.txt"
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Validate every plan generation and Python regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/root"
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt \
+            >"$evidence/pip.log" 2>&1
+          for script in \
+            validate_plan_v2.py validate_plan_v2_extensions.py validate_plan_v1_2.py \
+            validate_plan_v1_2_1.py validate_plan_v1_2_2.py validate_plan_v1_3.py \
+            validate_plan_v1_3_1.py validate_v1_3_1_final_closure_v1.py \
+            validate_h01_h02_next_v1.py validate_h02_candidate_adapters_v1.py \
+            validate_h02_openraft_inmemory_cluster_v1.py \
+            validate_h02_openraft_fault_lab_v1.py validate_h02_blocker_closure_v1.py \
+            validate_h02_exact_head_matrix_contract_v1.py validate_h02_pr40_reconciliation_v1.py; do
+            python3 "scripts/$script" | tee -a "$evidence/validators.log"
+          done
+          for suite in oracle platform plan; do
+            python3 -m unittest discover -s "tests/$suite" -p 'test_*.py' -v \
+              >"$evidence/tests-$suite.log" 2>&1
+          done
+          python3 -m compileall -q scripts tests
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          for toolchain in 1.88.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          done
+
+      - name: Format, test and strictly lint root workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/root"
+          cargo +1.98.0 fmt --all -- --check >"$evidence/rust-fmt.log" 2>&1
+          cargo +1.98.0 test --locked --workspace --all-targets \
+            >"$evidence/rust-test.log" 2>&1
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings \
+            >"$evidence/rust-clippy.log" 2>&1
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Execute and classify P0 socket and audit evidence
+        shell: bash
+        env:
+          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/p0-audit-${{ matrix.source_kind }}.log
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/p0"
+          stderr="$evidence/server.stderr"
+          cargo +1.98.0 run --quiet --locked -p heptabao-p0-server \
+            >"$evidence/server.stdout" 2>"$stderr" &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          python3 scripts/p0_transport_exact_v1.py \
+            --stderr "$stderr" --audit "$HEPTABAO_P0_AUDIT_PATH" \
+            >"$evidence/raw-result.json"
+          python3 scripts/classify_p0_transport_evidence_v1.py \
+            --input "$evidence/raw-result.json" \
+            --output "$evidence/classified-result.json" \
+            | tee "$evidence/classification.log"
+          python3 scripts/validate_p0_transport_evidence_v2.py \
+            --input "$evidence/classified-result.json" \
+            --expected-commit "$SOURCE_SHA" \
+            --expected-repository "$GITHUB_REPOSITORY" \
+            | tee "$evidence/validation.log"
+          cp "$HEPTABAO_P0_AUDIT_PATH" "$evidence/audit.log"
+          test -s "$evidence/audit.log"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Compile, lint and execute all H02 entries without early evidence loss
+        shell: bash
+        run: |
+          set +e
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/h02"
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.88.0 metadata --locked --format-version 1 --manifest-path "$manifest" \
+            >"$evidence/metadata.json" 2>"$evidence/metadata.stderr"
+          metadata_rc=$?
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check \
+            >"$evidence/fmt.log" 2>&1
+          fmt_rc=$?
+          compile_rc=0
+          for toolchain in 1.88.0 1.98.0; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/h02-$SOURCE_KIND-compile-$toolchain"
+            cargo +"$toolchain" test --locked --all-targets --manifest-path "$manifest" \
+              >"$evidence/test-$toolchain.log" 2>&1 || compile_rc=1
+            cargo +"$toolchain" clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings \
+              >"$evidence/clippy-$toolchain.log" 2>&1 || compile_rc=1
+            rm -rf "$CARGO_TARGET_DIR"
+          done
+          python3 scripts/h02_exact_head_matrix_v1.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --ref "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}-$SOURCE_KIND" \
+            --commit "$SOURCE_SHA" \
+            --tree "$(git rev-parse 'HEAD^{tree}')" \
+            --manifest "$manifest" \
+            --output-dir "$evidence/matrix" \
+            --cargo-target-root "$RUNNER_TEMP/h02-$SOURCE_KIND-matrix-target" \
+            --entry-timeout-seconds 240 \
+            >"$evidence/matrix-runner.log" 2>&1
+          matrix_rc=$?
+          printf 'metadata=%s\nfmt=%s\ncompile=%s\nmatrix=%s\n' \
+            "$metadata_rc" "$fmt_rc" "$compile_rc" "$matrix_rc" \
+            >"$evidence/exits.txt"
+          rm -rf "$RUNNER_TEMP/h02-$SOURCE_KIND-matrix-target"
+          exit 0
+
+      - name: Upload complete diagnostics before final H02 gate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1.3.1-${{ matrix.source_kind }}-pre-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.3.1-${{ matrix.source_kind }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require complete H02 24-entry PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/h02"
+          grep -qx 'metadata=0' "$evidence/exits.txt"
+          grep -qx 'fmt=0' "$evidence/exits.txt"
+          grep -qx 'compile=0' "$evidence/exits.txt"
+          grep -qx 'matrix=0' "$evidence/exits.txt"
+          python3 - "$evidence/matrix/matrix-summary.json" <<'PY'
+          import json
+          import sys
+
+          summary = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert summary["result"] == "PASS", summary
+          assert summary["matrix"]["executed_entry_count"] == 24, summary
+          assert summary["counts"] == {
+              "pass": 24,
+              "fail": 0,
+              "blocked": 0,
+              "unknown": 0,
+              "unexecuted": 0,
+          }, summary
+          assert summary["qualification"] is False
+          assert summary["compatibility_claim"] is False
+          assert summary["selection_effect"] == "NONE"
+          assert summary["authority_effect"] == "NONE"
+          PY
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Emit exact-source technical completion receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND"
+          python3 - "$evidence" <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          p0_path = root / "p0/classified-result.json"
+          h02_path = root / "h02/matrix/matrix-summary.json"
+          p0 = json.loads(p0_path.read_text(encoding="utf-8"))
+          h02 = json.loads(h02_path.read_text(encoding="utf-8"))
+          assert p0["counts"]["executed_pass"] == 11
+          assert p0["counts"]["source_bound_pass"] == 2
+          assert p0["counts"]["best_effort_source_bound_pass"] == 1
+          assert h02["matrix"]["executed_entry_count"] == 24
+          assert h02["counts"]["pass"] == 24
+
+          def digest(path: Path) -> str:
+              return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+          tree = subprocess.check_output(
+              ["git", "rev-parse", "HEAD^{tree}"], text=True
+          ).strip()
+          receipt = {
+              "schema": "heptabao.v1-3-1-technical-completion-receipt.v1",
+              "source": {
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "kind": os.environ["SOURCE_KIND"],
+                  "commit": os.environ["SOURCE_SHA"],
+                  "tree": tree,
+                  "head": os.environ["HEAD_SHA"],
+                  "base": os.environ.get("BASE_SHA", ""),
+                  "event_merge": os.environ["GITHUB_SHA"],
+              },
+              "runner": {
+                  "run_id": os.environ["GITHUB_RUN_ID"],
+                  "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                  "job": os.environ["GITHUB_JOB"],
+                  "name": os.environ.get("RUNNER_NAME", ""),
+                  "os": os.environ.get("RUNNER_OS", ""),
+                  "arch": os.environ.get("RUNNER_ARCH", ""),
+              },
+              "gates": {
+                  "plan_python": "PASS",
+                  "root_rust_1_98": "PASS",
+                  "p0": {
+                      "runtime_socket_observed": 11,
+                      "exact_head_compiled_source_bound": 2,
+                      "best_effort_source_bound": 1,
+                      "artifact_digest": digest(p0_path),
+                  },
+                  "h02": {
+                      "executed_entries": 24,
+                      "pass": 24,
+                      "artifact_digest": digest(h02_path),
+                  },
+              },
+              "independent_review": False,
+              "qualification": False,
+              "compatibility_claim": False,
+              "selected_candidates": [],
+              "selection_effect": "NONE",
+              "production_authority": False,
+              "migration_authority": False,
+              "release_authority": False,
+              "authority_effect": "NONE",
+          }
+          output = root / "technical-completion-receipt.json"
+          output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Verify technical receipt remains non-authoritative
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/v1.3.1-$SOURCE_KIND/technical-completion-receipt.json"
+          python3 - "$receipt" <<'PY'
+          import json
+          import os
+          import sys
+
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert value["source"]["commit"] == os.environ["SOURCE_SHA"]
+          assert value["source"]["kind"] == os.environ["SOURCE_KIND"]
+          assert value["gates"]["p0"]["runtime_socket_observed"] == 11
+          assert value["gates"]["h02"]["pass"] == 24
+          assert value["independent_review"] is False
+          assert value["qualification"] is False
+          assert value["compatibility_claim"] is False
+          assert value["selected_candidates"] == []
+          assert value["selection_effect"] == "NONE"
+          assert value["production_authority"] is False
+          assert value["migration_authority"] is False
+          assert value["release_authority"] is False
+          assert value["authority_effect"] == "NONE"
+          PY
+
+      - name: Upload final technical receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1.3.1-${{ matrix.source_kind }}-technical-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.3.1-${{ matrix.source_kind }}/technical-completion-receipt.json
+          if-no-files-found: warn
+          retention-days: 30
