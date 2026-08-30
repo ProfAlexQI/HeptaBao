@@ -6,138 +6,15 @@ on:
       - "exec/v1-3-1-request-id-closure-v1"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: execute-v1.3.1-request-id-closure
   cancel-in-progress: true
 
-env:
-  TARGET_BRANCH: codex/plan-v1.3-gap-closure-v2
-  SOURCE_SHA: fa4ad47f15783bfe43492246f68ad922e6aa3bed
-  SOURCE_TREE: b20ebc3a9cfb13fecc76d0eee7d90321eef93ca8
-  PATCH_SHA256: f8417675c75a8fa30db9adea20c8070885bfcba0e8728c77939194beb0442941
-
 jobs:
-  apply-validate-publish:
+  superseded:
     runs-on: ubuntu-slim
-    timeout-minutes: 120
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact executor transport
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Bind exact source, patch and target lease
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git merge-base "$SOURCE_SHA" HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse "$SOURCE_SHA^{tree}")" = "$SOURCE_TREE"
-          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$SOURCE_SHA"
-          mapfile -t actual < <(git diff --name-only "$SOURCE_SHA" HEAD | sort)
-          mapfile -t expected < <(printf '%s\n' \
-            .github/workflows/execute-v1.3.1-request-id-closure.yml \
-            bootstrap/request-id-closure/part-00.patch \
-            bootstrap/request-id-closure/part-01.patch \
-            bootstrap/request-id-closure/part-02.patch \
-            bootstrap/request-id-closure/part-03.patch \
-            bootstrap/request-id-closure/part-04.patch \
-            bootstrap/request-id-closure/part-05.patch | sort)
-          test "${actual[*]}" = "${expected[*]}"
-          cat bootstrap/request-id-closure/part-*.patch >"$RUNNER_TEMP/request-id-closure.patch"
-          printf '%s  %s\n' "$PATCH_SHA256" "$RUNNER_TEMP/request-id-closure.patch" | sha256sum --check --strict
-          git apply --check "$RUNNER_TEMP/request-id-closure.patch"
-          mkdir -p "$RUNNER_TEMP/request-id-evidence"
-          printf 'repository=%s\nexecutor=%s\nsource_commit=%s\nsource_tree=%s\npatch_sha256=%s\ntarget_branch=%s\nrunner=%s\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$SOURCE_SHA" "$SOURCE_TREE" \
-            "$PATCH_SHA256" "$TARGET_BRANCH" "$RUNNER_NAME" \
-            | tee "$RUNNER_TEMP/request-id-evidence/source-binding.txt"
-
-      - name: Apply only the audited patch to the exact source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout -B request-id-closure "$SOURCE_SHA"
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
-          git apply --index "$RUNNER_TEMP/request-id-closure.patch"
-          git diff --cached --check
-          mapfile -t actual < <(git diff --cached --name-only | sort)
-          mapfile -t expected < <(printf '%s\n' \
-            crates/heptabao-p0-server/src/lib.rs \
-            crates/heptabao-p0-server/src/main.rs \
-            crates/heptabao-protocol/src/lib.rs \
-            docs/audit/HEPTABAO_P0_AUDIT_OUTCOME_PROTOCOL_V1.md \
-            docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md \
-            docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md \
-            docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md \
-            docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md \
-            docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md \
-            docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md \
-            planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml \
-            planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml \
-            scripts/validate_plan_v1_3_1.py \
-            tests/plan/test_plan_v1_3_1.py \
-            tests/plan/test_v1_3_1_residual_hardening.py | sort)
-          test "${actual[*]}" = "${expected[*]}"
-          test -z "$(git diff --cached --name-only -- '.github/workflows/**')"
-          git write-tree | tee "$RUNNER_TEMP/request-id-evidence/candidate-tree.txt"
-
-      - name: Install exact Python validation environment
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: requirements-plan.txt
-
-      - name: Execute all semantic and Python regression gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
-          python3 scripts/validate_plan_v2.py
-          python3 scripts/validate_plan_v2_extensions.py
-          python3 scripts/validate_plan_v1_2.py
-          python3 scripts/validate_plan_v1_2_1.py
-          python3 scripts/validate_plan_v1_2_2.py
-          python3 scripts/validate_plan_v1_3.py
-          python3 scripts/validate_plan_v1_3_1.py
-          python3 scripts/validate_h01_h02_next_v1.py
-          python3 scripts/validate_h02_candidate_adapters_v1.py
-          python3 scripts/validate_h02_openraft_inmemory_cluster_v1.py
-          python3 scripts/validate_h02_openraft_fault_lab_v1.py
-          python3 scripts/validate_h02_blocker_closure_v1.py
-          python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
-          python3 scripts/validate_h02_pr40_reconciliation_v1.py
-          python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
-          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
-          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
-          python3 -m compileall -q scripts tests
-          git diff --cached --check
-          test "$(git write-tree)" = "$(cat "$RUNNER_TEMP/request-id-evidence/candidate-tree.txt")"
-
-      - name: Commit and exact-lease fast-forward canonical integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$SOURCE_SHA"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix(protocol): isolate request identity namespace and lifetime"
-          test "$(git rev-parse HEAD^)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$(cat "$RUNNER_TEMP/request-id-evidence/candidate-tree.txt")"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          git rev-parse HEAD | tee "$RUNNER_TEMP/request-id-evidence/result-commit.txt"
-          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
-
-      - name: Upload exact execution evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: request-id-closure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/request-id-evidence/
-          if-no-files-found: error
-          retention-days: 30
+      - run: echo "Superseded before publication by exact-head Rust fmt/Clippy remediation."
