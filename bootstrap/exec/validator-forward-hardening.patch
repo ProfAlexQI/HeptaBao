@@ -1,0 +1,59 @@
+--- a/scripts/validate_plan_v1_2.py
++++ b/scripts/validate_plan_v1_2.py
+@@ -430,8 +430,12 @@
+             if token.lower() not in text.lower():
+                 fail(f"{path}: required concept missing: {token}")
+     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+-    if "current plan: **v1.2**" not in readme and "current plan: **v1.3**" not in readme:
++    current = re.search(r"current plan:\s*\*\*v(\d+)\.(\d+)(?:\.(\d+))?", readme)
++    if current is None:
+         fail("README.md: current plan marker is missing")
++    version = tuple(int(part or 0) for part in current.groups())
++    if version < (1, 2, 0):
++        fail(f"README.md: current plan regressed below V1.2: {version!r}")
+     deployability = (
+         "not yet a deployable secrets server",
+         "not a production-deployable secrets server",
+--- a/scripts/validate_plan_v1_3.py
++++ b/scripts/validate_plan_v1_3.py
+@@ -175,7 +175,12 @@
+         "self.0.fill(0)",
+     ):
+         require(token in text, f"protocol invariant missing: {token}")
+-    require("#[derive(Clone, Debug, Eq, PartialEq)]\npub struct SecretBytes" not in text, "secret Debug leaks owned bytes")
++    secret_derive = re.search(
++        r"#\[derive\(([^)]*)\)\]\s*pub struct SecretBytes", text
++    )
++    if secret_derive is not None:
++        traits = {item.strip() for item in secret_derive.group(1).split(",")}
++        require("Debug" not in traits, "secret Debug leaks owned bytes")
+     require("pub fn parse_http_request" in text and "pub fn classify_operation" in text, "protocol entry points missing")
+ 
+ 
+--- a/tests/plan/test_plan_v1_2.py
++++ b/tests/plan/test_plan_v1_2.py
+@@ -33,6 +33,11 @@
+         self.assertFalse(result["qualification"])
+         self.assertEqual(result["authority_effect"], "NONE")
+ 
++    def test_inherited_validator_accepts_current_v131_readme_marker(self):
++        readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
++        self.assertIn("current plan: **v1.3.1", readme)
++        validator.validate_docs()
++
+     def test_duplicate_manifest_path_fails_closed(self):
+         value = validator.load_yaml("planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml")
+         value = copy.deepcopy(value)
+--- a/tests/plan/test_plan_v1_3.py
++++ b/tests/plan/test_plan_v1_3.py
+@@ -82,8 +82,8 @@
+     def test_secret_derive_debug_rejected(self):
+         validator = load_validator()
+         text = validator.PROTOCOL.read_text(encoding="utf-8").replace(
+-            "#[derive(Clone, Eq, PartialEq)]\npub struct SecretBytes",
+-            "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct SecretBytes",
++            "#[derive(Eq, PartialEq)]\npub struct SecretBytes",
++            "#[derive(Debug, Eq, PartialEq)]\npub struct SecretBytes",
+             1,
+         )
+         temporary, path = temp_text(text, ".rs")
