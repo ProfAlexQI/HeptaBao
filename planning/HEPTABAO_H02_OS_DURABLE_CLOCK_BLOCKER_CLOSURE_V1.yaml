@@ -75,6 +75,9 @@ durable_storage:
       missing_initialized_generation_fails_closed: true
       legacy_generation_adoption_requires_full_validation: true
       marker_domain_and_file_binding_validated: true
+      active_persistence_requires_existing_real_parent: true
+      legacy_data_temporary_artifacts_rejected: true
+      current_generation_type_preflighted: true
     implemented_cases:
       - three-node replicated writes with non-empty durable artifacts
       - logical full-cluster shutdown and disk reopen in the same OS process
@@ -90,6 +93,9 @@ durable_storage:
       - interrupted marker replacement recovered before classification
       - deleted initialized directory is not silently recreated by reopen-existing
       - legacy authoritative generation requires explicit validated adoption
+      - active persistence rejects deleted or replaced parent directories without recreating them
+      - legacy adoption rejects unresolved raft-log and state-bundle temporary artifacts
+      - existing current generations are regular-file checked before atomic replacement
       - valid current generation discards one stale previous only after validation
       - corrupt current generation never falls back silently to previous
       - multiple previous generations fail closed as ambiguous
@@ -199,6 +205,8 @@ invariants:
   - Once an initialization marker exists, an absent authoritative generation is corruption and cannot be interpreted as a fresh store.
   - Loss of both a storage directory and its marker requires a separately qualified external rollback anchor; this prototype does not claim otherwise.
   - Bootstrap creation, existing-store reopen and legacy adoption are distinct caller-selected operations.
+  - Active persistence never recreates a missing durable parent directory and rejects non-directory replacement.
+  - Legacy adoption is blocked by unresolved marker or authoritative-generation temporary artifacts.
   - A missing marker or authoritative generation on reopen-existing is corruption, never permission to initialize empty state.
   - A validated current generation may retire one stale previous file; corrupt current state never rolls back silently.
   - qualification=false, selection_effect=NONE and authority_effect=NONE are immutable.

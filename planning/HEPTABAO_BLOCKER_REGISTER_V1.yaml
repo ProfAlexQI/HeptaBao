@@ -150,6 +150,9 @@ blockers:
   - corrupt markers and non-regular authoritative generations fail closed
   - legacy authoritative generations are adopted only after validation and marker
     publication
+  - active persistence refuses missing, symlinked or non-directory parent paths without recreating them
+  - legacy adoption rejects unresolved marker, raft-log and state-bundle temporary artifacts
+  - current generation type is checked before every atomic replacement
   - interrupted replacement recovery is explicit for generations and markers
   - whole-directory loss remains bound to an external rollback anchor rather than
     silent proof

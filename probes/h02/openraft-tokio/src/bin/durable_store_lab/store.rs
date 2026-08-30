@@ -134,9 +134,7 @@ fn replacement_candidates(path: &Path, suffix: &str) -> io::Result<Vec<PathBuf>>
     let parent = path
         .parent()
         .ok_or_else(|| invalid(format!("{} has no parent directory", path.display())))?;
-    if !parent.is_dir() {
-        return Ok(Vec::new());
-    }
+    require_real_directory(parent, "durable replacement parent directory")?;
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -251,7 +249,7 @@ fn atomic_write(path: &Path, magic: [u8; 8], payload: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid(format!("{} has no parent directory", path.display())))?;
-    fs::create_dir_all(parent)?;
+    require_real_directory(parent, "durable write parent directory")?;
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let file_name = path
         .file_name()
@@ -263,6 +261,7 @@ fn atomic_write(path: &Path, magic: [u8; 8], payload: &[u8]) -> io::Result<()> {
         sequence
     ));
     let encoded = encode_envelope(magic, payload)?;
+    let current_exists = regular_file_status(path, "durable current generation")?;
 
     let result = (|| -> io::Result<()> {
         let mut file = OpenOptions::new()
@@ -275,7 +274,7 @@ fn atomic_write(path: &Path, magic: [u8; 8], payload: &[u8]) -> io::Result<()> {
         drop(file);
 
         #[cfg(windows)]
-        if path.exists() {
+        if current_exists {
             let previous = parent.join(format!(
                 ".{file_name}.{}.{}.previous",
                 std::process::id(),
@@ -292,7 +291,10 @@ fn atomic_write(path: &Path, magic: [u8; 8], payload: &[u8]) -> io::Result<()> {
         }
 
         #[cfg(not(windows))]
-        fs::rename(&temporary, path)?;
+        {
+            let _ = current_exists;
+            fs::rename(&temporary, path)?;
+        }
 
         sync_parent(path)?;
         Ok(())
@@ -474,6 +476,11 @@ impl DurableLogStore {
         if !replacement_candidates(&initialization_marker_path(root), ".tmp")?.is_empty() {
             return Err(invalid(
                 "legacy adoption refused unresolved initialization-marker temporary artifacts",
+            ));
+        }
+        if !replacement_candidates(&state_path, ".tmp")?.is_empty() {
+            return Err(invalid(
+                "legacy adoption refused unresolved raft-log temporary artifacts",
             ));
         }
         recover_interrupted_replace(&state_path)?;
@@ -774,6 +781,11 @@ impl DurableStateMachine {
         if !replacement_candidates(&initialization_marker_path(root), ".tmp")?.is_empty() {
             return Err(invalid(
                 "legacy adoption refused unresolved initialization-marker temporary artifacts",
+            ));
+        }
+        if !replacement_candidates(&bundle_path, ".tmp")?.is_empty() {
+            return Err(invalid(
+                "legacy adoption refused unresolved state-bundle temporary artifacts",
             ));
         }
         recover_interrupted_replace(&bundle_path)?;
@@ -1113,6 +1125,74 @@ mod tests {
         let error = DurableLogStore::open_existing(&root)
             .expect_err("reopen must not recreate a deleted store");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn active_log_persist_does_not_recreate_deleted_store_root() {
+        let root = root("active-log-deleted-root");
+        let mut store = DurableLogStore::create(&root).expect("create log store");
+        fs::remove_dir_all(&root).expect("remove active log root");
+
+        let error = store
+            .save_committed(None)
+            .await
+            .expect_err("active persistence must not recreate a deleted root");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn active_state_persist_does_not_recreate_deleted_store_root() {
+        let root = root("active-state-deleted-root");
+        let mut state = DurableStateMachine::create(&root).expect("create state machine");
+        fs::remove_dir_all(&root).expect("remove active state root");
+
+        let error = state
+            .build_snapshot()
+            .await
+            .expect_err("active persistence must not recreate a deleted root");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn legacy_log_adoption_rejects_unresolved_data_temporary_file() {
+        let root = root("legacy-log-temporary");
+        fs::create_dir_all(&root).expect("test root");
+        write_json(
+            &root.join("raft-log.bin"),
+            LOG_MAGIC,
+            &PersistentLogState::default(),
+        )
+        .expect("legacy log generation");
+        fs::write(root.join(".raft-log.bin.1.1.tmp"), b"unresolved")
+            .expect("legacy log temporary");
+
+        let error = DurableLogStore::adopt_legacy(&root)
+            .expect_err("legacy adoption must reject unresolved data temporary files");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!root.join(INITIALIZATION_MARKER_FILE).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_state_adoption_rejects_unresolved_data_temporary_file() {
+        let root = root("legacy-state-temporary");
+        fs::create_dir_all(&root).expect("test root");
+        write_json(
+            &root.join("state-bundle.bin"),
+            STATE_BUNDLE_MAGIC,
+            &PersistentStateBundle::default(),
+        )
+        .expect("legacy state generation");
+        fs::write(root.join(".state-bundle.bin.1.1.tmp"), b"unresolved")
+            .expect("legacy state temporary");
+
+        let error = DurableStateMachine::adopt_legacy(&root)
+            .expect_err("legacy adoption must reject unresolved data temporary files");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!root.join(INITIALIZATION_MARKER_FILE).exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
