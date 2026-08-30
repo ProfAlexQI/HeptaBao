@@ -423,13 +423,21 @@ def validate_docs() -> None:
         "docs/compatibility/HEPTABAO_ORACLE_COMPATIBILITY_MATRIX_SPEC_V1.md": [
             "CAPTURED_RAW_RESTRICTED", "DIFFERENTIAL_PASS", "Side-effect"
         ],
-        "README.md": ["Current plan: **V1.2**", "not yet a deployable secrets server"],
     }
     for path, tokens in required.items():
         text = (ROOT / path).read_text(encoding="utf-8")
         for token in tokens:
             if token.lower() not in text.lower():
                 fail(f"{path}: required concept missing: {token}")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    if "current plan: **v1.2**" not in readme and "current plan: **v1.3**" not in readme:
+        fail("README.md: current plan marker is missing")
+    deployability = (
+        "not yet a deployable secrets server",
+        "not a production-deployable secrets server",
+    )
+    if not any(token in readme for token in deployability):
+        fail("README.md: non-production deployability boundary is missing")
 
 
 def validate_legacy_authority_flags() -> None:

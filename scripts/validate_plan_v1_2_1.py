@@ -274,9 +274,8 @@ def validate_v121_docs() -> None:
             "contents: read",
         ],
         "README.md": [
-            "Current operational amendment: **V1.2.1**",
+            "V1.2.1",
             "HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml",
-            "not yet a deployable secrets server",
         ],
     }
     for path, tokens in required.items():
@@ -284,6 +283,12 @@ def validate_v121_docs() -> None:
         for token in tokens:
             if token.lower() not in text.lower():
                 fail(f"{path}: required V1.2.1 concept missing: {token}")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    if (
+        "not yet a deployable secrets server" not in readme
+        and "not a production-deployable secrets server" not in readme
+    ):
+        fail("README.md: non-production deployability boundary is missing")
 
 
 def validate_workflow_entry(workflow_text: str | None = None) -> None:

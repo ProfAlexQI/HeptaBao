@@ -42,16 +42,14 @@ fn parse_seed() -> u64 {
 
 fn emit_meta(seed: u64) {
     println!(
-        "{{\"kind\":\"meta\",\"candidate_id\":\"{}\",\"version\":\"{}\",\"profile_id\":\"{}\",\"domain\":\"RAFT\",\"seed\":\"0x{:016x}\"}}",
-        CANDIDATE_ID, VERSION, PROFILE_ID, seed
+        "{{\"kind\":\"meta\",\"candidate_id\":\"{CANDIDATE_ID}\",\"version\":\"{VERSION}\",\"profile_id\":\"{PROFILE_ID}\",\"domain\":\"RAFT\",\"seed\":\"0x{seed:016x}\"}}"
     );
 }
 
 fn emit_case(case_id: &str, pass: bool, assertions: u64, detail: &str) {
     let status = if pass { "PASS" } else { "FAIL" };
     println!(
-        "{{\"kind\":\"case\",\"case_id\":\"{}\",\"status\":\"{}\",\"assertion_count\":{},\"detail\":\"{}\"}}",
-        case_id, status, assertions, detail
+        "{{\"kind\":\"case\",\"case_id\":\"{case_id}\",\"status\":\"{status}\",\"assertion_count\":{assertions},\"detail\":\"{detail}\"}}"
     );
 }
 
