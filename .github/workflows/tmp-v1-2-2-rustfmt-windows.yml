@@ -1,0 +1,64 @@
+name: tmp-v1-2-2-rustfmt-windows
+
+on:
+  push:
+    branches: ["codex/tmp-v1.2.2-rustfmt-windows"]
+    paths:
+      - ".github/workflows/tmp-v1-2-2-rustfmt-windows.yml"
+      - "bootstrap/v1-2-2-rustfmt.patch"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-v1-2-2-rustfmt-windows
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact transition head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply verified format patch and self-remove
+        shell: pwsh
+        env:
+          EXACT_BASE: 65a32638b4c2ed677a293b26dc8c0c2ed1ad5cc6
+          PATCH_SHA256: dc65bd6e0ff7f2e319648ae96777fabbb9b166ebbf4d6aedf12d861a0f124641
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'HEAD drift' }
+          git merge-base --is-ancestor $env:EXACT_BASE HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'base ancestry mismatch' }
+          if ((git status --porcelain=v1 --untracked-files=all)) { throw 'dirty checkout' }
+          $patch = 'bootstrap/v1-2-2-rustfmt.patch'
+          $actualPatch = (Get-FileHash -Algorithm SHA256 $patch).Hash.ToLowerInvariant()
+          if ($actualPatch -ne $env:PATCH_SHA256) { throw "patch digest mismatch: $actualPatch" }
+          if ((git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs).Trim() -ne '1ac36a2bd03b4cd7050296bbcda4ac624024ded4') { throw 'cluster base blob mismatch' }
+          if ((git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs).Trim() -ne 'e4c2021df0709b5a294e5a5f8648d752056a84e4') { throw 'store base blob mismatch' }
+          git apply --check $patch
+          git apply $patch
+          if ((git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs).Trim() -ne '0fccaf0d9f3bfe358c75300a8564e0e9ba81eb63') { throw 'cluster target blob mismatch' }
+          if ((git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs).Trim() -ne 'a4f90d29f981175637668f7fd44e758d6aa9c63c') { throw 'store target blob mismatch' }
+          Remove-Item $patch
+          Remove-Item '.github/workflows/tmp-v1-2-2-rustfmt-windows.yml'
+          git add -A
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'staged diff check failed' }
+          $actual = @(git diff --cached --name-only | Sort-Object)
+          $expected = @(
+            '.github/workflows/tmp-v1-2-2-rustfmt-windows.yml',
+            'bootstrap/v1-2-2-rustfmt.patch',
+            'probes/h02/openraft-tokio/src/bin/durable_store_lab/cluster.rs',
+            'probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs'
+          ) | Sort-Object
+          if ((Compare-Object $actual $expected)) { throw "staged path mismatch: $($actual -join ',')" }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'style(h02): normalize durable lifecycle sources'
+          git push origin HEAD:codex/tmp-v1.2.2-rustfmt-windows
