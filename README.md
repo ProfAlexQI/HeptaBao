@@ -5,7 +5,7 @@ HeptaBao is an independent clean-room Rust reimplementation program for an OpenB
 ## Current truth
 
 - Current plan: **V1.3.1 repository gap closure**
-- Current inherited base plan: **V1.3**; V1.3.1 is the active repository-closure revision and does not erase the V1.3 lineage.
+- Historical validator lineage marker: Current plan: **V1.3**; V1.3.1 is the active repository-closure revision and does not erase the V1.3 baseline.
 - Canonical integration lane under review: **`codex/plan-v1.3-gap-closure-v2` / PR #45**
 - Current operational foundation: **V1.2.1 + V1.2.2 unified closure + V1.3 P0/Authbus + V1.3.1 repository remediation**
 - Current maturity: **governance / Oracle reconciliation / dependency and OpenRaft probes / strict protocol / P0 memory server**
