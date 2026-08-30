@@ -1,0 +1,74 @@
+name: exec-validator-forward-hardening
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-validator-hardening-v1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-validator-forward-hardening-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-validate-commit:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact execution head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install pinned validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Bind parent and apply exact patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git merge-base HEAD 352a5397d36a93e33715148de4616c5e43bc2bf1)" = 352a5397d36a93e33715148de4616c5e43bc2bf1
+          patch=bootstrap/exec/validator-forward-hardening.patch
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+
+      - name: Execute inherited and current validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_plan_v1_3.py
+          python3 scripts/validate_plan_v1_3_1.py
+          python3 -m unittest discover -s tests/plan -p 'test_plan_v1_2.py' -v
+          python3 -m unittest discover -s tests/plan -p 'test_plan_v1_3.py' -v
+
+      - name: Commit only the verified validator surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add \
+            scripts/validate_plan_v1_2.py \
+            scripts/validate_plan_v1_3.py \
+            tests/plan/test_plan_v1_2.py \
+            tests/plan/test_plan_v1_3.py
+          actual="$(git diff --cached --name-only)"
+          expected="$(printf '%s\n' \
+            scripts/validate_plan_v1_2.py \
+            scripts/validate_plan_v1_3.py \
+            tests/plan/test_plan_v1_2.py \
+            tests/plan/test_plan_v1_3.py)"
+          test "$actual" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(plan): harden inherited and secret validators"
+          git push origin "HEAD:refs/heads/exec/v1-3-validator-hardening-v1"
