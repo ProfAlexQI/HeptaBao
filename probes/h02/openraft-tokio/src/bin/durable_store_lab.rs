@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use durable_store_lab::cluster::DurableCluster;
 use durable_store_lab::store::{DurableLogStore, DurableStateMachine, flip_first_payload_byte};
+use openraft::EntryPayload;
+use openraft::storage::{RaftLogReader, RaftLogStorage};
 use serde_json::{Value, json};
 use tokio::task::spawn_blocking;
 
@@ -52,6 +54,40 @@ fn case(case_id: &str, pass: bool, detail: Value) -> Value {
         "status": if pass { "PASS" } else { "FAIL" },
         "detail": detail,
     })
+}
+
+fn semantic_field_matches(expected: &Value, observed: &Value, field: &str) -> bool {
+    expected.get(field) == observed.get(field)
+}
+
+async fn log_semantic_snapshot(
+    store: &mut DurableLogStore,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let log_state = store.get_log_state().await?;
+    let vote = store.read_vote().await?;
+    let committed = store.read_committed().await?;
+    let entries = store.try_get_log_entries(..).await?;
+    let entry_debug = entries
+        .iter()
+        .map(|entry| format!("{entry:?}"))
+        .collect::<Vec<_>>();
+    let membership_entries = entries
+        .iter()
+        .filter_map(|entry| match &entry.payload {
+            EntryPayload::Membership(membership) => {
+                let log_id = &entry.log_id;
+                Some(format!("{log_id:?}:{membership:?}"))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "log_state": format!("{log_state:?}"),
+        "vote": format!("{vote:?}"),
+        "committed": format!("{committed:?}"),
+        "entries": entry_debug,
+        "membership_entries": membership_entries,
+    }))
 }
 
 async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
@@ -114,29 +150,81 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         let second_leader = reopened_again.reopen_three_voters().await?;
         reopened_again.read_index(second_leader).await?;
         let second_state = reopened_again.state(second_leader).await;
-        let second_restart_matches =
-            reopened_again.all_states_equal().await
-                && second_state.client_status == expected_after_restart.client_status;
+        let second_restart_matches = reopened_again.all_states_equal().await
+            && second_state.client_status == expected_after_restart.client_status;
         reopened_again.shutdown().await?;
 
         let snapshot_copy = root.join("snapshot-recovery-copy");
         copy_tree(&snapshot_source, &snapshot_copy)?;
         let expected_snapshot_state = expected_after_restart.client_status.clone();
-        let snapshot_recovered = spawn_blocking(move || DurableStateMachine::open_existing(snapshot_copy))
-            .await??;
-        let snapshot_recovery_matches =
-            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
-                && snapshot_recovered.has_current_snapshot().await
-                && snapshot_recovered.generation().await > 1;
+        let snapshot_recovered =
+            spawn_blocking(move || DurableStateMachine::open_existing(snapshot_copy)).await??;
+        let snapshot_recovery_matches = snapshot_recovered
+            .get_state_machine()
+            .await
+            .client_status
+            == expected_snapshot_state
+            && snapshot_recovered.has_current_snapshot().await
+            && snapshot_recovered.generation().await > 1;
+
+        let original_log_root = root.join("node-1").join("log");
+        let original_log_bytes = fs::read(original_log_root.join("raft-log.bin"))?;
+        let original_log_task_root = original_log_root.clone();
+        let mut original_log =
+            spawn_blocking(move || DurableLogStore::open_existing(original_log_task_root)).await??;
+        let expected_legacy_log_semantics = log_semantic_snapshot(&mut original_log).await?;
+        drop(original_log);
 
         let legacy_log_root = root.join("legacy-log-adoption-copy");
-        copy_tree(&root.join("node-1").join("log"), &legacy_log_root)?;
+        copy_tree(&original_log_root, &legacy_log_root)?;
         fs::remove_file(legacy_log_root.join("initialized.bin"))?;
         let legacy_log_task_root = legacy_log_root.clone();
-        let legacy_log_adopted =
+        let mut legacy_log_adopted =
             spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;
-        let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()
-            && legacy_log_root.join("initialized.bin").is_file();
+        let adopted_legacy_log_semantics = log_semantic_snapshot(&mut legacy_log_adopted).await?;
+        let adopted_log_bytes = fs::read(legacy_log_root.join("raft-log.bin"))?;
+        let legacy_log_bytes_match =
+            adopted_log_bytes.as_slice() == original_log_bytes.as_slice();
+        let legacy_log_vote_matches = semantic_field_matches(
+            &expected_legacy_log_semantics,
+            &adopted_legacy_log_semantics,
+            "vote",
+        );
+        let legacy_log_committed_matches = semantic_field_matches(
+            &expected_legacy_log_semantics,
+            &adopted_legacy_log_semantics,
+            "committed",
+        );
+        let legacy_log_entries_match = semantic_field_matches(
+            &expected_legacy_log_semantics,
+            &adopted_legacy_log_semantics,
+            "entries",
+        );
+        let legacy_log_membership_matches = semantic_field_matches(
+            &expected_legacy_log_semantics,
+            &adopted_legacy_log_semantics,
+            "membership_entries",
+        );
+        drop(legacy_log_adopted);
+
+        let legacy_log_reopen_root = legacy_log_root.clone();
+        let mut legacy_log_reopened = spawn_blocking(move || {
+            DurableLogStore::open_existing(legacy_log_reopen_root)
+        })
+        .await??;
+        let reopened_legacy_log_semantics = log_semantic_snapshot(&mut legacy_log_reopened).await?;
+        let reopened_log_bytes = fs::read(legacy_log_root.join("raft-log.bin"))?;
+        let legacy_log_reopen_matches = reopened_log_bytes.as_slice() == original_log_bytes.as_slice()
+            && reopened_legacy_log_semantics == expected_legacy_log_semantics;
+        let legacy_log_adoption_matches = legacy_log_reopened.state_path().is_file()
+            && legacy_log_root.join("initialized.bin").is_file()
+            && legacy_log_bytes_match
+            && legacy_log_vote_matches
+            && legacy_log_committed_matches
+            && legacy_log_entries_match
+            && legacy_log_membership_matches
+            && legacy_log_reopen_matches;
+        drop(legacy_log_reopened);
 
         let legacy_state_root = root.join("legacy-state-adoption-copy");
         copy_tree(
@@ -145,28 +233,50 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
         )?;
         fs::remove_file(legacy_state_root.join("initialized.bin"))?;
         let legacy_state_task_root = legacy_state_root.clone();
-        let expected_legacy_state = expected_after_restart.client_status.clone();
+        let expected_legacy_state = expected_after_restart.clone();
         let legacy_state_adopted = spawn_blocking(move || {
             DurableStateMachine::adopt_legacy(legacy_state_task_root)
         })
         .await??;
-        let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()
+        let adopted_legacy_state = legacy_state_adopted.get_state_machine().await;
+        let legacy_state_client_matches =
+            adopted_legacy_state.client_status == expected_legacy_state.client_status;
+        let legacy_state_last_applied_matches =
+            adopted_legacy_state.last_applied_log == expected_legacy_state.last_applied_log;
+        let legacy_state_membership_matches =
+            adopted_legacy_state.last_membership == expected_legacy_state.last_membership;
+        drop(legacy_state_adopted);
+
+        let legacy_state_reopen_root = legacy_state_root.clone();
+        let legacy_state_reopened = spawn_blocking(move || {
+            DurableStateMachine::open_existing(legacy_state_reopen_root)
+        })
+        .await??;
+        let reopened_legacy_state = legacy_state_reopened.get_state_machine().await;
+        let legacy_state_reopen_matches =
+            reopened_legacy_state.client_status == expected_legacy_state.client_status
+                && reopened_legacy_state.last_applied_log == expected_legacy_state.last_applied_log
+                && reopened_legacy_state.last_membership == expected_legacy_state.last_membership;
+        let legacy_state_adoption_matches = legacy_state_reopened.state_path().is_file()
             && legacy_state_root.join("initialized.bin").is_file()
-            && legacy_state_adopted
-                .get_state_machine()
-                .await
-                .client_status
-                == expected_legacy_state;
+            && legacy_state_client_matches
+            && legacy_state_last_applied_matches
+            && legacy_state_membership_matches
+            && legacy_state_reopen_matches;
 
         let corrupt_log_root = root.join("corrupt-log-copy");
         copy_tree(&root.join("node-1").join("log"), &corrupt_log_root)?;
         flip_first_payload_byte(&corrupt_log_root.join("raft-log.bin"))?;
-        let corrupt_log_rejected = spawn_blocking(move || DurableLogStore::open_existing(corrupt_log_root))
-            .await?
-            .is_err();
+        let corrupt_log_rejected =
+            spawn_blocking(move || DurableLogStore::open_existing(corrupt_log_root))
+                .await?
+                .is_err();
 
         let corrupt_state_root = root.join("corrupt-state-copy");
-        copy_tree(&root.join("node-1").join("state-machine"), &corrupt_state_root)?;
+        copy_tree(
+            &root.join("node-1").join("state-machine"),
+            &corrupt_state_root,
+        )?;
         flip_first_payload_byte(&corrupt_state_root.join("state-bundle.bin"))?;
         let corrupt_state_rejected =
             spawn_blocking(move || DurableStateMachine::open_existing(corrupt_state_root))
@@ -210,7 +320,17 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 json!({
                     "snapshot_matches": snapshot_recovery_matches,
                     "legacy_log_adopted": legacy_log_adoption_matches,
+                    "legacy_log_bytes_match": legacy_log_bytes_match,
+                    "legacy_log_vote_matches": legacy_log_vote_matches,
+                    "legacy_log_committed_matches": legacy_log_committed_matches,
+                    "legacy_log_entries_match": legacy_log_entries_match,
+                    "legacy_log_membership_matches": legacy_log_membership_matches,
+                    "legacy_log_reopen_matches": legacy_log_reopen_matches,
                     "legacy_state_adopted": legacy_state_adoption_matches,
+                    "legacy_state_client_matches": legacy_state_client_matches,
+                    "legacy_state_last_applied_matches": legacy_state_last_applied_matches,
+                    "legacy_state_membership_matches": legacy_state_membership_matches,
+                    "legacy_state_reopen_matches": legacy_state_reopen_matches,
                 }),
             ),
             case(
@@ -254,6 +374,8 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 "snapshot_state_atomic_bundle_publish": true,
                 "state_publish_after_durable_write": true,
                 "explicit_legacy_adoption_executed": true,
+                "explicit_legacy_log_semantics_verified": true,
+                "explicit_legacy_state_membership_verified": true,
                 "full_cluster_disk_restart": true,
                 "read_index_after_restart": true,
                 "corruption_rejected": true,
