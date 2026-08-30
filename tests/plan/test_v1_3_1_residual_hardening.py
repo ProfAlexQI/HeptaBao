@@ -21,6 +21,7 @@ class V131ResidualHardeningTests(unittest.TestCase):
             "stream.write(&bytes[offset..])",
             "response write deadline exceeded",
             "set response flush timeout failed",
+            "expired_absolute_response_deadline_fails_before_write",
         ):
             self.assertIn(marker, source)
         self.assertNotIn("write_all(&bytes)", source)
@@ -48,6 +49,13 @@ class V131ResidualHardeningTests(unittest.TestCase):
         self.assertIn("impl Drop for SecretPath", server)
         self.assertIn("BTreeMap<SecretPath, SecretBytes>", server)
 
+    def test_kv_list_builds_directly_into_owned_response_bytes(self) -> None:
+        source = text("crates/heptabao-p0-server/src/lib.rs")
+        self.assertIn("append_json_string_bytes(key.as_bytes(), &mut body);", source)
+        self.assertIn("kv_list_response_is_direct_owned_and_debug_redacted", source)
+        self.assertNotIn("let escaped = escape_json(key);", source)
+        self.assertNotIn("collect::<Vec<_>>()\n            .join(\",\")", source)
+
     def test_transport_matrix_names_the_residual_closures(self) -> None:
         matrix = yaml.safe_load(
             text("planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
@@ -62,6 +70,16 @@ class V131ResidualHardeningTests(unittest.TestCase):
         self.assertFalse(matrix["qualification"])
         self.assertFalse(matrix["compatibility_claim"])
         self.assertEqual(matrix["authority_effect"], "NONE")
+
+    def test_normative_manifest_includes_residual_regression_suite(self) -> None:
+        manifest = yaml.safe_load(
+            text("planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml")
+        )
+        paths = {entry["path"] for entry in manifest["documents"]}
+        self.assertIn("tests/plan/test_v1_3_1_residual_hardening.py", paths)
+        self.assertFalse(manifest["qualification"])
+        self.assertFalse(manifest["compatibility_claim"])
+        self.assertEqual(manifest["authority_effect"], "NONE")
 
 
 if __name__ == "__main__":

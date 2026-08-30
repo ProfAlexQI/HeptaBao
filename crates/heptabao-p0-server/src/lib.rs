@@ -622,18 +622,17 @@ impl<A: AuditSink> P0Server<A> {
             .filter(|suffix| !suffix.is_empty())
             .map(|suffix| suffix.split('/').next().unwrap_or(suffix))
             .collect::<BTreeSet<_>>();
-        let body = keys
-            .into_iter()
-            .map(|key| {
-                let escaped = escape_json(key);
-                format!("\"{escaped}\"")
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        P0Response::json(
-            200,
-            format!("{{\"data\":{{\"keys\":[{body}]}},\"production_supported\":false}}"),
-        )
+        let mut body = br#"{"data":{"keys":["#.to_vec();
+        for (index, key) in keys.into_iter().enumerate() {
+            if index != 0 {
+                body.push(b',');
+            }
+            body.push(b'"');
+            append_json_string_bytes(key.as_bytes(), &mut body);
+            body.push(b'"');
+        }
+        body.extend_from_slice(br#"]},"production_supported":false}"#);
+        P0Response::json_bytes(200, body)
     }
 }
 
@@ -1011,6 +1010,37 @@ mod tests {
             assert!(!rendered.contains("diagnostic-secret-value"));
             assert!(rendered.contains("kv_entries"));
             assert!(!rendered.contains("MemoryAuditSink"));
+        }
+    }
+
+    #[test]
+    fn kv_list_response_is_direct_owned_and_debug_redacted() {
+        let server = initialized_unsealed_server();
+        assert!(server.is_ok());
+        if let Ok(mut server) = server {
+            let body = r#"{"value":"list-value"}"#;
+            let write = envelope(
+                &format!(
+                    "POST /v1/secret/folder/private-child HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(), body
+                ),
+                "request-list-write-0001",
+            );
+            assert!(write.is_ok());
+            if let Ok(write) = write {
+                assert_eq!(server.handle(write, MonotonicTick(20)).status_code, 204);
+            }
+            let list = envelope(
+                "LIST /v1/secret/folder HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\n\r\n",
+                "request-list-0001",
+            );
+            assert!(list.is_ok());
+            if let Ok(list) = list {
+                let response = server.handle(list, MonotonicTick(20));
+                assert_eq!(response.status_code, 200);
+                assert!(String::from_utf8_lossy(&response.body).contains("private-child"));
+                assert!(!format!("{response:?}").contains("private-child"));
+            }
         }
     }
 

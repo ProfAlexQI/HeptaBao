@@ -685,8 +685,9 @@ fn escape_json(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_response, RequestIdRegistry};
+    use super::{render_response, write_response_until, RequestIdRegistry};
     use heptabao_p0_server::P0Response;
+    use std::net::{TcpListener, TcpStream};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -704,6 +705,24 @@ mod tests {
                 .any(|window| window == b"Content-Length: 0\r\n")
         );
         assert!(wire.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn expired_absolute_response_deadline_fails_before_write(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let _client = TcpStream::connect(address)?;
+        let (mut server, _) = listener.accept()?;
+        let response = P0Response {
+            status_code: 200,
+            body: b"ok".to_vec(),
+            committed: false,
+            recovery_reference: None,
+        };
+        let result = write_response_until(&mut server, &response, Instant::now());
+        assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
