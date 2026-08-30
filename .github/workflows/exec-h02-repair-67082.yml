@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: exec-h02-repair-67082
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   SOURCE_PARENT: 67082d64e48dfafcf782fd83c55650a7c23b1a62
@@ -36,94 +36,147 @@ jobs:
           test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "$SOURCE_TREE"
           test "$(git diff --name-only "$SOURCE_PARENT...HEAD")" = ".github/workflows/exec-h02-repair-67082.yml"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - name: Restore executable legacy lifecycle coverage
+      - name: Apply P0 capacity-recovery and H02 lifecycle repairs
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("probes/h02/openraft-tokio/src/bin/durable_store_lab.rs")
-          text = path.read_text(encoding="utf-8")
-          anchor = '''        let snapshot_recovery_matches =
-              snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
-                  && snapshot_recovered.has_current_snapshot().await
-                  && snapshot_recovered.generation().await > 1;
+          durable_path = Path("probes/h02/openraft-tokio/src/bin/durable_store_lab.rs")
+          durable = durable_path.read_text(encoding="utf-8")
+          anchor = (
+              "        let snapshot_recovery_matches =\n"
+              "            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state\n"
+              "                && snapshot_recovered.has_current_snapshot().await\n"
+              "                && snapshot_recovered.generation().await > 1;\n"
+              "\n"
+              "        let corrupt_log_root = root.join(\"corrupt-log-copy\");\n"
+          )
+          replacement = (
+              "        let snapshot_recovery_matches =\n"
+              "            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state\n"
+              "                && snapshot_recovered.has_current_snapshot().await\n"
+              "                && snapshot_recovered.generation().await > 1;\n"
+              "\n"
+              "        let legacy_log_root = root.join(\"legacy-log-adoption-copy\");\n"
+              "        copy_tree(&root.join(\"node-1\").join(\"log\"), &legacy_log_root)?;\n"
+              "        fs::remove_file(legacy_log_root.join(\"initialized.bin\"))?;\n"
+              "        let legacy_log_task_root = legacy_log_root.clone();\n"
+              "        let legacy_log_adopted =\n"
+              "            spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;\n"
+              "        let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()\n"
+              "            && legacy_log_root.join(\"initialized.bin\").is_file();\n"
+              "\n"
+              "        let legacy_state_root = root.join(\"legacy-state-adoption-copy\");\n"
+              "        copy_tree(\n"
+              "            &root.join(\"node-1\").join(\"state-machine\"),\n"
+              "            &legacy_state_root,\n"
+              "        )?;\n"
+              "        fs::remove_file(legacy_state_root.join(\"initialized.bin\"))?;\n"
+              "        let legacy_state_task_root = legacy_state_root.clone();\n"
+              "        let expected_legacy_state = expected_after_restart.client_status.clone();\n"
+              "        let legacy_state_adopted = spawn_blocking(move || {\n"
+              "            DurableStateMachine::adopt_legacy(legacy_state_task_root)\n"
+              "        })\n"
+              "        .await??;\n"
+              "        let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()\n"
+              "            && legacy_state_root.join(\"initialized.bin\").is_file()\n"
+              "            && legacy_state_adopted\n"
+              "                .get_state_machine()\n"
+              "                .await\n"
+              "                .client_status\n"
+              "                == expected_legacy_state;\n"
+              "\n"
+              "        let corrupt_log_root = root.join(\"corrupt-log-copy\");\n"
+          )
+          assert durable.count(anchor) == 1, "snapshot recovery insertion anchor drift"
+          durable = durable.replace(anchor, replacement)
 
-          let corrupt_log_root = root.join("corrupt-log-copy");
-          '''
-          replacement = '''        let snapshot_recovery_matches =
-              snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
-                  && snapshot_recovered.has_current_snapshot().await
-                  && snapshot_recovered.generation().await > 1;
+          old_case = (
+              "            case(\n"
+              "                \"durable-snapshot-state-atomic-generation-reopen\",\n"
+              "                snapshot_recovery_matches,\n"
+              "                json!({\"matches\": snapshot_recovery_matches}),\n"
+              "            ),\n"
+          )
+          new_case = (
+              "            case(\n"
+              "                \"durable-snapshot-state-atomic-generation-reopen\",\n"
+              "                snapshot_recovery_matches\n"
+              "                    && legacy_log_adoption_matches\n"
+              "                    && legacy_state_adoption_matches,\n"
+              "                json!({\n"
+              "                    \"snapshot_matches\": snapshot_recovery_matches,\n"
+              "                    \"legacy_log_adopted\": legacy_log_adoption_matches,\n"
+              "                    \"legacy_state_adopted\": legacy_state_adoption_matches,\n"
+              "                }),\n"
+              "            ),\n"
+          )
+          assert durable.count(old_case) == 1, "durable snapshot case anchor drift"
+          durable = durable.replace(old_case, new_case)
 
-          let legacy_log_root = root.join("legacy-log-adoption-copy");
-          copy_tree(&root.join("node-1").join("log"), &legacy_log_root)?;
-          fs::remove_file(legacy_log_root.join("initialized.bin"))?;
-          let legacy_log_task_root = legacy_log_root.clone();
-          let legacy_log_adopted =
-              spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;
-          let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()
-              && legacy_log_root.join("initialized.bin").is_file();
+          old_scope = (
+              "                \"snapshot_state_atomic_bundle_publish\": true,\n"
+              "                \"state_publish_after_durable_write\": true,\n"
+              "                \"full_cluster_disk_restart\": true,\n"
+          )
+          new_scope = (
+              "                \"snapshot_state_atomic_bundle_publish\": true,\n"
+              "                \"state_publish_after_durable_write\": true,\n"
+              "                \"explicit_legacy_adoption_executed\": true,\n"
+              "                \"full_cluster_disk_restart\": true,\n"
+          )
+          assert durable.count(old_scope) == 1, "durable scope anchor drift"
+          durable_path.write_text(durable.replace(old_scope, new_scope), encoding="utf-8")
 
-          let legacy_state_root = root.join("legacy-state-adoption-copy");
-          copy_tree(
-              &root.join("node-1").join("state-machine"),
-              &legacy_state_root,
-          )?;
-          fs::remove_file(legacy_state_root.join("initialized.bin"))?;
-          let legacy_state_task_root = legacy_state_root.clone();
-          let expected_legacy_state = expected_after_restart.client_status.clone();
-          let legacy_state_adopted = spawn_blocking(move || {
-              DurableStateMachine::adopt_legacy(legacy_state_task_root)
-          })
-          .await??;
-          let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()
-              && legacy_state_root.join("initialized.bin").is_file()
-              && legacy_state_adopted
-                  .get_state_machine()
-                  .await
-                  .client_status
-                  == expected_legacy_state;
-
-          let corrupt_log_root = root.join("corrupt-log-copy");
-          '''
-          assert text.count(anchor) == 1, "snapshot recovery insertion anchor drift"
-          text = text.replace(anchor, replacement)
-
-          old_case = '''            case(
-                  "durable-snapshot-state-atomic-generation-reopen",
-                  snapshot_recovery_matches,
-                  json!({"matches": snapshot_recovery_matches}),
-              ),
-          '''
-          new_case = '''            case(
-                  "durable-snapshot-state-atomic-generation-reopen",
-                  snapshot_recovery_matches
-                      && legacy_log_adoption_matches
-                      && legacy_state_adoption_matches,
-                  json!({
-                      "snapshot_matches": snapshot_recovery_matches,
-                      "legacy_log_adopted": legacy_log_adoption_matches,
-                      "legacy_state_adopted": legacy_state_adoption_matches,
-                  }),
-              ),
-          '''
-          assert text.count(old_case) == 1, "durable snapshot case anchor drift"
-          text = text.replace(old_case, new_case)
-
-          old_scope = '''                "snapshot_state_atomic_bundle_publish": true,
-                  "state_publish_after_durable_write": true,
-                  "full_cluster_disk_restart": true,
-          '''
-          new_scope = '''                "snapshot_state_atomic_bundle_publish": true,
-                  "state_publish_after_durable_write": true,
-                  "explicit_legacy_adoption_executed": true,
-                  "full_cluster_disk_restart": true,
-          '''
-          assert text.count(old_scope) == 1, "durable scope anchor drift"
-          path.write_text(text.replace(old_scope, new_scope), encoding="utf-8")
+          runner_path = Path("scripts/p0_transport_exact_v1.py")
+          runner = runner_path.read_text(encoding="utf-8")
+          old_release = (
+              "    release_deadline = time.monotonic() + 10.0\n"
+              "    while True:\n"
+              "        probe = exchange(host, port, request_bytes(address, \"GET\", \"/v1/sys/seal-status\"))\n"
+              "        if probe.status != 429:\n"
+              "            require(probe.status == 200, f\"capacity-release probe returned {probe.status}\")\n"
+              "            break\n"
+              "        require(time.monotonic() < release_deadline, \"connection admission capacity was not released\")\n"
+              "        time.sleep(0.05)\n"
+          )
+          new_release = (
+              "    release_deadline = time.monotonic() + 10.0\n"
+              "    release_resets = 0\n"
+              "    while True:\n"
+              "        require(time.monotonic() < release_deadline, \"connection admission capacity was not released\")\n"
+              "        try:\n"
+              "            probe = exchange(\n"
+              "                host, port, request_bytes(address, \"GET\", \"/v1/sys/seal-status\")\n"
+              "            )\n"
+              "        except (ConnectionResetError, BrokenPipeError):\n"
+              "            release_resets += 1\n"
+              "            time.sleep(0.05)\n"
+              "            continue\n"
+              "        if probe.status != 429:\n"
+              "            require(probe.status == 200, f\"capacity-release probe returned {probe.status}\")\n"
+              "            break\n"
+              "        time.sleep(0.05)\n"
+          )
+          assert runner.count(old_release) == 1, "P0 capacity-release anchor drift"
+          runner = runner.replace(old_release, new_release)
+          old_evidence = (
+              "        {\"status\": 429, \"detail\": \"connection-capacity-exhausted\", \"limit\": 32},\n"
+          )
+          new_evidence = (
+              "        {\n"
+              "            \"status\": 429,\n"
+              "            \"detail\": \"connection-capacity-exhausted\",\n"
+              "            \"limit\": 32,\n"
+              "            \"capacity_release_resets\": release_resets,\n"
+              "        },\n"
+          )
+          assert runner.count(old_evidence) == 1, "P0 capacity evidence anchor drift"
+          runner_path.write_text(runner.replace(old_evidence, new_evidence), encoding="utf-8")
           PY
+          python3 -m py_compile scripts/p0_transport_exact_v1.py
       - name: Install exact Rust toolchains
         shell: bash
         run: |
@@ -150,14 +203,16 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .github/workflows/exec-h02-repair-67082.yml
+          rm -rf scripts/__pycache__
           git add -A
           git diff --cached --check
-          test -z "$(git diff --cached --name-only | grep -v '^probes/h02/openraft-tokio/src/' || true)"
+          unexpected="$(git diff --cached --name-only | grep -v -E '^(probes/h02/openraft-tokio/src/|scripts/p0_transport_exact_v1.py$)' || true)"
+          test -z "$unexpected"
           test -n "$(git diff --cached --name-only)"
           tree="$(git write-tree)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          commit="$(printf '%s\n' 'fix(h02): restore lifecycle execution and exact probe formatting' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
+          commit="$(printf '%s\n' 'fix(v1.3.1): close P0 capacity recovery and H02 exact gates' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
           test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
           test "$(git rev-parse "$commit^{tree}")" = "$tree"
           printf 'source_parent=%s\nresult_commit=%s\nresult_tree=%s\n' "$SOURCE_PARENT" "$commit" "$tree"
