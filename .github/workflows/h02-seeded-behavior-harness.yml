@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   validate-harness:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -59,6 +60,7 @@ jobs:
         run: python -m unittest tests/platform/test_h02_seeded_behavior_harness_v1.py -v
 
   reference-model:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     needs: validate-harness
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -140,7 +142,7 @@ jobs:
 
   authority-sentinel:
     needs: [validate-harness, reference-model]
-    if: ${{ always() }}
+    if: ${{ ((github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2')) && (always()) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

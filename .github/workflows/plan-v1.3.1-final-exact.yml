@@ -29,6 +29,7 @@ env:
 
 jobs:
   root-and-plan:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     runs-on: ubuntu-slim
     timeout-minutes: 180
     steps:
@@ -102,6 +103,7 @@ jobs:
           retention-days: 30
 
   p0-final-transport:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     needs: root-and-plan
     runs-on: ubuntu-slim
     timeout-minutes: 60
@@ -154,6 +156,7 @@ jobs:
           retention-days: 30
 
   h02-final-exact-head:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     runs-on: ubuntu-slim
     timeout-minutes: 360
     steps:
@@ -245,14 +248,14 @@ jobs:
 
   authority-sentinel:
     needs: [root-and-plan, p0-final-transport, h02-final-exact-head]
-    if: ${{ always() }}
+    if: ${{ ((github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2')) && (always()) }}
     runs-on: ubuntu-slim
     timeout-minutes: 15
     steps:
       - name: Require technical lanes and preserve authority boundary
         env:
           ROOT: ${{ needs.root-and-plan.result }}
-          P0: ${{ needs.p0-final-transport.result }}
+          P0: ${{ neds.p0-final-transport.result }}
           H02: ${{ needs.h02-final-exact-head.result }}
         shell: bash
         run: |

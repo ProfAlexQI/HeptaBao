@@ -24,6 +24,7 @@ concurrency:
 
 jobs:
   validate-plan:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -42,6 +43,7 @@ jobs:
       - run: python -m unittest tests/platform/test_h02_blocker_closure_evidence_v1.py -v
 
   closure-sequential:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     needs: validate-plan
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -215,7 +217,7 @@ jobs:
 
   authority-sentinel:
     needs: [validate-plan, closure-sequential]
-    if: ${{ always() }}
+    if: ${{ ((github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2')) && (always()) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

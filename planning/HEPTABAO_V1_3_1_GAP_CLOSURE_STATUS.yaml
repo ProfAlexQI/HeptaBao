@@ -31,6 +31,7 @@ repository_remediation:
   owned_request_response_and_wire_buffer_hygiene: IMPLEMENTED_SOURCE
   owned_target_and_kv_path_hygiene: IMPLEMENTED_SOURCE
   authbus_binding_redaction_and_digest_preimage_hygiene: IMPLEMENTED_SOURCE
+  canonical_closure_ci_fanout_guard: IMPLEMENTED_SOURCE
 execution_required:
   plan_and_python: REQUIRED_EXACT_HEAD
   root_rust_1_98_fmt_test_clippy: REQUIRED_EXACT_HEAD

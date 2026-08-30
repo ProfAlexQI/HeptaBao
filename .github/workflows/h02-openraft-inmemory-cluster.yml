@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   validate-plan:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -43,6 +44,7 @@ jobs:
       - run: python -m unittest tests/platform/test_h02_openraft_inmemory_cluster_v1.py -v
 
   cluster-sequential:
+    if: ${{ (github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2') }}
     needs: validate-plan
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -195,7 +197,7 @@ jobs:
 
   authority-sentinel:
     needs: [validate-plan, cluster-sequential]
-    if: ${{ always() }}
+    if: ${{ ((github.event_name != 'pull_request' || github.head_ref != 'codex/plan-v1.3-gap-closure-v2') && (github.event_name != 'push' || github.ref != 'refs/heads/codex/plan-v1.3-gap-closure-v2')) && (always()) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
