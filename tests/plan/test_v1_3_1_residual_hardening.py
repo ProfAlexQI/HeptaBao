@@ -25,6 +25,22 @@ class V131ResidualHardeningTests(unittest.TestCase):
             self.assertIn(marker, source)
         self.assertNotIn("write_all(&bytes)", source)
 
+    def test_state_lock_is_fail_closed_and_dispatch_time_is_fresh(self) -> None:
+        source = text("crates/heptabao-p0-server/src/main.rs")
+        for marker in (
+            "use std::sync::{Arc, Mutex, TryLockError};",
+            "let response = match server.try_lock()",
+            "Err(TryLockError::WouldBlock)",
+            'detail_code: "p0-state-busy"',
+            "let now = tick(epoch).map_err(internal_serve_error)?;",
+        ):
+            self.assertIn(marker, source)
+        self.assertLess(
+            source.index("let response = match server.try_lock()"),
+            source.index("let now = tick(epoch).map_err(internal_serve_error)?;"),
+        )
+        self.assertNotIn("let mut guard = server.lock()", source)
+
     def test_operation_body_policy_precedes_dispatch(self) -> None:
         source = text("crates/heptabao-p0-server/src/lib.rs")
         self.assertIn("operation_body_is_valid(operation, &envelope.request.body)", source)

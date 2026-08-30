@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -331,14 +331,25 @@ fn serve_one(
         received_at: received,
         deadline,
     };
-    let now = tick(epoch).map_err(internal_serve_error)?;
-    let response = {
-        let mut guard = server.lock().map_err(|_| ServeError {
-            status_code: 503,
-            detail_code: "p0-state-lock-unavailable",
-            message: "P0 state lock unavailable".to_owned(),
-        })?;
-        guard.handle(envelope, now)
+    let response = match server.try_lock() {
+        Ok(mut guard) => {
+            let now = tick(epoch).map_err(internal_serve_error)?;
+            guard.handle(envelope, now)
+        }
+        Err(TryLockError::WouldBlock) => {
+            return Err(ServeError {
+                status_code: 503,
+                detail_code: "p0-state-busy",
+                message: "P0 state is busy".to_owned(),
+            });
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err(ServeError {
+                status_code: 503,
+                detail_code: "p0-state-lock-unavailable",
+                message: "P0 state lock unavailable".to_owned(),
+            });
+        }
     };
 
     if let Err(error) = write_response_with_timeout(stream, &response) {
