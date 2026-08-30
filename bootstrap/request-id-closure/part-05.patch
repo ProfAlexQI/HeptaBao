@@ -1,0 +1,91 @@
+@@ -302,6 +302,45 @@ class PlanV131Tests(unittest.TestCase):
+             with self.assertRaises(MODULE.ValidationError):
+                 MODULE.validate(target_root)
+ 
++    def test_request_id_debug_redaction_removal_is_rejected(self) -> None:
++        with tempfile.TemporaryDirectory() as temporary:
++            target_root = Path(temporary)
++            copy_validation_surface(target_root)
++            mutate_text(
++                target_root,
++                "crates/heptabao-protocol/src/lib.rs",
++                "impl fmt::Debug for RequestId",
++                "impl RequestIdDebugRemoved",
++            )
++            with self.assertRaises(MODULE.ValidationError):
++                MODULE.validate(target_root)
++
++    def test_request_id_last_drop_overwrite_removal_is_rejected(self) -> None:
++        with tempfile.TemporaryDirectory() as temporary:
++            target_root = Path(temporary)
++            copy_validation_surface(target_root)
++            mutate_text(
++                target_root,
++                "crates/heptabao-protocol/src/lib.rs",
++                "impl Drop for RequestId",
++                "impl RequestIdDropRemoved",
++            )
++            with self.assertRaises(MODULE.ValidationError):
++                MODULE.validate(target_root)
++
++    def test_client_request_id_internal_namespace_guard_removal_is_rejected(self) -> None:
++        with tempfile.TemporaryDirectory() as temporary:
++            target_root = Path(temporary)
++            copy_validation_surface(target_root)
++            mutate_text(
++                target_root,
++                "crates/heptabao-p0-server/src/main.rs",
++                'if raw.starts_with("p0-") {',
++                "if false {",
++            )
++            with self.assertRaises(MODULE.ValidationError):
++                MODULE.validate(target_root)
++
+     def test_transport_matrix_case_removal_is_rejected(self) -> None:
+         matrix_path = ROOT / "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml"
+         matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
+diff --git a/tests/plan/test_v1_3_1_residual_hardening.py b/tests/plan/test_v1_3_1_residual_hardening.py
+index d9ddf8f1f721c28c2f73dd48accc677f56063326..9ece43fdce7666dd468c4a3690e4665b5c8027ea 100644
+--- a/tests/plan/test_v1_3_1_residual_hardening.py
++++ b/tests/plan/test_v1_3_1_residual_hardening.py
+@@ -64,6 +64,29 @@ class V131ResidualHardeningTests(unittest.TestCase):
+         self.assertIn("impl Drop for SecretPath", server)
+         self.assertIn("BTreeMap<SecretPath, SecretBytes>", server)
+ 
++    def test_request_id_namespace_diagnostics_and_lifetime_are_controlled(self) -> None:
++        protocol = text("crates/heptabao-protocol/src/lib.rs")
++        main = text("crates/heptabao-p0-server/src/main.rs")
++        server = text("crates/heptabao-p0-server/src/lib.rs")
++        for marker in (
++            "pub struct RequestId(Arc<String>);",
++            "impl fmt::Debug for RequestId",
++            "impl Drop for RequestId",
++            "Arc::get_mut(&mut self.0)",
++            "request_id_debug_is_redacted_and_clones_share_one_owned_value",
++        ):
++            self.assertIn(marker, protocol)
++        self.assertNotIn("#[derive(Clone, Debug, Eq, Hash, PartialEq)]", protocol)
++        self.assertIn("BTreeMap<RequestId, Instant>", main)
++        self.assertNotIn("BTreeMap<String, Instant>", main)
++        self.assertIn("client-request-id-reserved-prefix", main)
++        self.assertIn("zeroize_string(&mut line)", server)
++        self.assertIn("zeroize_string(reference)", server)
++        workflow = text(".github/workflows/plan-v1.3-gap-closure.yml")
++        self.assertIn("p0-client-spoof-0001", workflow)
++        self.assertIn("client-request-id-reserved-prefix", workflow)
++        self.assertIn("operation-body-forbidden", workflow)
++
+     def test_kv_list_builds_directly_into_owned_response_bytes(self) -> None:
+         source = text("crates/heptabao-p0-server/src/lib.rs")
+         self.assertIn("append_json_string_bytes(key.as_bytes(), &mut body);", source)
+@@ -82,6 +105,10 @@ class V131ResidualHardeningTests(unittest.TestCase):
+             "operation-body-forbidden",
+         )
+         self.assertIn("P0-TRANSPORT-014", cases)
++        self.assertEqual(
++            cases["P0-TRANSPORT-015"]["expected_detail_code"],
++            "client-request-id-reserved-prefix",
++        )
+         self.assertFalse(matrix["qualification"])
+         self.assertFalse(matrix["compatibility_claim"])
+         self.assertEqual(matrix["authority_effect"], "NONE")
