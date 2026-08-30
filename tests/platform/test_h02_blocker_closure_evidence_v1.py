@@ -6,6 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "h02_blocker_closure_evidence_v1",
@@ -14,6 +17,20 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+SCHEMA = json.loads(
+    (ROOT / "schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
+RESULT_SCHEMA = json.loads(
+    (ROOT / "schemas/heptabao_h02_blocker_closure_result_v1.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
+REGISTRY = Registry().with_resource(
+    RESULT_SCHEMA["$id"], Resource.from_contents(RESULT_SCHEMA)
+)
+VALIDATOR = Draft202012Validator(SCHEMA, registry=REGISTRY)
 
 
 def component() -> dict:
@@ -69,7 +86,7 @@ class BlockerClosureEvidenceTests(unittest.TestCase):
             result=result,
             execution_exit_code=exit_code,
             seed="0x5eed20260828cafe",
-            toolchain="1.85.0",
+            toolchain="1.88.0",
             manifest=self.manifest,
             cargo_lock=self.lock,
             source_commit="a" * 40,
@@ -135,6 +152,13 @@ class BlockerClosureEvidenceTests(unittest.TestCase):
     def test_10_serialized_json_round_trip(self) -> None:
         evidence = self.build(valid_result())
         self.assertEqual(evidence, json.loads(json.dumps(evidence)))
+
+    def test_11_schema_accepts_effective_floor_and_rejects_boundary_floor(self) -> None:
+        evidence = self.build(valid_result())
+        errors = list(VALIDATOR.iter_errors(evidence))
+        self.assertEqual([], [error.message for error in errors])
+        evidence["execution"]["toolchain"] = "1.85.0"
+        self.assertTrue(list(VALIDATOR.iter_errors(evidence)))
 
 
 if __name__ == "__main__":
