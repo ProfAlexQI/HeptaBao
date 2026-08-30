@@ -180,6 +180,13 @@ def validate_integrated_store() -> None:
             "symlinked_storage_root_is_rejected",
             "symlinked_initialization_marker_is_rejected",
             "symlinked_authoritative_generation_is_rejected",
+            "active_log_persist_does_not_recreate_deleted_store_root",
+            "active_state_persist_does_not_recreate_deleted_store_root",
+            "legacy_log_adoption_rejects_unresolved_data_temporary_file",
+            "legacy_state_adoption_rejects_unresolved_data_temporary_file",
+            "durable write parent directory",
+            "durable replacement parent directory",
+            "durable current generation",
             "symlink_metadata",
         ],
     )
