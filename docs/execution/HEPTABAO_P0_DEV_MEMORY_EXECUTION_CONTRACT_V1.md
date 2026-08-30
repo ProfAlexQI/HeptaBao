@@ -99,6 +99,10 @@ The P0 recovery reference is not durable across process restart. A production im
 
 Every response carries an exact `Content-Length`. HTTP 204 is represented as body-free at the P0 library boundary and rendered with `Content-Length: 0` and no content type. KV write/delete and seal may not place metadata in a 204 body.
 
+## Evidence classification
+
+The 14-case matrix does not flatten unlike evidence into one runtime counter. Exactly 11 transport cases are runtime-observed through the loopback socket. Three process-internal cases use `EXACT_HEAD_ROOT_UNIT_GATE`: partial write progress across one absolute deadline, worker-spawn failure cleanup/audit, and test-instrumented controlled-drop zeroization. The predecessor root gate must have completed Rust 1.98 format, all-target tests and strict Clippy on the same commit and tree. Source-marker presence is never treated as runtime evidence or counted as runtime PASS.
+
 ## Test matrix
 
 - fresh health = 501 and sealed;
@@ -110,17 +114,17 @@ Every response carries an exact `Content-Length`. HTTP 204 is represented as bod
 - exact Host, duplicate Host and request-smuggling negatives;
 - invalid equal/earlier deadline and expired dispatch request non-dispatch;
 - total socket-read deadline under partial and byte-trickled input;
-- total response-write deadline under partial progress and a non-reading peer;
+- total response-write deadline under deterministic partial-writer progress and a non-reading peer;
 - bounded concurrent connection admission;
 - bounded rejection-response writes;
-- fallible worker creation with fail-closed capacity release and no panic;
+- fallible worker creation with deterministic execution of the production failure handler, fail-closed capacity release and no panic;
 - client request-ID replay, registry saturation and registry diagnostic redaction;
 - request, rejection, response-audit and response-delivery ordering;
 - zero-byte HTTP 204 wire and library response;
 - new absolute audit file and symlink rejection;
 - request/response/server-state/Authbus diagnostic redaction;
 - raw unescaped quote rejection in the P0 JSON subset;
-- explicit controlled-path overwrite markers for target, KV path, request, response, wire, digest-preimage and signature-payload buffers;
+- test-instrumented controlled-path overwrite execution for target and KV path, plus explicit request, response, wire, digest-preimage and signature-payload buffer controls;
 - process startup rejects missing/equal/weak credentials and non-loopback bind.
 
 Machine-readable transport cases are maintained in `planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml`.

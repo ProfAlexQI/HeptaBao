@@ -49,6 +49,9 @@ This delta covers the strict H03 protocol crate, the Authbus assertion contract 
 | Test provider promoted to production | production digest/signature provider is absent; test provider exists only under cfg(test) | candidate bakeoff, key custody and algorithm policy remain blocked |
 | Automatic snapshot purges replay source | in-memory replay topology uses `SnapshotPolicy::Never`; manual snapshot cases remain | exact-head OpenRaft matrix must execute |
 | Fixed leader assumed after process pause | bounded consensus-leader discovery after resume | true per-node process suspension remains external-lab work |
+| Source markers misreported as runtime evidence | P0 result taxonomy separates 11 `RUNTIME_PASS` cases from three same-tree `UNIT_GATE_PASS` cases | independent execution and review remain required |
+| Source-head success hides merge integration defect | distinct GitHub synthetic-merge workflow invokes the same reusable full gate and binds both parents | enforced required checks remain repository-setting work |
+| CI self-publishes implementation bytes | workflow-authored source publication is non-canonical; final maintainer-invoked tree-preserving review-lane republish is required | commit signing and independent provenance acceptance remain external controls |
 
 ## Abuse cases
 

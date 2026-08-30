@@ -23,7 +23,9 @@ REQUIRED_FILES = [
     "crates/heptabao-p0-server/src/lib.rs",
     "crates/heptabao-p0-server/src/main.rs",
     "probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs",
+    "probes/h02/openraft-tokio/src/bin/durable_store_lab.rs",
     "docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md",
+    "docs/governance/HEPTABAO_CANONICAL_SOURCE_PUBLICATION_CONTRACT_V1.md",
     "docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md",
     "docs/auth/HEPTABAO_AUTHBUS_INTEGRATION_CONTRACT_V1.md",
     "docs/auth/HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md",
@@ -31,8 +33,12 @@ REQUIRED_FILES = [
     "docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md",
     "docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md",
     "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml",
+    "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
+    "scripts/p0_transport_exact_v1.py",
     "tests/plan/test_v1_3_1_residual_hardening.py",
     ".github/workflows/plan-v1.3-gap-closure.yml",
+    ".github/workflows/plan-v1.3.1-final-exact.yml",
+    ".github/workflows/plan-v1.3.1-merge-admission.yml",
 ]
 
 
@@ -127,7 +133,7 @@ class PlanV131Tests(unittest.TestCase):
             mutate_text(
                 target_root,
                 "crates/heptabao-p0-server/src/main.rs",
-                "fn write_response_until(",
+                "fn write_response_until<W: TimedWrite>(",
                 "fn write_response_without_absolute_deadline(",
             )
             with self.assertRaises(MODULE.ValidationError):

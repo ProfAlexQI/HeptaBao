@@ -129,34 +129,74 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 && snapshot_recovered.has_current_snapshot().await
                 && snapshot_recovered.generation().await > 1;
 
-        let legacy_log_root = root.join("legacy-log-adoption-copy");
-        copy_tree(&root.join("node-1").join("log"), &legacy_log_root)?;
-        fs::remove_file(legacy_log_root.join("initialized.bin"))?;
-        let legacy_log_task_root = legacy_log_root.clone();
-        let legacy_log_adopted =
-            spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;
-        let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()
-            && legacy_log_root.join("initialized.bin").is_file();
+        let legacy_cluster_root = root.join("legacy-cluster-adoption-copy");
+        fs::create_dir_all(&legacy_cluster_root)?;
+        let mut legacy_artifacts_unchanged = true;
+        let mut legacy_markers_created = true;
+        for id in [1_u64, 2, 3] {
+            let source_node = root.join(format!("node-{id}"));
+            let adopted_node = legacy_cluster_root.join(format!("node-{id}"));
+            copy_tree(&source_node, &adopted_node)?;
+            let log_root = adopted_node.join("log");
+            let state_root = adopted_node.join("state-machine");
+            let log_path = log_root.join("raft-log.bin");
+            let state_path = state_root.join("state-bundle.bin");
+            let log_before = fs::read(&log_path)?;
+            let state_before = fs::read(&state_path)?;
+            fs::remove_file(log_root.join("initialized.bin"))?;
+            fs::remove_file(state_root.join("initialized.bin"))?;
+            let adoption_log_root = log_root.clone();
+            let adoption_state_root = state_root.clone();
+            spawn_blocking(move || {
+                let log = DurableLogStore::adopt_legacy(adoption_log_root)?;
+                let state = DurableStateMachine::adopt_legacy(adoption_state_root)?;
+                if !log.state_path().is_file() || !state.state_path().is_file() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "legacy adoption did not retain authoritative artifacts",
+                    ));
+                }
+                Ok::<(), std::io::Error>(())
+            })
+            .await??;
+            legacy_artifacts_unchanged &= fs::read(&log_path)? == log_before;
+            legacy_artifacts_unchanged &= fs::read(&state_path)? == state_before;
+            legacy_markers_created &= log_root.join("initialized.bin").is_file();
+            legacy_markers_created &= state_root.join("initialized.bin").is_file();
+        }
 
-        let legacy_state_root = root.join("legacy-state-adoption-copy");
-        copy_tree(
-            &root.join("node-1").join("state-machine"),
-            &legacy_state_root,
-        )?;
-        fs::remove_file(legacy_state_root.join("initialized.bin"))?;
-        let legacy_state_task_root = legacy_state_root.clone();
         let expected_legacy_state = expected_after_restart.client_status.clone();
-        let legacy_state_adopted = spawn_blocking(move || {
-            DurableStateMachine::adopt_legacy(legacy_state_task_root)
-        })
-        .await??;
-        let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()
-            && legacy_state_root.join("initialized.bin").is_file()
-            && legacy_state_adopted
-                .get_state_machine()
+        let mut adopted_cluster = DurableCluster::new(&legacy_cluster_root)?;
+        let adopted_leader = adopted_cluster.reopen_three_voters().await?;
+        adopted_cluster.read_index(adopted_leader).await?;
+        let adopted_replay_matches = adopted_cluster.all_states_equal().await
+            && adopted_cluster.state(adopted_leader).await.client_status
+                == expected_legacy_state;
+        let adopted_write_index = adopted_cluster
+            .write(
+                adopted_leader,
+                seed ^ 0xa11d_0a7e,
+                "post-legacy-adoption-committed".to_owned(),
+            )
+            .await?;
+        adopted_cluster.wait_all_applied(adopted_write_index).await?;
+        let expected_after_adoption = adopted_cluster.state(adopted_leader).await;
+        adopted_cluster.shutdown().await?;
+
+        let mut adopted_reopened = DurableCluster::new(&legacy_cluster_root)?;
+        let adopted_reopened_leader = adopted_reopened.reopen_three_voters().await?;
+        adopted_reopened.read_index(adopted_reopened_leader).await?;
+        let adopted_restart_matches = adopted_reopened.all_states_equal().await
+            && adopted_reopened
+                .state(adopted_reopened_leader)
                 .await
                 .client_status
-                == expected_legacy_state;
+                == expected_after_adoption.client_status;
+        adopted_reopened.shutdown().await?;
+        let legacy_cluster_adoption_matches = legacy_artifacts_unchanged
+            && legacy_markers_created
+            && adopted_replay_matches
+            && adopted_restart_matches;
 
         let corrupt_log_root = root.join("corrupt-log-copy");
         copy_tree(&root.join("node-1").join("log"), &corrupt_log_root)?;
@@ -204,13 +244,14 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
             ),
             case(
                 "durable-snapshot-state-atomic-generation-reopen",
-                snapshot_recovery_matches
-                    && legacy_log_adoption_matches
-                    && legacy_state_adoption_matches,
+                snapshot_recovery_matches && legacy_cluster_adoption_matches,
                 json!({
                     "snapshot_matches": snapshot_recovery_matches,
-                    "legacy_log_adopted": legacy_log_adoption_matches,
-                    "legacy_state_adopted": legacy_state_adoption_matches,
+                    "legacy_artifacts_unchanged": legacy_artifacts_unchanged,
+                    "legacy_markers_created": legacy_markers_created,
+                    "legacy_cluster_replay_matches": adopted_replay_matches,
+                    "legacy_post_adoption_restart_matches": adopted_restart_matches,
+                    "legacy_post_adoption_write_index": adopted_write_index,
                 }),
             ),
             case(
@@ -254,6 +295,9 @@ async fn execute(seed: u64) -> Result<Value, Box<dyn std::error::Error + Send + 
                 "snapshot_state_atomic_bundle_publish": true,
                 "state_publish_after_durable_write": true,
                 "explicit_legacy_adoption_executed": true,
+                "legacy_artifact_bytes_preserved": true,
+                "legacy_full_cluster_replay": true,
+                "legacy_post_adoption_write_restart": true,
                 "full_cluster_disk_restart": true,
                 "read_index_after_restart": true,
                 "corruption_rejected": true,

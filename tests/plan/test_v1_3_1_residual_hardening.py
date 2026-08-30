@@ -16,7 +16,7 @@ class V131ResidualHardeningTests(unittest.TestCase):
     def test_response_writer_uses_one_absolute_deadline(self) -> None:
         source = text("crates/heptabao-p0-server/src/main.rs")
         for marker in (
-            "fn write_response_until(",
+            "fn write_response_until<W: TimedWrite>(",
             "checked_duration_since(Instant::now())",
             "stream.write(&bytes[offset..])",
             "response write deadline exceeded",
@@ -85,6 +85,54 @@ class V131ResidualHardeningTests(unittest.TestCase):
         self.assertFalse(matrix["qualification"])
         self.assertFalse(matrix["compatibility_claim"])
         self.assertEqual(matrix["authority_effect"], "NONE")
+
+    def test_transport_matrix_separates_runtime_and_unit_gate_evidence(self) -> None:
+        matrix = yaml.safe_load(
+            text("planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
+        )
+        cases = {entry["id"]: entry for entry in matrix["cases"]}
+        unit_gate_ids = {
+            "P0-TRANSPORT-011",
+            "P0-TRANSPORT-012",
+            "P0-TRANSPORT-014",
+        }
+        self.assertEqual(
+            {
+                case_id
+                for case_id, entry in cases.items()
+                if entry["evidence_mode"] == "EXACT_HEAD_ROOT_UNIT_GATE"
+            },
+            unit_gate_ids,
+        )
+        self.assertEqual(
+            sum(
+                entry["evidence_mode"] == "RUNTIME_OBSERVED"
+                for entry in cases.values()
+            ),
+            11,
+        )
+        self.assertTrue(
+            matrix["evidence_taxonomy"]["source_marker_only_runtime_pass_forbidden"]
+        )
+        runner = text("scripts/p0_transport_exact_v1.py")
+        self.assertIn('status="UNIT_GATE_PASS"', runner)
+        self.assertIn('evidence_mode="EXACT_HEAD_ROOT_UNIT_GATE"', runner)
+        self.assertNotIn("require_source_markers", runner)
+
+    def test_durable_legacy_adoption_preserves_and_replays_full_cluster(self) -> None:
+        source = text("probes/h02/openraft-tokio/src/bin/durable_store_lab.rs")
+        for marker in (
+            "legacy-cluster-adoption-copy",
+            "legacy_artifacts_unchanged",
+            "legacy_markers_created",
+            "legacy_cluster_replay_matches",
+            "legacy_post_adoption_restart_matches",
+            "legacy_post_adoption_write_index",
+            "legacy_artifact_bytes_preserved",
+            "legacy_full_cluster_replay",
+            "legacy_post_adoption_write_restart",
+        ):
+            self.assertIn(marker, source)
 
     def test_normative_manifest_includes_residual_regression_suite(self) -> None:
         manifest = yaml.safe_load(

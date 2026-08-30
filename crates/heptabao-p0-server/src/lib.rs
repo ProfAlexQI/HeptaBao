@@ -14,6 +14,8 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use heptabao_protocol::{
     AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, Operation, ProtocolError,
@@ -194,9 +196,21 @@ impl<A: AuditSink> fmt::Debug for P0Server<A> {
     }
 }
 
+#[cfg(test)]
+static ZEROIZED_STRING_OBSERVATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static ZEROIZED_STRING_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+
 fn zeroize_string(value: &mut String) {
     let mut bytes = std::mem::take(value).into_bytes();
     bytes.fill(0);
+    #[cfg(test)]
+    {
+        ZEROIZED_STRING_OBSERVATIONS.fetch_add(1, AtomicOrdering::Relaxed);
+        if bytes.iter().any(|byte| *byte != 0) {
+            ZEROIZED_STRING_VIOLATIONS.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
 }
 
 #[derive(Eq, Ord, PartialEq, PartialOrd)]
@@ -1127,6 +1141,19 @@ mod tests {
         let rendered = format!("{path:?}");
         assert!(!rendered.contains("internal-secret-path"));
         assert!(rendered.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn secret_path_drop_executes_zeroizing_path() {
+        let before = ZEROIZED_STRING_OBSERVATIONS.load(AtomicOrdering::Relaxed);
+        let violations_before = ZEROIZED_STRING_VIOLATIONS.load(AtomicOrdering::Relaxed);
+        let path = SecretPath::new("internal-private-secret-path");
+        drop(path);
+        assert!(ZEROIZED_STRING_OBSERVATIONS.load(AtomicOrdering::Relaxed) > before);
+        assert_eq!(
+            ZEROIZED_STRING_VIOLATIONS.load(AtomicOrdering::Relaxed),
+            violations_before
+        );
     }
 
     #[test]

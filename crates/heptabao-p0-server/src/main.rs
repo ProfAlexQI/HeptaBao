@@ -16,8 +16,8 @@ use heptabao_p0_server::{
     AuditError, AuditSink, DevelopmentCredentials, FileAuditSink, P0Response, P0Server,
 };
 use heptabao_protocol::{
-    AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError, RequestEnvelope,
-    RequestId, parse_http_request,
+    AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, Operation, ProtocolError,
+    RequestEnvelope, RequestId, classify_operation, parse_http_request,
 };
 
 const TOTAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -146,12 +146,10 @@ fn run() -> Result<(), String> {
                 }
             });
         if let Err(error) = worker_result {
-            spawn_failure_active.fetch_sub(1, Ordering::AcqRel);
-            let _audit_result = record_transport_rejection(
+            let _audit_result = record_worker_spawn_failure(
+                spawn_failure_active.as_ref(),
                 &spawn_failure_audit,
                 spawn_failure_attempt_id,
-                503,
-                "connection-worker-spawn-failed",
             );
             eprintln!("connection worker spawn failed: {error}");
         }
@@ -312,6 +310,7 @@ fn serve_one(
         });
     }
 
+    let delivery_operation = classify_operation(request.method, &request.target).ok();
     let request_id = match request.headers.get("x-heptabao-request-id") {
         Some(raw) => request_ids.claim(raw, Instant::now())?,
         None => attempt_id,
@@ -347,7 +346,8 @@ fn serve_one(
     };
 
     if let Err(error) = write_response_with_timeout(stream, &response) {
-        let _audit_result = record_delivery_failure(audit, request_id, response.committed);
+        let _audit_result =
+            record_delivery_failure(audit, request_id, delivery_operation, response.committed);
         eprintln!("response delivery failed: {error}");
     }
     Ok(())
@@ -458,15 +458,25 @@ fn record_transport_rejection(
     })
 }
 
+fn record_worker_spawn_failure(
+    spawn_failure_active: &AtomicUsize,
+    audit: &SharedAuditSink,
+    request_id: RequestId,
+) -> Result<(), AuditError> {
+    spawn_failure_active.fetch_sub(1, Ordering::AcqRel);
+    record_transport_rejection(audit, request_id, 503, "connection-worker-spawn-failed")
+}
+
 fn record_delivery_failure(
     audit: &SharedAuditSink,
     request_id: RequestId,
+    operation: Option<Operation>,
     committed: bool,
 ) -> Result<(), AuditError> {
     let mut sink = audit.clone();
     sink.record(&AuditEvent {
         request_id,
-        operation: None,
+        operation,
         phase: if committed {
             AuditPhase::ResponseCommitted
         } else {
@@ -495,6 +505,16 @@ fn error_response(status_code: u16, message: &str) -> P0Response {
     }
 }
 
+trait TimedWrite: Write {
+    fn set_remaining_write_timeout(&mut self, remaining: Duration) -> io::Result<()>;
+}
+
+impl TimedWrite for TcpStream {
+    fn set_remaining_write_timeout(&mut self, remaining: Duration) -> io::Result<()> {
+        self.set_write_timeout(Some(remaining))
+    }
+}
+
 fn write_response_with_timeout(
     stream: &mut TcpStream,
     response: &P0Response,
@@ -505,8 +525,8 @@ fn write_response_with_timeout(
     write_response_until(stream, response, absolute_deadline)
 }
 
-fn write_response_until(
-    stream: &mut TcpStream,
+fn write_response_until<W: TimedWrite>(
+    stream: &mut W,
     response: &P0Response,
     absolute_deadline: Instant,
 ) -> Result<(), String> {
@@ -519,7 +539,7 @@ fn write_response_until(
                 .filter(|value| !value.is_zero())
                 .ok_or_else(|| "response write deadline exceeded".to_owned())?;
             stream
-                .set_write_timeout(Some(remaining))
+                .set_remaining_write_timeout(remaining)
                 .map_err(|error| format!("set response write timeout failed: {error}"))?;
             match stream.write(&bytes[offset..]) {
                 Ok(0) => return Err("response write returned zero bytes".to_owned()),
@@ -541,7 +561,7 @@ fn write_response_until(
             .filter(|value| !value.is_zero())
             .ok_or_else(|| "response write deadline exceeded".to_owned())?;
         stream
-            .set_write_timeout(Some(remaining))
+            .set_remaining_write_timeout(remaining)
             .map_err(|error| format!("set response flush timeout failed: {error}"))?;
         stream
             .flush()
@@ -687,9 +707,57 @@ fn escape_json(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestIdRegistry, render_response};
-    use heptabao_p0_server::P0Response;
+    use super::{
+        RequestIdRegistry, SharedAuditSink, TimedWrite, record_worker_spawn_failure,
+        render_response, write_response_until,
+    };
+    use heptabao_p0_server::{FileAuditSink, P0Response};
+    use heptabao_protocol::RequestId;
+    use std::fs;
+    use std::io::{self, Write};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::thread;
     use std::time::{Duration, Instant};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Debug, Default)]
+    struct SlowPartialWriter {
+        writes: usize,
+        observed: Vec<u8>,
+    }
+
+    impl Write for SlowPartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes = self.writes.saturating_add(1);
+            let count = bytes.len().min(1);
+            if count != 0 {
+                self.observed.extend_from_slice(&bytes[..count]);
+            }
+            if self.writes == 1 {
+                thread::sleep(Duration::from_millis(15));
+            }
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl TimedWrite for SlowPartialWriter {
+        fn set_remaining_write_timeout(&mut self, _remaining: Duration) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn temporary_root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "heptabao-p0-main-{label}-{}-{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     #[test]
     fn no_content_response_never_emits_a_wire_body() {
@@ -706,6 +774,54 @@ mod tests {
                 .any(|window| window == b"Content-Length: 0\r\n")
         );
         assert!(wire.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn partial_write_progress_cannot_reset_absolute_deadline() {
+        let response = P0Response {
+            status_code: 200,
+            body: br#"{"bounded":true}"#.to_vec(),
+            committed: false,
+            recovery_reference: None,
+        };
+        let deadline = Instant::now().checked_add(Duration::from_millis(2));
+        assert!(deadline.is_some());
+        if let Some(deadline) = deadline {
+            let mut writer = SlowPartialWriter::default();
+            let result = write_response_until(&mut writer, &response, deadline);
+            assert!(result.is_err());
+            if let Err(error) = result {
+                assert!(error.contains("response write deadline exceeded"));
+            }
+            assert_eq!(writer.writes, 1);
+            assert_eq!(writer.observed.len(), 1);
+        }
+    }
+
+    #[test]
+    fn worker_spawn_failure_releases_capacity_and_is_audited() {
+        let root = temporary_root("spawn-failure");
+        assert!(fs::create_dir_all(&root).is_ok());
+        let path = root.join("audit.log");
+        let audit = FileAuditSink::create_new(&path);
+        assert!(audit.is_ok());
+        let request_id = RequestId::new("worker-spawn-failure-0001".to_owned());
+        assert!(request_id.is_ok());
+        if let (Ok(audit), Ok(request_id)) = (audit, request_id) {
+            let shared = SharedAuditSink::new(audit);
+            let active = AtomicUsize::new(1);
+            let result = record_worker_spawn_failure(&active, &shared, request_id);
+            assert!(result.is_ok());
+            assert_eq!(active.load(Ordering::Acquire), 0);
+            let rendered = fs::read_to_string(&path);
+            assert!(rendered.is_ok());
+            if let Ok(rendered) = rendered {
+                assert!(rendered.contains("request_id=worker-spawn-failure-0001"));
+                assert!(rendered.contains("detail=connection-worker-spawn-failed"));
+                assert!(rendered.contains("commit=NotAttempted"));
+            }
+        }
+        let _cleanup = fs::remove_dir_all(root);
     }
 
     #[test]

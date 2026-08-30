@@ -60,6 +60,22 @@ def validate(root: Path) -> None:
         integration.get("compressed_transport_is_not_canonical_delivery") is True,
         "compressed source transport cannot become canonical delivery",
     )
+    require(
+        integration.get("ci_workflow_authored_source_publication_forbidden") is True,
+        "CI workflow source self-publication must remain forbidden",
+    )
+    require(
+        integration.get("maintainer_invoked_git_data_tree_republish_allowed") is True,
+        "tree-preserving maintainer Git Data republish contract missing",
+    )
+    require(
+        integration.get("final_tree_preserving_republish_required") is True,
+        "final tree-preserving republish requirement missing",
+    )
+    require(
+        integration.get("source_head_and_synthetic_merge_admission_required") is True,
+        "source-head and synthetic-merge dual admission required",
+    )
 
     remediation = status.get("repository_remediation")
     require(isinstance(remediation, dict), "repository remediation missing")
@@ -157,7 +173,7 @@ def validate(root: Path) -> None:
             "record_transport_rejection",
             "response-delivery-failed-after-commit",
             "write_response_with_timeout",
-            "fn write_response_until(",
+            "fn write_response_until<W: TimedWrite>(",
             "checked_duration_since(Instant::now())",
             "stream.write(&bytes[offset..])",
             "set response flush timeout failed",
@@ -165,6 +181,11 @@ def validate(root: Path) -> None:
             "thread::Builder::new()",
             "connection-worker-spawn-failed",
             "spawn_failure_active.fetch_sub",
+            "record_worker_spawn_failure",
+            "partial_write_progress_cannot_reset_absolute_deadline",
+            "worker_spawn_failure_releases_capacity_and_is_audited",
+            "operation: Option<Operation>",
+            "delivery_operation",
             "clear_request_buffers",
             "buffer[..count].fill(0)",
             "bytes.fill(0)",
@@ -197,6 +218,8 @@ def validate(root: Path) -> None:
             "self.deadline <= self.received_at",
             "deadline_must_be_strictly_after_receipt",
             "request_debug_redacts_path_header_values_and_body",
+            "canonical_target_drop_executes_zeroizing_path",
+            "ZEROIZED_STRING_OBSERVATIONS",
             "value.fill(0)",
             "body_bytes",
         ],
@@ -234,6 +257,8 @@ def validate(root: Path) -> None:
             "unseal_key.fill(0)",
             "impl fmt::Debug for ServerState",
             "server_debug_redacts_kv_paths_and_values",
+            "secret_path_drop_executes_zeroizing_path",
+            "ZEROIZED_STRING_OBSERVATIONS",
             "kv_entries",
         ],
         "P0 body, path and secret-response source",
@@ -298,6 +323,26 @@ def validate(root: Path) -> None:
         "durable store source",
     )
 
+    durable_main_source = read_text(
+        root,
+        "probes/h02/openraft-tokio/src/bin/durable_store_lab.rs",
+    )
+    require_tokens(
+        durable_main_source,
+        [
+            "legacy-cluster-adoption-copy",
+            "legacy_artifacts_unchanged",
+            "legacy_markers_created",
+            "legacy_cluster_replay_matches",
+            "legacy_post_adoption_restart_matches",
+            "legacy_post_adoption_write_index",
+            "legacy_artifact_bytes_preserved",
+            "legacy_full_cluster_replay",
+            "legacy_post_adoption_write_restart",
+        ],
+        "durable legacy-adoption execution source",
+    )
+
     plan = read_text(
         root,
         "docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md",
@@ -323,6 +368,22 @@ def validate(root: Path) -> None:
         root,
         "docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md",
     )
+    canonical_source = read_text(
+        root,
+        "docs/governance/HEPTABAO_CANONICAL_SOURCE_PUBLICATION_CONTRACT_V1.md",
+    )
+    require_tokens(
+        canonical_source,
+        [
+            "CI self-publication",
+            "maintainer-invoked connected GitHub Git Data API commit",
+            "final tree-preserving republish",
+            "GitHub synthetic merge",
+            "source-head success cannot substitute for synthetic-merge success",
+            "not a signature, independent review, qualification receipt",
+        ],
+        "canonical source publication contract",
+    )
     require_tokens(
         plan,
         [
@@ -338,6 +399,11 @@ def validate(root: Path) -> None:
             "connection-worker-spawn-failed",
             "digest preimage",
             "raw unescaped quotes",
+            "11 runtime-observed",
+            "three exact-head root-unit-gate",
+            "Source-marker presence is never counted as runtime PASS",
+            "legacy artifact bytes",
+            "post-adoption restart",
         ],
         "V1.3.1 plan",
     )
@@ -386,6 +452,8 @@ def validate(root: Path) -> None:
             "connection-worker-spawn-failed",
             "absolute response-write deadline",
             "operation-body-forbidden",
+            "exact request ID, operation and commit disposition",
+            "Source-marker presence is not runtime evidence",
         ],
         "P0 audit outcome contract",
     )
@@ -402,6 +470,9 @@ def validate(root: Path) -> None:
             "rendered HTTP wire vector is overwritten",
             "in-memory server-state `Debug`",
             "unsigned signature payload vectors",
+            "11 transport cases are runtime-observed",
+            "Three process-internal cases",
+            "EXACT_HEAD_ROOT_UNIT_GATE",
         ],
         "P0 execution contract",
     )
@@ -438,10 +509,78 @@ def validate(root: Path) -> None:
         }.issubset(set(case_ids)),
         "final transport resource/body/lifetime cases missing",
     )
+    taxonomy = matrix.get("evidence_taxonomy")
+    require(isinstance(taxonomy, dict), "transport evidence taxonomy missing")
+    require(taxonomy.get("runtime_status") == "RUNTIME_PASS", "runtime status drift")
+    require(
+        taxonomy.get("root_unit_gate_status") == "UNIT_GATE_PASS",
+        "root unit-gate status drift",
+    )
+    require(taxonomy.get("runtime_case_count") == 11, "runtime case count drift")
+    require(
+        taxonomy.get("root_unit_gate_case_count") == 3,
+        "root unit-gate case count drift",
+    )
+    require(
+        taxonomy.get("source_marker_only_runtime_pass_forbidden") is True,
+        "source-marker-only runtime PASS must remain forbidden",
+    )
+    modes = {
+        case.get("id"): case.get("evidence_mode")
+        for case in cases
+        if isinstance(case, dict)
+    }
+    unit_gate_ids = {
+        "P0-TRANSPORT-011",
+        "P0-TRANSPORT-012",
+        "P0-TRANSPORT-014",
+    }
+    require(
+        {case_id for case_id, mode in modes.items() if mode == "EXACT_HEAD_ROOT_UNIT_GATE"}
+        == unit_gate_ids,
+        "root unit-gate transport case classification drift",
+    )
+    require(
+        sum(mode == "RUNTIME_OBSERVED" for mode in modes.values()) == 11,
+        "runtime-observed transport case classification drift",
+    )
+    cases_by_id = {case["id"]: case for case in cases if isinstance(case, dict)}
+    require(
+        cases_by_id["P0-TRANSPORT-011"].get("required_unit_test")
+        == "partial_write_progress_cannot_reset_absolute_deadline",
+        "response deadline unit test binding drift",
+    )
+    require(
+        cases_by_id["P0-TRANSPORT-012"].get("required_unit_test")
+        == "worker_spawn_failure_releases_capacity_and_is_audited",
+        "worker spawn unit test binding drift",
+    )
+    require(
+        set(cases_by_id["P0-TRANSPORT-014"].get("required_unit_tests", []))
+        == {
+            "canonical_target_drop_executes_zeroizing_path",
+            "secret_path_drop_executes_zeroizing_path",
+        },
+        "controlled-drop unit test binding drift",
+    )
     require(
         matrix.get("resource_bounds", {}).get("response_write_deadline_mode")
         == "ABSOLUTE_REMAINING_TIME_PER_WRITE_AND_FLUSH",
         "response write deadline mode drift",
+    )
+    exact_requirements = matrix.get("exact_head_requirements", {})
+    require(exact_requirements.get("runtime_case_count") == 11, "exact runtime count drift")
+    require(
+        exact_requirements.get("root_unit_gate_case_count") == 3,
+        "exact root-unit count drift",
+    )
+    require(
+        exact_requirements.get("root_unit_gate_must_bind_same_commit_and_tree") is True,
+        "root unit gate source binding must remain exact",
+    )
+    require(
+        exact_requirements.get("source_marker_only_runtime_pass_forbidden") is True,
+        "exact matrix cannot count source markers as runtime PASS",
     )
     require(matrix.get("qualification") is False, "transport matrix cannot self-qualify")
     require(
@@ -449,6 +588,36 @@ def validate(root: Path) -> None:
         "transport matrix cannot claim compatibility",
     )
     require(matrix.get("authority_effect") == "NONE", "transport matrix authority drift")
+
+    manifest = read_yaml(
+        root,
+        "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
+    )
+    manifest_paths = {
+        entry.get("path")
+        for entry in manifest.get("documents", [])
+        if isinstance(entry, dict)
+    }
+    for required_path in {
+        "docs/governance/HEPTABAO_CANONICAL_SOURCE_PUBLICATION_CONTRACT_V1.md",
+        "scripts/p0_transport_exact_v1.py",
+        ".github/workflows/plan-v1.3.1-final-exact.yml",
+        ".github/workflows/plan-v1.3.1-merge-admission.yml",
+    }:
+        require(required_path in manifest_paths, f"normative manifest missing: {required_path}")
+    semantics = manifest.get("closure_semantics", {})
+    require(
+        semantics.get("source_marker_presence_is_runtime_evidence") is False,
+        "manifest cannot treat source markers as runtime evidence",
+    )
+    require(
+        semantics.get("source_head_success_is_merge_admission") is False,
+        "source-head success cannot imply merge admission",
+    )
+    require(
+        semantics.get("tree_preserving_api_republish_is_independent_review") is False,
+        "tree republish cannot imply independent review",
+    )
 
     residual_tests = read_text(root, "tests/plan/test_v1_3_1_residual_hardening.py")
     require_tokens(
@@ -458,6 +627,8 @@ def validate(root: Path) -> None:
             "test_operation_body_policy_precedes_dispatch",
             "test_sensitive_target_and_kv_path_lifetimes_are_controlled",
             "test_transport_matrix_names_the_residual_closures",
+            "test_transport_matrix_separates_runtime_and_unit_gate_evidence",
+            "test_durable_legacy_adoption_preserves_and_replays_full_cluster",
         ],
         "V1.3.1 residual regression tests",
     )
@@ -502,6 +673,49 @@ def validate(root: Path) -> None:
             f"write-capable workflow marker forbidden: {forbidden}",
         )
 
+    final_workflow = read_text(root, ".github/workflows/plan-v1.3.1-final-exact.yml")
+    require_tokens(
+        final_workflow,
+        [
+            "workflow_call:",
+            "source_kind:",
+            "EXPECTED_HEAD_SHA",
+            "EXPECTED_BASE_SHA",
+            "GITHUB_SYNTHETIC_MERGE",
+            "HEPTABAO_ROOT_GATE_COMMIT",
+            "HEPTABAO_ROOT_GATE_TREE",
+            "artifact-digest",
+            "technical-execution-receipt.json",
+        ],
+        "V1.3.1 reusable exact-source workflow",
+    )
+    merge_workflow = read_text(root, ".github/workflows/plan-v1.3.1-merge-admission.yml")
+    require_tokens(
+        merge_workflow,
+        [
+            "uses: ./.github/workflows/plan-v1.3.1-final-exact.yml",
+            "source_sha: ${{ github.sha }}",
+            "source_kind: GITHUB_SYNTHETIC_MERGE",
+            "expected_head_sha: ${{ github.event.pull_request.head.sha }}",
+            "expected_base_sha: ${{ github.event.pull_request.base.sha }}",
+            "permissions:\n  contents: read",
+        ],
+        "V1.3.1 synthetic-merge admission workflow",
+    )
+    for candidate in [final_workflow, merge_workflow]:
+        for forbidden in [
+            "contents: write",
+            "persist-credentials: true",
+            "git push",
+            "git commit",
+            "git rebase",
+        ]:
+            require(
+                forbidden not in candidate,
+                f"write-capable final workflow marker forbidden: {forbidden}",
+            )
+
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -518,8 +732,9 @@ def main() -> int:
         return 1
     print(
         "HeptaBao V1.3.1 gap-closure validation passed: "
-        "18 repository remediations and 14 transport cases source-bound; "
-        "exact-head and independent evidence required; qualification=false authority=NONE"
+        "18 repository remediations; 11 runtime and 3 exact-head root-unit transport cases; "
+        "source-head plus synthetic-merge execution and independent evidence required; "
+        "qualification=false authority=NONE"
     )
     return 0
 

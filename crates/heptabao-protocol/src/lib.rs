@@ -8,6 +8,8 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 pub const MAX_HTTP_HEAD_BYTES: usize = 16 * 1024;
@@ -87,9 +89,21 @@ impl Operation {
     }
 }
 
+#[cfg(test)]
+static ZEROIZED_STRING_OBSERVATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static ZEROIZED_STRING_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+
 fn zeroize_string(value: &mut String) {
     let mut bytes = std::mem::take(value).into_bytes();
     bytes.fill(0);
+    #[cfg(test)]
+    {
+        ZEROIZED_STRING_OBSERVATIONS.fetch_add(1, AtomicOrdering::Relaxed);
+        if bytes.iter().any(|byte| *byte != 0) {
+            ZEROIZED_STRING_VIOLATIONS.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -978,6 +992,22 @@ mod tests {
             assert!(!rendered.contains("body-secret"));
             assert!(rendered.contains("body_bytes"));
         }
+    }
+
+    #[test]
+    fn canonical_target_drop_executes_zeroizing_path() {
+        let before = ZEROIZED_STRING_OBSERVATIONS.load(AtomicOrdering::Relaxed);
+        let violations_before = ZEROIZED_STRING_VIOLATIONS.load(AtomicOrdering::Relaxed);
+        let target = CanonicalTarget::parse("/v1/secret/private-path?scope=private");
+        assert!(target.is_ok());
+        if let Ok(target) = target {
+            drop(target);
+        }
+        assert!(ZEROIZED_STRING_OBSERVATIONS.load(AtomicOrdering::Relaxed) > before);
+        assert_eq!(
+            ZEROIZED_STRING_VIOLATIONS.load(AtomicOrdering::Relaxed),
+            violations_before
+        );
     }
 
     #[test]

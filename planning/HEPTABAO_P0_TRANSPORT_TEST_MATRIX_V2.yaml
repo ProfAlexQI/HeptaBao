@@ -3,56 +3,72 @@ plan_id: HEPTABAO-PLAN-2026-08-28
 revision: '1.3.1'
 profile: HB-P0-DEV-MEMORY
 status: SPECIFIED_SOURCE_IMPLEMENTED_EXACT_HEAD_EXECUTION_REQUIRED
+evidence_taxonomy:
+  runtime_status: RUNTIME_PASS
+  root_unit_gate_status: UNIT_GATE_PASS
+  runtime_case_count: 11
+  root_unit_gate_case_count: 3
+  source_marker_only_runtime_pass_forbidden: true
 cases:
 - id: P0-TRANSPORT-001
+  evidence_mode: RUNTIME_OBSERVED
   title: canonical loopback health request
   vector: complete HTTP/1.1 request with exact bound Host
   expected_status: 501
   expected_audit: request accepted and response prepared
 - id: P0-TRANSPORT-002
+  evidence_mode: RUNTIME_OBSERVED
   title: duplicate Host fails closed and is audited
   vector: two case-variant Host fields
   expected_status: 400
   expected_detail_code: protocol-duplicate-header
 - id: P0-TRANSPORT-003
+  evidence_mode: RUNTIME_OBSERVED
   title: Host/listener mismatch fails closed and is audited
   vector: syntactically valid non-listener Host
   expected_status: 400
   expected_detail_code: host-listener-mismatch
 - id: P0-TRANSPORT-004
+  evidence_mode: RUNTIME_OBSERVED
   title: byte trickling cannot extend total request read deadline
   vector: partial request head retained past five-second absolute deadline
   expected_status: 408
   expected_detail_code: request-read-deadline-exceeded
   maximum_observed_seconds: 8
 - id: P0-TRANSPORT-005
+  evidence_mode: RUNTIME_OBSERVED
   title: request-ID replay is rejected
   vector: two complete requests carrying the same X-HeptaBao-Request-Id
   expected_first_status: 200
   expected_second_status: 409
   expected_detail_code: client-request-id-replayed
 - id: P0-TRANSPORT-006
+  evidence_mode: RUNTIME_OBSERVED
   title: request-ID registry saturation fails closed
   vector: more live identities than the declared bounded capacity
   expected_status: 503
   expected_detail_code: request-id-registry-saturated
 - id: P0-TRANSPORT-007
+  evidence_mode: RUNTIME_OBSERVED
   title: concurrent connection saturation is bounded
   vector: more than 32 simultaneously live request readers
   expected_status: 429
   expected_detail_code: connection-capacity-exhausted
 - id: P0-TRANSPORT-008
+  evidence_mode: RUNTIME_OBSERVED
   title: HTTP 204 has no wire body
   vector: successful authenticated KV write
   expected_status: 204
   expected_content_length: 0
   expected_body_bytes: 0
 - id: P0-TRANSPORT-009
+  evidence_mode: RUNTIME_OBSERVED
   title: malformed framing is audited before response
   vector: Transfer-Encoding or noncanonical Content-Length
   expected_status: 400
   expected_detail_code: protocol-transfer-encoding-forbidden
 - id: P0-TRANSPORT-010
+  evidence_mode: RUNTIME_OBSERVED
   title: response delivery failure preserves known commit disposition
   vector: peer closes after dispatch before complete response delivery
   expected: NO_RETRY_AND_AUDIT_DETAIL
@@ -60,26 +76,35 @@ cases:
   - response-delivery-failed-before-commit
   - response-delivery-failed-after-commit
 - id: P0-TRANSPORT-011
+  evidence_mode: EXACT_HEAD_ROOT_UNIT_GATE
   title: every response has one absolute bounded write lifetime
-  vector: normal, capacity-rejection and parser-rejection responses use a remaining-time write loop
+  vector: deterministic partial-writer unit fault holds one write past the absolute deadline
   expected: PARTIAL_PROGRESS_CANNOT_RESET_DEADLINE
+  required_unit_test: partial_write_progress_cannot_reset_absolute_deadline
   maximum_write_seconds: 5
 - id: P0-TRANSPORT-012
+  evidence_mode: EXACT_HEAD_ROOT_UNIT_GATE
   title: connection worker creation failure cannot panic or leak admission capacity
-  vector: fallible thread Builder spawn path
+  vector: deterministic unit execution of the production spawn-failure cleanup/audit handler
   expected_status: CONNECTION_CLOSED_FAIL_CLOSED
   expected_detail_code: connection-worker-spawn-failed
   expected_capacity_release: true
+  required_unit_test: worker_spawn_failure_releases_capacity_and_is_audited
 - id: P0-TRANSPORT-013
+  evidence_mode: RUNTIME_OBSERVED
   title: operation-specific body policy rejects ignored payloads
   vector: body on health, seal status, seal, KV read, KV list or KV delete; non-exact init body
   expected_status: 400
   expected_detail_code: operation-body-forbidden
   expected_dispatch: false
 - id: P0-TRANSPORT-014
+  evidence_mode: EXACT_HEAD_ROOT_UNIT_GATE
   title: canonical target and in-memory KV path use controlled owned lifetimes
-  vector: target/query and KV-path wrappers are redacted and overwritten on controlled drop
+  vector: test-instrumented drop paths observe post-fill zero bytes for target/query and KV-path ownership
   expected: BEST_EFFORT_CONTROLLED_PATH_OVERWRITE
+  required_unit_tests:
+  - canonical_target_drop_executes_zeroizing_path
+  - secret_path_drop_executes_zeroizing_path
   production_qualification_effect: NONE
 resource_bounds:
   total_request_timeout_seconds: 5
@@ -96,6 +121,10 @@ exact_head_requirements:
   clippy_deny_warnings: true
   socket_execution: true
   audit_artifact_required: true
+  runtime_case_count: 11
+  root_unit_gate_case_count: 3
+  root_unit_gate_must_bind_same_commit_and_tree: true
+  source_marker_only_runtime_pass_forbidden: true
 qualification: false
 compatibility_claim: false
 authority_effect: NONE

@@ -9,7 +9,7 @@
 
 V1.3.1 converts the materialized V1.3 source into one ordinary reviewable integration branch and closes the repository-controlled defects found by the V1.3 audit. It does not alter any legal, independent-review, signing, incident-operation, restricted-Oracle, power-cut-laboratory, compatibility, qualification or authority boundary.
 
-The canonical implementation lane for this closure is `codex/plan-v1.3-gap-closure-v2`. The source was anchored from materialized commit `b694d24a16ee9714fb888e72aca86f16effd1761` and is reviewed through PR #45. Compressed source transport and CI-authored source publication are not normal delivery mechanisms.
+The canonical implementation lane for this closure is `codex/plan-v1.3-gap-closure-v2`. The source was anchored from materialized commit `b694d24a16ee9714fb888e72aca86f16effd1761` and is reviewed through PR #45. Compressed source transport and CI-workflow-authored self-publication are not normal delivery mechanisms. A maintainer-invoked connected GitHub API republish may establish an ordinary review-lane commit only when it preserves the exact reviewed tree, records its parent/tree binding and grants no independent-review or authority effect.
 
 ## 2. Repository-controlled closure scope
 
@@ -60,6 +60,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 The exact binary and root unit suites must demonstrate:
 
+Evidence is deliberately split: 11 runtime-observed transport cases execute against the loopback socket, while three exact-head root-unit-gate cases exercise process-internal partial-write, worker-spawn-failure and controlled-drop paths. The unit gate and socket gate must bind the same commit and tree. Source-marker presence is never counted as runtime PASS.
+
 - loopback-only startup;
 - normal health/init/unseal/KV behavior;
 - init accepts exactly `{}` and ignored bodies fail closed before dispatch;
@@ -79,7 +81,7 @@ The exact binary and root unit suites must demonstrate:
 
 ### Gate D — H02 exact-head
 
-The same exact source must compile and lint the OpenRaft graph on Rust `1.88.0` and `1.98.0`, then execute all 24 in-memory, hostile, blocker and durable entries. Any failed, blocked, unknown, malformed, missing, duplicate, unexpected or unexecuted entry fails the aggregate.
+The same exact source must compile and lint the OpenRaft graph on Rust `1.88.0` and `1.98.0`, then execute all 24 in-memory, hostile, blocker and durable entries. Durable legacy adoption must preserve the exact legacy artifact bytes, publish markers for all three nodes, replay the full adopted cluster, commit a post-adoption write and survive a post-adoption restart. Any failed, blocked, unknown, malformed, missing, duplicate, unexpected or unexecuted entry fails the aggregate.
 
 ### Gate E — independent closure
 

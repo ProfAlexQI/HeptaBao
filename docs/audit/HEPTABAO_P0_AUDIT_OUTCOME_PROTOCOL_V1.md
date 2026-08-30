@@ -37,10 +37,15 @@ The current shared `AuditEvent` schema represents request rejection, request acc
 7. Request-audit failure prevents dispatch and mutation.
 8. A successful mutating operation is marked committed before response-audit evaluation.
 9. Response-audit failure after commit returns 503 with `committed=true` and a recovery reference.
-10. A response delivery failure does not change a committed outcome and must not trigger an automatic retry.
+10. A response delivery failure does not change a committed outcome and must not trigger an automatic retry. Its evidence is correlated by the exact request ID, operation and commit disposition; an unrelated audit line cannot satisfy the case.
 11. No audit event contains raw token, unseal key, secret value, signature, nonce, request body, request target or KV path.
 
-## 5. Stable transport and request detail codes
+
+## 5. Evidence taxonomy
+
+Socket-observable behavior is recorded as `RUNTIME_PASS`. Process-internal failure/lifetime behavior may be recorded as `UNIT_GATE_PASS` only when the exact-head Rust root gate executed the named deterministic unit test on the same commit and tree. Source-marker presence is not runtime evidence and cannot be counted as runtime PASS. The aggregate keeps runtime and root-unit counts separate.
+
+## 6. Stable transport and request detail codes
 
 The P0 transport and request pipeline use bounded identifiers including:
 
@@ -62,7 +67,7 @@ The P0 transport and request pipeline use bounded identifiers including:
 
 Unknown free-form exception text is not a stable machine identifier.
 
-## 6. Recovery references
+## 7. Recovery references
 
 The P0 recovery reference is process-local development evidence. It does not survive process restart, is not backed by a durable idempotency ledger and does not prove whether a client received a response. Production implementation requires a durable outcome record keyed by request ID, operation digest, commit index/generation and authority epoch.
 
@@ -79,7 +84,7 @@ REVOKED_OR_STALE_EPOCH
 
 It must never recreate an external effect while answering the query.
 
-## 7. Production audit requirements
+## 8. Production audit requirements
 
 Before promotion beyond P0, the audit subsystem requires a versioned structured schema, descriptor-relative no-follow file/device adapters, record framing, checksums or authenticated chaining, rotation, fsync semantics, disk-full behavior, multi-device policy, redaction tests, clock fields, sequence integrity, crash recovery, retention and independent review.
 

@@ -2,9 +2,9 @@
 """Execute the exact-head HeptaBao P0 transport and audit matrix.
 
 The runner uses only the Python standard library. It drives the already-started
-loopback P0 process, verifies all runtime-observable cases, and binds the
-remaining process-internal lifetime/fallible-spawn cases to source markers that
-were compiled, tested and linted by the required predecessor job.
+loopback P0 process, verifies every transport-observable case, and classifies
+process-internal deadline, spawn-failure and controlled-drop cases as exact-head
+root-unit-gate evidence. Source-marker presence is never counted as runtime PASS.
 """
 
 from __future__ import annotations
@@ -15,11 +15,12 @@ import os
 import re
 import socket
 import struct
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 TOTAL_TIMEOUT_SECONDS = 5.0
 MAX_OBSERVED_SECONDS = 8.0
@@ -186,8 +187,18 @@ def append_case(
     results: list[dict[str, Any]],
     case_id: str,
     evidence: dict[str, Any],
+    *,
+    status: str = "RUNTIME_PASS",
+    evidence_mode: str = "RUNTIME_OBSERVED",
 ) -> None:
-    results.append({"case_id": case_id, "status": "PASS", "evidence": evidence})
+    results.append(
+        {
+            "case_id": case_id,
+            "status": status,
+            "evidence_mode": evidence_mode,
+            "evidence": evidence,
+        }
+    )
 
 
 def trickle_request(host: str, port: int, address: str) -> HttpResponse:
@@ -292,44 +303,83 @@ def send_reset(host: str, port: int, raw: bytes, settle_seconds: float) -> None:
 def force_delivery_failure_detail(
     host: str,
     port: int,
-    address: str,
     audit_path: Path,
     *,
     detail: str,
-    raw: bytes,
-) -> int:
-    del address
-    start_line = len(audit_lines(audit_path))
+    request_factory: Callable[[str], bytes],
+    expected_operation: str,
+    expected_commit: str,
+) -> dict[str, Any]:
     attempts = 0
+    label = "before" if expected_commit == "NotCommitted" else "after"
     for settle in (0.0, 0.0002, 0.0005, 0.001, 0.002, 0.004) * 8:
         attempts += 1
+        request_id = f"matrix-delivery-{label}-{attempts:04d}"
+        start_line = len(audit_lines(audit_path))
         try:
-            send_reset(host, port, raw, settle)
+            send_reset(host, port, request_factory(request_id), settle)
         except OSError:
             pass
         deadline = time.monotonic() + 0.15
         while time.monotonic() < deadline:
             lines = audit_lines(audit_path)[start_line:]
-            if any(f"detail={detail}" in line for line in lines):
-                return attempts
+            for line in lines:
+                if all(
+                    token in line
+                    for token in (
+                        f"request_id={request_id}",
+                        f"operation={expected_operation}",
+                        f"commit={expected_commit}",
+                        f"detail={detail}",
+                    )
+                ):
+                    return {
+                        "attempts": attempts,
+                        "request_id": request_id,
+                        "operation": expected_operation,
+                        "commit": expected_commit,
+                        "detail": detail,
+                    }
             time.sleep(0.005)
-    lines = audit_lines(audit_path)[start_line:]
+    lines = audit_lines(audit_path)
     raise MatrixFailure(
-        f"response delivery failure evidence {detail!r} not observed after {attempts} RST attempts; "
+        f"response delivery failure evidence {detail!r} with operation={expected_operation} "
+        f"commit={expected_commit} not observed after {attempts} RST attempts; "
         f"tail={lines[-20:]!r}"
     )
 
 
-def require_source_markers(root: Path, relative: str, markers: tuple[str, ...]) -> None:
-    source = (root / relative).read_text(encoding="utf-8")
-    missing = [marker for marker in markers if marker not in source]
-    require(not missing, f"{relative} missing exact source markers: {missing}")
+def require_root_unit_gate() -> dict[str, str]:
+    expected_result = os.environ.get("HEPTABAO_ROOT_GATE_RESULT")
+    expected_commit = os.environ.get("HEPTABAO_ROOT_GATE_COMMIT")
+    expected_tree = os.environ.get("HEPTABAO_ROOT_GATE_TREE")
+    require(expected_result == "success", "exact-head root unit gate did not succeed")
+    require(bool(expected_commit), "exact-head root unit gate commit is missing")
+    require(bool(expected_tree), "exact-head root unit gate tree is missing")
+    actual_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True
+    ).strip()
+    actual_tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    require(
+        actual_commit == expected_commit,
+        f"root unit gate commit drift: {expected_commit} != {actual_commit}",
+    )
+    require(
+        actual_tree == expected_tree,
+        f"root unit gate tree drift: {expected_tree} != {actual_tree}",
+    )
+    return {
+        "root_gate_result": expected_result,
+        "root_gate_commit": actual_commit,
+        "root_gate_tree": actual_tree,
+    }
 
 
 def execute(args: argparse.Namespace) -> dict[str, Any]:
     stderr_path = args.stderr.resolve()
     audit_path = args.audit.resolve()
-    root = Path(__file__).resolve().parents[1]
     token = os.environ.get("HEPTABAO_P0_DEV_TOKEN")
     unseal_key = os.environ.get("HEPTABAO_P0_DEV_UNSEAL_KEY")
     require(bool(token), "HEPTABAO_P0_DEV_TOKEN is required by the matrix")
@@ -561,32 +611,36 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         timeout_seconds=15.0,
     )
     assert_status(primed, 204, "matrix setup large secret")
-    before_attempts = force_delivery_failure_detail(
+    before_delivery = force_delivery_failure_detail(
         host,
         port,
-        address,
         audit_path,
         detail="response-delivery-failed-before-commit",
-        raw=request_bytes(
+        request_factory=lambda request_id: request_bytes(
             address,
             "GET",
             "/v1/secret/matrix/delivery",
             token=token,
+            request_id=request_id,
         ),
+        expected_operation="KvRead",
+        expected_commit="NotCommitted",
     )
-    after_attempts = force_delivery_failure_detail(
+    after_delivery = force_delivery_failure_detail(
         host,
         port,
-        address,
         audit_path,
         detail="response-delivery-failed-after-commit",
-        raw=request_bytes(
+        request_factory=lambda request_id: request_bytes(
             address,
             "POST",
             "/v1/secret/matrix/delivery",
             body=large_body,
             token=token,
+            request_id=request_id,
         ),
+        expected_operation="KvWrite",
+        expected_commit="Committed",
     )
     append_case(
         results,
@@ -596,7 +650,8 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                 "response-delivery-failed-before-commit",
                 "response-delivery-failed-after-commit",
             ],
-            "reset_attempts": {"before_commit": before_attempts, "after_commit": after_attempts},
+            "before_commit": before_delivery,
+            "after_commit": after_delivery,
         },
     )
 
@@ -605,40 +660,34 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         maximum_response < TOTAL_TIMEOUT_SECONDS,
         f"immediate response exceeded the five-second write lifetime: {maximum_response:.3f}s",
     )
-    require_source_markers(
-        root,
-        "crates/heptabao-p0-server/src/main.rs",
-        (
-            "fn write_response_until(",
-            "checked_duration_since(Instant::now())",
-            "stream.write(&bytes[offset..])",
-            "set response flush timeout failed",
-            "response write deadline exceeded",
-        ),
-    )
+    root_unit_gate = require_root_unit_gate()
     append_case(
         results,
         "P0-TRANSPORT-011",
         {
+            **root_unit_gate,
+            "unit_test": (
+                "heptabao-p0-server(bin)::tests::"
+                "partial_write_progress_cannot_reset_absolute_deadline"
+            ),
             "maximum_immediate_response_seconds": round(maximum_response, 6),
-            "absolute_deadline_source_bound": True,
         },
+        status="UNIT_GATE_PASS",
+        evidence_mode="EXACT_HEAD_ROOT_UNIT_GATE",
     )
 
-    require_source_markers(
-        root,
-        "crates/heptabao-p0-server/src/main.rs",
-        (
-            "thread::Builder::new()",
-            "connection-worker-spawn-failed",
-            "spawn_failure_active.fetch_sub",
-            "ConnectionGuard::new(worker_active)",
-        ),
-    )
     append_case(
         results,
         "P0-TRANSPORT-012",
-        {"fallible_spawn_source_bound": True, "capacity_release_source_bound": True},
+        {
+            **root_unit_gate,
+            "unit_test": (
+                "heptabao-p0-server(bin)::tests::"
+                "worker_spawn_failure_releases_capacity_and_is_audited"
+            ),
+        },
+        status="UNIT_GATE_PASS",
+        evidence_mode="EXACT_HEAD_ROOT_UNIT_GATE",
     )
 
     start = len(audit_lines(audit_path))
@@ -670,25 +719,32 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         {"status": 400, "detail": "operation-body-forbidden", "dispatch": False},
     )
 
-    require_source_markers(
-        root,
-        "crates/heptabao-protocol/src/lib.rs",
-        ("impl Drop for CanonicalTarget", "impl Drop for ParsedHttpRequest", "value.fill(0)"),
-    )
-    require_source_markers(
-        root,
-        "crates/heptabao-p0-server/src/lib.rs",
-        ("impl Drop for SecretPath", "impl Drop for P0Response", "response.body.fill(0)"),
-    )
     append_case(
         results,
         "P0-TRANSPORT-014",
-        {"controlled_target_drop": True, "controlled_kv_path_drop": True, "qualification_effect": "NONE"},
+        {
+            **root_unit_gate,
+            "unit_tests": [
+                "heptabao-protocol::tests::canonical_target_drop_executes_zeroizing_path",
+                "heptabao-p0-server::tests::secret_path_drop_executes_zeroizing_path",
+            ],
+            "qualification_effect": "NONE",
+        },
+        status="UNIT_GATE_PASS",
+        evidence_mode="EXACT_HEAD_ROOT_UNIT_GATE",
     )
 
     require(len(results) == 14, f"matrix result count drift: {len(results)}")
+    require(
+        sum(case["status"] == "RUNTIME_PASS" for case in results) == 11,
+        "runtime-observed case count drift",
+    )
+    require(
+        sum(case["status"] == "UNIT_GATE_PASS" for case in results) == 3,
+        "exact-head root-unit-gate case count drift",
+    )
     return {
-        "schema": "heptabao.p0-transport-exact-result.v1",
+        "schema": "heptabao.p0-transport-exact-result.v2",
         "source": {
             "repository": os.environ.get("GITHUB_REPOSITORY", "unknown"),
             "commit": os.environ.get("SOURCE_SHA") or os.environ.get("GITHUB_SHA", "unknown"),
@@ -696,7 +752,14 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "profile": "HB-P0-DEV-MEMORY",
         "server": {"loopback": True, "port": port},
         "result": "PASS",
-        "counts": {"pass": 14, "fail": 0, "blocked": 0, "unexecuted": 0},
+        "counts": {
+            "runtime_pass": sum(case["status"] == "RUNTIME_PASS" for case in results),
+            "unit_gate_pass": sum(case["status"] == "UNIT_GATE_PASS" for case in results),
+            "total_pass": len(results),
+            "fail": 0,
+            "blocked": 0,
+            "unexecuted": 0,
+        },
         "cases": results,
         "audit_line_count": len(audit_lines(audit_path)),
         "qualification": False,
@@ -712,9 +775,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = execute(args)
-    except (MatrixFailure, OSError, ValueError) as error:
+    except (MatrixFailure, OSError, ValueError, subprocess.CalledProcessError) as error:
         report = {
-            "schema": "heptabao.p0-transport-exact-result.v1",
+            "schema": "heptabao.p0-transport-exact-result.v2",
             "result": "FAIL",
             "reason": str(error),
             "qualification": False,
