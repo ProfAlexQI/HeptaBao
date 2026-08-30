@@ -1,0 +1,124 @@
+name: v1.3.1-clippy-repair-arm64
+
+on:
+  push:
+    branches:
+      - "exec/v1.3.1-clippy-repair-arm64-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.3.1-clippy-repair-arm64
+  cancel-in-progress: true
+
+env:
+  SUBJECT_SHA: 7a81d94967376ffb5f27879d0003dbb9dd0cd680
+  SUBJECT_TREE: 163e1b95a3138f1ca28029941e567a419f0ec6cf
+  RESULT_BRANCH: tmp/v1.3.1-clippy-repair-result-v1
+  TARGET_FILE: probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs
+
+jobs:
+  repair-validate-publish-tree:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact canonical subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SUBJECT_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact subject and apply one deterministic hunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SUBJECT_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SUBJECT_TREE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("probes/h02/openraft-tokio/src/bin/inmemory_cluster/cluster.rs")
+          text = path.read_text(encoding="utf-8")
+          old = """                    if let Some(leader) = self.nodes[id].raft.current_leader().await {
+                              if excluded != Some(leader) {
+                                  reported.insert(leader);
+                              }
+                          }"""
+          old = old.replace("                              ", "                        ")
+          new = """                    if let Some(leader) = self.nodes[id].raft.current_leader().await
+                              && excluded != Some(leader)
+                          {
+                              reported.insert(leader);
+                          }"""
+          new = new.replace("                              ", "                        ")
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one repair hunk, observed {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          test "$(git diff --name-only)" = "$TARGET_FILE"
+          git diff --check
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.88.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          done
+
+      - name: Format and verify the diff remains one file
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all
+          test "$(git diff --name-only)" = "$TARGET_FILE"
+          git diff --check
+          grep -F 'if let Some(leader) = self.nodes[id].raft.current_leader().await' "$TARGET_FILE"
+          grep -F '&& excluded != Some(leader)' "$TARGET_FILE"
+          test "$(grep -F -c 'if excluded != Some(leader) {' "$TARGET_FILE")" = 0
+
+      - name: Execute root and OpenRaft Rust gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check
+          for toolchain in 1.88.0 1.98.0; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/v1.3.1-clippy-repair-$toolchain"
+            cargo +"$toolchain" test --locked --all-targets --manifest-path "$manifest"
+            cargo +"$toolchain" clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+            rm -rf "$CARGO_TARGET_DIR"
+          done
+          test "$(git diff --name-only)" = "$TARGET_FILE"
+
+      - name: Commit validated tree and publish noncanonical result branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-remote origin "refs/heads/$RESULT_BRANCH" | awk '{print $1}')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET_FILE"
+          git diff --cached --check
+          git commit -m "fix(h02): satisfy Rust 1.98 strict Clippy"
+          printf 'subject=%s\nsubject_tree=%s\nresult_commit=%s\nresult_tree=%s\nfile=%s\n' \
+            "$SUBJECT_SHA" "$SUBJECT_TREE" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')" "$TARGET_FILE" \
+            | tee "$RUNNER_TEMP/v1.3.1-clippy-repair-result.txt"
+          git push origin "HEAD:refs/heads/$RESULT_BRANCH"
+
+      - name: Upload repair provenance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1.3.1-clippy-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.3.1-clippy-repair-result.txt
+          if-no-files-found: warn
+          retention-days: 30
