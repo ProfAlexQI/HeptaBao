@@ -1,0 +1,164 @@
+name: exec-h02-repair-67082
+
+on:
+  push:
+    branches: ["exec/h02-repair-67082-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-h02-repair-67082
+  cancel-in-progress: false
+
+env:
+  SOURCE_PARENT: 67082d64e48dfafcf782fd83c55650a7c23b1a62
+  SOURCE_TREE: 91d3e874aa7ded465e0c1d1a672f2b5efae2f790
+  RESULT_BRANCH: exec/h02-repair-result-v1
+
+jobs:
+  repair-format-verify-publish:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated execution source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Bind exact source parent and execution-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "$SOURCE_TREE"
+          test "$(git diff --name-only "$SOURCE_PARENT...HEAD")" = ".github/workflows/exec-h02-repair-67082.yml"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Restore executable legacy lifecycle coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("probes/h02/openraft-tokio/src/bin/durable_store_lab.rs")
+          text = path.read_text(encoding="utf-8")
+          anchor = '''        let snapshot_recovery_matches =
+            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
+                && snapshot_recovered.has_current_snapshot().await
+                && snapshot_recovered.generation().await > 1;
+
+        let corrupt_log_root = root.join("corrupt-log-copy");
+'''
+          replacement = '''        let snapshot_recovery_matches =
+            snapshot_recovered.get_state_machine().await.client_status == expected_snapshot_state
+                && snapshot_recovered.has_current_snapshot().await
+                && snapshot_recovered.generation().await > 1;
+
+        let legacy_log_root = root.join("legacy-log-adoption-copy");
+        copy_tree(&root.join("node-1").join("log"), &legacy_log_root)?;
+        fs::remove_file(legacy_log_root.join("initialized.bin"))?;
+        let legacy_log_task_root = legacy_log_root.clone();
+        let legacy_log_adopted =
+            spawn_blocking(move || DurableLogStore::adopt_legacy(legacy_log_task_root)).await??;
+        let legacy_log_adoption_matches = legacy_log_adopted.state_path().is_file()
+            && legacy_log_root.join("initialized.bin").is_file();
+
+        let legacy_state_root = root.join("legacy-state-adoption-copy");
+        copy_tree(
+            &root.join("node-1").join("state-machine"),
+            &legacy_state_root,
+        )?;
+        fs::remove_file(legacy_state_root.join("initialized.bin"))?;
+        let legacy_state_task_root = legacy_state_root.clone();
+        let expected_legacy_state = expected_after_restart.client_status.clone();
+        let legacy_state_adopted = spawn_blocking(move || {
+            DurableStateMachine::adopt_legacy(legacy_state_task_root)
+        })
+        .await??;
+        let legacy_state_adoption_matches = legacy_state_adopted.state_path().is_file()
+            && legacy_state_root.join("initialized.bin").is_file()
+            && legacy_state_adopted
+                .get_state_machine()
+                .await
+                .client_status
+                == expected_legacy_state;
+
+        let corrupt_log_root = root.join("corrupt-log-copy");
+'''
+          assert text.count(anchor) == 1, "snapshot recovery insertion anchor drift"
+          text = text.replace(anchor, replacement)
+
+          old_case = '''            case(
+                "durable-snapshot-state-atomic-generation-reopen",
+                snapshot_recovery_matches,
+                json!({"matches": snapshot_recovery_matches}),
+            ),
+'''
+          new_case = '''            case(
+                "durable-snapshot-state-atomic-generation-reopen",
+                snapshot_recovery_matches
+                    && legacy_log_adoption_matches
+                    && legacy_state_adoption_matches,
+                json!({
+                    "snapshot_matches": snapshot_recovery_matches,
+                    "legacy_log_adopted": legacy_log_adoption_matches,
+                    "legacy_state_adopted": legacy_state_adoption_matches,
+                }),
+            ),
+'''
+          assert text.count(old_case) == 1, "durable snapshot case anchor drift"
+          text = text.replace(old_case, new_case)
+
+          old_scope = '''                "snapshot_state_atomic_bundle_publish": true,
+                "state_publish_after_durable_write": true,
+                "full_cluster_disk_restart": true,
+'''
+          new_scope = '''                "snapshot_state_atomic_bundle_publish": true,
+                "state_publish_after_durable_write": true,
+                "explicit_legacy_adoption_executed": true,
+                "full_cluster_disk_restart": true,
+'''
+          assert text.count(old_scope) == 1, "durable scope anchor drift"
+          path.write_text(text.replace(old_scope, new_scope), encoding="utf-8")
+          PY
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - name: Format complete probe and verify effective-floor graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all
+          cargo +1.88.0 test --locked --all-targets --manifest-path "$manifest"
+          cargo +1.88.0 clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+      - name: Emit pure source commit with exact canonical parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/exec-h02-repair-67082.yml
+          git add -A
+          git diff --cached --check
+          test -z "$(git diff --cached --name-only | grep -v '^probes/h02/openraft-tokio/src/' || true)"
+          test -n "$(git diff --cached --name-only)"
+          tree="$(git write-tree)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          commit="$(printf '%s\n' 'fix(h02): restore lifecycle execution and exact probe formatting' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
+          test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$commit^{tree}")" = "$tree"
+          printf 'source_parent=%s\nresult_commit=%s\nresult_tree=%s\n' "$SOURCE_PARENT" "$commit" "$tree"
+          git push origin "$commit:refs/heads/$RESULT_BRANCH"
