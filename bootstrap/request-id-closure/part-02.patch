@@ -1,0 +1,58 @@
++- request-ID clones share one owned allocation; all safe `Debug` views redact the value and the final owned string is overwritten on last drop;
+ - parsed request bodies are overwritten when the request is dropped;
+ - the raw socket accumulation vector and fixed read buffer are overwritten on every controlled success or error return;
+ - `SecretBytes` rejects implicit cloning, redacts `Debug`, overwrites rejected constructor input and overwrites owned bytes on drop;
+ - in-memory KV paths use an owned redacted wrapper and overwrite their owned string buffer on entry removal or server-state drop;
+ - in-memory server-state `Debug` reports only initialized/sealed flags, KV entry count and generation; it never renders KV paths or values;
+-- P0 response bodies do not implement implicit `Clone`, are redacted in `Debug`, and are overwritten on drop;
++- P0 response bodies do not implement implicit `Clone`, are redacted in `Debug`, and are overwritten on drop; a process-local recovery-reference string is also overwritten on controlled drop;
+ - an old response body is overwritten before replacement after a response-audit failure;
+ - the rendered HTTP wire vector is overwritten after the write/flush attempt, whether delivery succeeds or fails;
+ - KV read JSON is assembled directly into the owned response vector rather than through a secret-bearing temporary `String`;
+@@ -118,7 +119,7 @@ Every response carries an exact `Content-Length`. HTTP 204 is represented as bod
+ - request, rejection, response-audit and response-delivery ordering;
+ - zero-byte HTTP 204 wire and library response;
+ - new absolute audit file and symlink rejection;
+-- request/response/server-state/Authbus diagnostic redaction;
++- request/response/server-state/request-ID/Authbus diagnostic redaction and client/internal request-ID namespace separation;
+ - raw unescaped quote rejection in the P0 JSON subset;
+ - explicit controlled-path overwrite markers for target, KV path, request, response, wire, digest-preimage and signature-payload buffers;
+ - process startup rejects missing/equal/weak credentials and non-loopback bind.
+diff --git a/docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md b/docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md
+index 2c4966a269bd5340ef8de39b6a3e780fa4557006..05b88f1799d42d4bd8107d58c7d94dcf13a92711 100644
+--- a/docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md
++++ b/docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md
+@@ -33,6 +33,7 @@ The patch must provide all of the following on one exact remote commit and tree:
+ 16. parsed headers, parsed request bodies, P0 response bodies, socket ingress buffers and rendered response wire buffers must not expose secret values through derived `Debug` or implicit `Clone`; owned byte buffers are overwritten on all controlled drop/return paths;
+ 17. the owned canonical target and in-memory KV path must use redacted diagnostic views and controlled overwrite on drop; Authbus canonical-target verification must not allocate a duplicate target string;
+ 18. P0 single-field JSON rejects raw unescaped quotes, Authbus request-binding/identity `Debug` is redacted, and the canonical request digest preimage and unsigned signature payload are overwritten immediately after their providers return, including provider failure.
++19. request IDs use one shared owned representation across clones, redact all safe `Debug` surfaces, overwrite their final owned value on drop, reserve the internal `p0-` namespace from client proposals, and overwrite temporary audit-line and recovery-reference copies on controlled release.
+ 
+ These are process-level best-effort controls. They do not claim compiler-proof zeroization, allocator page scrubbing, swap exclusion, core-dump prevention, locked memory or independent side-channel qualification.
+ 
+@@ -72,7 +73,8 @@ The exact binary and root unit suites must demonstrate:
+ - saturation and all other transport error responses use the same bounded absolute write path;
+ - the listener has no infallible per-connection thread creation path and a worker-allocation failure cannot leak capacity or panic the process;
+ - deadline equal to or before receipt is rejected as an invalid envelope rather than an ordinary timeout;
+-- request target, header values, body bytes, response bodies, Authbus subject and binding bytes are absent from safe `Debug` output;
++- request target, header values, body bytes, response bodies, live request IDs, Authbus subject and binding bytes are absent from safe `Debug` output;
++- client-proposed request IDs cannot enter the reserved internal `p0-` namespace or collide with server-generated attempt identities;
+ - canonical target, KV path, request, response, wire, digest-preimage and signature-payload owned buffers execute their explicit overwrite paths;
+ - Authbus canonical-target comparison does not construct a second target string;
+ - raw unescaped quotes are rejected by the bounded P0 JSON subset.
+diff --git a/docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md b/docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md
+index 9384b5481e982d30cf7cdcf0296c5f9199df4e82..b471a09796180ab08626c95aa8ceb973ce8c2a03 100644
+--- a/docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md
++++ b/docs/protocol/HEPTABAO_H03_PROTOCOL_CONTRACT_V1.md
+@@ -50,11 +50,11 @@ Every response uses a separate five-second absolute write deadline. Before each
+ 
+ ## Request identity
+ 
+-A P0 ingress allocates an attempt identity before parsing so malformed framing, Host mismatch and read failures remain auditable. An optional `X-HeptaBao-Request-Id` is syntax-checked and guarded against in-process duplicate use after successful parse and Host binding. This bounded development guard is not the Authbus HA replay authority; the production lifecycle is specified separately in `HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md`.
++A P0 ingress allocates an attempt identity before parsing so malformed framing, Host mismatch and read failures remain auditable. An optional `X-HeptaBao-Request-Id` is syntax-checked and guarded against in-process duplicate use after successful parse and Host binding. Client-proposed values may not begin with the reserved internal `p0-` prefix, preventing collision with server-generated attempt identities. This bounded development guard is not the Authbus HA replay authority; the production lifecycle is specified separately in `HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md`.
+ 
+ ## Secret-bearing request types
+ 
+-Header values are stored as owned byte vectors so their controlled destructor can overwrite the bytes. Header `Debug` renders names and counts only. `ParsedHttpRequest` and `RequestEnvelope` do not implement implicit cloning; their safe `Debug` output contains method, byte counts and timing metadata but never target text, header values or body bytes. Parsed request bodies are overwritten when the owned request is dropped.
++Header values are stored as owned byte vectors so their controlled destructor can overwrite the bytes. Header `Debug` renders names and counts only. `ParsedHttpRequest` and `RequestEnvelope` do not implement implicit cloning; their safe `Debug` output contains method, byte counts and timing metadata but never target text, header values or body bytes. `RequestId` clones share one owned allocation, render only a redacted diagnostic marker and overwrite the final owned string when the last clone is dropped. Parsed request bodies are overwritten when the owned request is dropped.
+ 
