@@ -1,0 +1,84 @@
+name: execute-v1.3.1-final-repository-closure-slim
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-1-final-repository-closure-slim-v1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: execute-v1.3.1-final-repository-closure-slim
+  cancel-in-progress: true
+
+jobs:
+  close:
+    runs-on: ubuntu-slim
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact audited executor source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: b0f9ed77d4754cbd27e05fe9dd6bb10b1a1afc9a
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Extract audited shell blocks without modification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/workflows/execute-v1.3.1-final-repository-closure-arm64.yml \
+            "$RUNNER_TEMP/audited-executor.yml"
+          python3 - "$RUNNER_TEMP/audited-executor.yml" "$RUNNER_TEMP" <<'PY'
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          output = Path(sys.argv[2])
+          blocks = []
+          index = 0
+          while index < len(source):
+              line = source[index]
+              if line.strip() != "run: |":
+                  index += 1
+                  continue
+              base = len(line) - len(line.lstrip())
+              index += 1
+              body = []
+              while index < len(source):
+                  candidate = source[index]
+                  if candidate.strip():
+                      indent = len(candidate) - len(candidate.lstrip())
+                      if indent <= base:
+                          break
+                      body.append(candidate[base + 2 :])
+                  else:
+                      body.append("")
+                  index += 1
+              blocks.append("\n".join(body) + "\n")
+          assert len(blocks) == 4, len(blocks)
+          for number, block in enumerate(blocks):
+              path = output / f"audited-step-{number}.sh"
+              path.write_text(block, encoding="utf-8")
+              path.chmod(0o700)
+          PY
+          sha256sum "$RUNNER_TEMP"/audited-step-*.sh
+
+      - name: Execute exact audited closure blocks
+        shell: bash
+        env:
+          TARGET_BRANCH: codex/plan-v1.3-gap-closure-v2
+          EXPECTED_TARGET_HEAD: 41245f24f09c67a3da76d1a37c119d447e41383c
+        run: |
+          set -euo pipefail
+          for step in 0 1 2 3; do
+            bash "$RUNNER_TEMP/audited-step-$step.sh"
+          done
