@@ -1,0 +1,58 @@
+ Canonical targets own their path and query strings, redact `Debug`, overwrite those owned strings on drop and can compare an input against the canonical representation without constructing an additional secret-bearing target string. Authbus request binding uses that allocation-free canonical comparison.
+ 
+diff --git a/docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md b/docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md
+index 84785cd5bf7d2f95fd3a59870dcc65a04202c651..49c277b5db3cd63b18064e724b5202783baa01bf 100644
+--- a/docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md
++++ b/docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md
+@@ -37,8 +37,9 @@ This delta covers the strict H03 protocol crate, the Authbus assertion contract
+ | Non-reading peer extends response lifetime | one absolute five-second response-write deadline; every partial write and final flush receives only the remaining duration | production backpressure, cancellation and async runtime integration remain unqualified |
+ | Per-connection thread resource exhaustion | 32-connection admission bound; fallible `thread::Builder` creation; spawn failure releases capacity, audits and closes | P0 still uses one native thread per admitted connection and is not a production scheduler |
+ | Deadline bypass or stale request dispatch | deadline must be strictly after receipt; receipt/deadline/actual-dispatch monotonic checks | distributed deadline propagation remains future work |
+-| Secret leakage through derived Debug or Clone | request/response/assertion/identity types remove implicit secret copies; request registry, server state, canonical target, KV path, replay state and Authbus identities use redacted diagnostic views | public accessors and explicit application copies remain possible and require review |
+-| Secret residue in owned user-space buffers | canonical target/query strings, KV path strings, header values, request body, raw ingress buffers, rejected credentials, response body, rendered wire, Authbus digest preimage and unsigned signature payload execute explicit overwrite paths | compiler elimination, allocator copies, kernel buffers, swap, dumps and page reuse remain unproven |
++| Secret leakage through derived Debug or Clone | request/response/assertion/identity types remove implicit secret copies; request-ID clones share one owned allocation; request ID, registry, server state, canonical target, KV path, replay state and Authbus identities use redacted diagnostic views | public accessors and explicit application copies remain possible and require review |
++| Client/internal request-ID namespace collision | the `p0-` namespace is reserved for server-generated attempt IDs and rejected on client proposals before registry insertion | production namespace/version negotiation and durable attempt-to-client-ID mapping remain future work |
++| Secret residue in owned user-space buffers | canonical target/query strings, KV path strings, request IDs, header values, request body, raw ingress buffers, rejected credentials, response body/recovery reference, formatted audit line, rendered wire, Authbus digest preimage and unsigned signature payload execute explicit overwrite paths | compiler elimination, allocator copies, kernel buffers, persistent audit output, swap, dumps and page reuse remain unproven |
+ | Audit bypass before mutation | body-policy and request audit are mandatory before dispatch; request-audit failure blocks mutation | production multi-device audit quorum is not implemented |
+ | Ambiguous retry after commit | post-commit audit failure returns committed=true plus recovery reference | durable idempotency ledger is not implemented in P0 |
+ | Audit path symlink attack | absolute create-new path and symlink/non-directory component rejection | pure-std path inspection has TOCTOU; descriptor-relative no-follow adapter required |
+@@ -52,7 +53,7 @@ This delta covers the strict H03 protocol crate, the Authbus assertion contract
+ 
+ ## Abuse cases
+ 
+-The following must fail closed: duplicate Host, body without canonical length, conflicting framing, malformed single-field JSON, raw unescaped quote, body on an empty-body operation, non-exact init body, encoded slash, unknown operation, equal/earlier deadline, expired request, byte-trickled request, non-reading response peer, connection-worker allocation failure, sealed secret access, missing/weak/equal development credentials, rejection-audit outage, request-audit outage, forged Authbus signature, key/issuer/audience mismatch, future/expired assertion, replayed nonce and any attempt to represent Authbus verification as authorization.
++The following must fail closed: duplicate Host, body without canonical length, conflicting framing, malformed single-field JSON, raw unescaped quote, body on an empty-body operation, non-exact init body, encoded slash, unknown operation, equal/earlier deadline, expired request, byte-trickled request, non-reading response peer, connection-worker allocation failure, a client request ID in the reserved `p0-` namespace, sealed secret access, missing/weak/equal development credentials, rejection-audit outage, request-audit outage, forged Authbus signature, key/issuer/audience mismatch, future/expired assertion, replayed nonce and any attempt to represent Authbus verification as authorization.
+ 
+ Diagnostic tests must prove that request targets, tokens, request bodies, KV paths/values, live request IDs, Authbus subjects, replay entries and canonical binding bytes are absent from safe `Debug` output. Source and exact-head tests must bind the controlled overwrite paths without representing them as compiler- or hardware-level zeroization proof.
+ 
+diff --git a/planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml b/planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml
+index ab6c0a99036c0fce7be5d4615f7f1e14ff95deb7..fc58ffb0d383f483d2de4fb127d6993504eb3809 100644
+--- a/planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml
++++ b/planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml
+@@ -81,6 +81,14 @@ cases:
+   vector: target/query and KV-path wrappers are redacted and overwritten on controlled drop
+   expected: BEST_EFFORT_CONTROLLED_PATH_OVERWRITE
+   production_qualification_effect: NONE
++- id: P0-TRANSPORT-015
++  title: request identity namespace and diagnostic lifetime are isolated
++  vector: client proposes reserved p0- identifier; RequestId clone/debug/drop and registry storage paths execute
++  expected_status: 400
++  expected_detail_code: client-request-id-reserved-prefix
++  expected_debug: REDACTED
++  expected_storage: SHARED_OWNED_VALUE_FINAL_DROP_OVERWRITE
++  production_qualification_effect: NONE
+ resource_bounds:
+   total_request_timeout_seconds: 5
+   total_response_write_timeout_seconds: 5
+diff --git a/planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml b/planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml
+index 5d7c4a6add70869253f4f5f925dab0efe8a1ee1d..d1f92ce03789952425a9b5202ed34a8f9424721a 100644
+--- a/planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml
++++ b/planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml
+@@ -27,6 +27,7 @@ repository_remediation:
+   owned_request_response_and_wire_buffer_hygiene: IMPLEMENTED_SOURCE
+   owned_target_and_kv_path_hygiene: IMPLEMENTED_SOURCE
+   authbus_binding_redaction_and_digest_preimage_hygiene: IMPLEMENTED_SOURCE
++  request_id_namespace_diagnostics_and_owned_lifetime_hygiene: IMPLEMENTED_SOURCE
+ execution_required:
+   plan_and_python: REQUIRED_EXACT_HEAD
+   root_rust_1_98_fmt_test_clippy: REQUIRED_EXACT_HEAD
