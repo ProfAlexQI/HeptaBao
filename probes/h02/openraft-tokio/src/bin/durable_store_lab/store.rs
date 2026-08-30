@@ -741,8 +741,7 @@ impl DurableStateMachine {
         let root = root.as_ref();
         require_real_directory(root, "state-machine store root")?;
         let bundle_path = root.join("state-bundle.bin");
-        let marker =
-            read_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?;
+        let marker = read_initialization_marker(root, STATE_MACHINE_DOMAIN, "state-bundle.bin")?;
         if marker.is_none() {
             return Err(invalid(
                 "state machine is not initialized; explicit legacy adoption is required",
@@ -778,7 +777,10 @@ impl DurableStateMachine {
             ));
         }
         recover_interrupted_replace(&bundle_path)?;
-        if !regular_file_status(&bundle_path, "legacy authoritative state-machine generation")? {
+        if !regular_file_status(
+            &bundle_path,
+            "legacy authoritative state-machine generation",
+        )? {
             return Err(invalid(
                 "legacy state machine has no authoritative generation",
             ));
@@ -971,10 +973,9 @@ pub fn flip_first_payload_byte(path: &Path) -> io::Result<()> {
 mod tests {
     use super::{
         DurableLogStore, DurableStateMachine, INITIALIZATION_MAGIC, INITIALIZATION_MARKER_FILE,
-        LOG_DOMAIN,
-        LOG_MAGIC, PersistentInitializationMarker, PersistentLogState, PersistentStateBundle,
-        RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC, flip_first_payload_byte,
-        read_json, write_json,
+        LOG_DOMAIN, LOG_MAGIC, PersistentInitializationMarker, PersistentLogState,
+        PersistentStateBundle, RaftLogStorage, RaftSnapshotBuilder, STATE_BUNDLE_MAGIC,
+        flip_first_payload_byte, read_json, write_json,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -1076,8 +1077,8 @@ mod tests {
         let root = root("create-nonempty");
         fs::create_dir_all(&root).expect("test root");
         fs::write(root.join("unexpected"), b"occupied").expect("occupy root");
-        let error = DurableLogStore::create(&root)
-            .expect_err("create-new must reject an occupied root");
+        let error =
+            DurableLogStore::create(&root).expect_err("create-new must reject an occupied root");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_dir_all(root);
     }
