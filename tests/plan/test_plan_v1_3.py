@@ -82,10 +82,11 @@ class PlanV13Tests(unittest.TestCase):
     def test_secret_derive_debug_rejected(self):
         validator = load_validator()
         text = validator.PROTOCOL.read_text(encoding="utf-8").replace(
-            "#[derive(Clone, Eq, PartialEq)]\npub struct SecretBytes",
+            "#[derive(Eq, PartialEq)]\npub struct SecretBytes",
             "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct SecretBytes",
             1,
         )
+        self.assertNotEqual(text, validator.PROTOCOL.read_text(encoding="utf-8"))
         temporary, path = temp_text(text, ".rs")
         self.addCleanup(temporary.cleanup)
         with self.assertRaises(validator.Failure):
