@@ -1,0 +1,75 @@
+name: exec-p0-transport-debug-67082
+
+on:
+  push:
+    branches: ["exec/p0-transport-debug-67082-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-p0-transport-debug-67082
+  cancel-in-progress: false
+
+env:
+  SOURCE_PARENT: 67082d64e48dfafcf782fd83c55650a7c23b1a62
+
+jobs:
+  p0-transport-debug:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated execution source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind exact source parent and execution-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_PARENT"
+          test "$(git diff --name-only "$SOURCE_PARENT...HEAD")" = ".github/workflows/exec-p0-transport-debug-67082.yml"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Install Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.98.0 --profile minimal
+      - name: Execute P0 exact transport diagnostics
+        shell: bash
+        env:
+          SOURCE_SHA: 67082d64e48dfafcf782fd83c55650a7c23b1a62
+          HEPTABAO_P0_BIND: 127.0.0.1:0
+          HEPTABAO_P0_DEV_TOKEN: v1-3-1-development-root-token-000001
+          HEPTABAO_P0_DEV_UNSEAL_KEY: v1-3-1-development-unseal-key-00001
+          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/p0-debug/audit.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/p0-debug"
+          cargo +1.98.0 run --quiet --locked -p heptabao-p0-server \
+            >"$RUNNER_TEMP/p0-debug/server.stdout" \
+            2>"$RUNNER_TEMP/p0-debug/server.stderr" &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+          python3 scripts/p0_transport_exact_v1.py \
+            --stderr "$RUNNER_TEMP/p0-debug/server.stderr" \
+            --audit "$HEPTABAO_P0_AUDIT_PATH" \
+            | tee "$RUNNER_TEMP/p0-debug/matrix.log"
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: p0-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p0-debug/
+          if-no-files-found: error
+          retention-days: 30
