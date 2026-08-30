@@ -1,0 +1,62 @@
+name: stage-v1.3.1-format-slim
+
+on:
+  push:
+    branches: ["tmp/v1.3.1-staging-input-v1"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stage-v1.3.1-format-slim
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    env:
+      INPUT_PARENT: 5d7cb85bdb6b2935ee206550af3b4b566e926c3e
+      PATCH_BASE: 077661e11fabaee29d149c5d14cb8a528b5a7077
+      PATCH_SHA256: 26fa7f8012e2f6f2edb2d1e91230ebfa812791d2b388866a4ab01b5d5a741014
+      OUTPUT_BRANCH: tmp/v1.3.1-reviewed-tree-v1
+    steps:
+      - name: Checkout exact input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Reconstruct, format and publish noncanonical tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$INPUT_PARENT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cat bootstrap/v1.3.1-reviewed-patch/part-*.b64 \
+            | tr -d '\r\n' \
+            | base64 --decode >"$RUNNER_TEMP/v1.3.1.patch.xz"
+          test "$(sha256sum "$RUNNER_TEMP/v1.3.1.patch.xz" | awk '{print $1}')" = "$PATCH_SHA256"
+          xz --decompress --stdout "$RUNNER_TEMP/v1.3.1.patch.xz" >"$RUNNER_TEMP/v1.3.1.patch"
+          git apply --index --whitespace=nowarn "$RUNNER_TEMP/v1.3.1.patch"
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          cargo +1.98.0 fmt --all
+          cargo +1.98.0 fmt --manifest-path probes/h02/openraft-tokio/Cargo.toml --all
+          git add -A
+          git restore --source="$PATCH_BASE" --staged --worktree \
+            .github/workflows/plan-v1.3.1-final-exact.yml
+          rm -f .github/workflows/plan-v1.3.1-merge-admission.yml
+          git add -A
+          test -z "$(git diff --cached --name-only HEAD | grep '^.github/workflows/' || true)"
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "stage(v1.3.1): rustfmt reviewed repository closure tree"
+          printf 'commit=%s\ntree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          git push --force origin "HEAD:refs/heads/$OUTPUT_BRANCH"
