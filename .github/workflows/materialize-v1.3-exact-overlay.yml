@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   materialize-validate-commit:
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - name: Checkout exact transport head
