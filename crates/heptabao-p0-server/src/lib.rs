@@ -90,10 +90,19 @@ impl AuditSink for MemoryAuditSink {
     }
 }
 
-#[derive(Debug)]
 pub struct FileAuditSink {
     path: PathBuf,
     file: File,
+}
+
+impl fmt::Debug for FileAuditSink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FileAuditSink")
+            .field("path", &"[REDACTED]")
+            .field("open", &true)
+            .finish()
+    }
 }
 
 fn ensure_directory_chain_is_safe(path: &Path) -> Result<(), AuditError> {
@@ -167,11 +176,21 @@ impl AuditSink for FileAuditSink {
     }
 }
 
-#[derive(Debug)]
 pub struct P0Server<A: AuditSink> {
     state: ServerState,
     credentials: DevelopmentCredentials,
     audit: A,
+}
+
+impl<A: AuditSink> fmt::Debug for P0Server<A> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("P0Server")
+            .field("state", &self.state)
+            .field("credentials", &"[REDACTED]")
+            .field("audit", &"[CONFIGURED]")
+            .finish()
+    }
 }
 
 struct ServerState {
@@ -555,7 +574,7 @@ impl<A: AuditSink> P0Server<A> {
             .filter_map(|key| key.strip_prefix(prefix))
             .filter_map(|suffix| suffix.strip_prefix('/'))
             .filter(|suffix| !suffix.is_empty())
-            .filter_map(|suffix| suffix.split('/').next())
+            .map(|suffix| suffix.split('/').next().unwrap_or(suffix))
             .collect::<BTreeSet<_>>();
         let body = keys
             .into_iter()
@@ -592,12 +611,18 @@ fn parse_secret_field(body: &[u8], required_key: &str) -> Result<SecretBytes, Bo
 }
 
 fn decode_json_string(value: &str) -> Result<Vec<u8>, BodyError> {
-    let mut output = Vec::with_capacity(value.len());
-    let mut bytes = value.bytes();
-    while let Some(byte) = bytes.next() {
+    let source = value.as_bytes();
+    let mut output = Vec::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        let byte = source[index];
         if byte == b'\\' {
-            let escaped = bytes.next().ok_or(BodyError::InvalidEscape)?;
-            match escaped {
+            index += 1;
+            if index >= source.len() {
+                output.fill(0);
+                return Err(BodyError::InvalidEscape);
+            }
+            match source[index] {
                 b'"' => output.push(b'"'),
                 b'\\' => output.push(b'\\'),
                 b'n' => output.push(b'\n'),
@@ -614,6 +639,7 @@ fn decode_json_string(value: &str) -> Result<Vec<u8>, BodyError> {
         } else {
             output.push(byte);
         }
+        index += 1;
     }
     if output.is_empty() {
         return Err(BodyError::EmptyValue);
@@ -925,6 +951,7 @@ mod tests {
             assert!(!rendered.contains("diagnostic-secret-path"));
             assert!(!rendered.contains("diagnostic-secret-value"));
             assert!(rendered.contains("kv_entries"));
+            assert!(!rendered.contains("MemoryAuditSink"));
         }
     }
 
@@ -952,6 +979,14 @@ mod tests {
         assert_eq!(
             parse_secret_field(br#"{"value":"alpha"tail"}"#, "value"),
             Err(BodyError::InvalidCharacter)
+        );
+    }
+
+    #[test]
+    fn trailing_escape_is_rejected() {
+        assert_eq!(
+            decode_json_string("alpha\\"),
+            Err(BodyError::InvalidEscape)
         );
     }
 
