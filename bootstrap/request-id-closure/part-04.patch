@@ -1,0 +1,173 @@
+diff --git a/scripts/validate_plan_v1_3_1.py b/scripts/validate_plan_v1_3_1.py
+index 8d8350f9cc58a80bb19ca90ff5c77607410ccaf4..924bd7b674abb8e58b9493f68b5e06f7f783a265 100755
+--- a/scripts/validate_plan_v1_3_1.py
++++ b/scripts/validate_plan_v1_3_1.py
+@@ -82,6 +82,7 @@ def validate(root: Path) -> None:
+         "owned_request_response_and_wire_buffer_hygiene",
+         "owned_target_and_kv_path_hygiene",
+         "authbus_binding_redaction_and_digest_preimage_hygiene",
++        "request_id_namespace_diagnostics_and_owned_lifetime_hygiene",
+     }
+     require(set(remediation) == expected_remediation, "repository remediation coverage drift")
+     require(
+@@ -170,6 +171,10 @@ def validate(root: Path) -> None:
+             "bytes.fill(0)",
+             "impl fmt::Debug for RequestIdRegistry",
+             "request_registry_debug_redacts_live_ids",
++            "BTreeMap<RequestId, Instant>",
++            'if raw.starts_with("p0-") {',
++            "client-request-id-reserved-prefix",
++            "client_request_id_cannot_use_internal_p0_namespace",
+         ],
+         "P0 transport source",
+     )
+@@ -185,6 +190,10 @@ def validate(root: Path) -> None:
+         "#[derive(Debug)]\nstruct RequestIdRegistry" not in main_source,
+         "request registry must not derive identifier-bearing Debug",
+     )
++    require(
++        "BTreeMap<String, Instant>" not in main_source,
++        "request registry must not duplicate live request IDs as plain strings",
++    )
+ 
+     protocol_source = read_text(root, "crates/heptabao-protocol/src/lib.rs")
+     require_tokens(
+@@ -199,6 +208,11 @@ def validate(root: Path) -> None:
+             "request_debug_redacts_path_header_values_and_body",
+             "value.fill(0)",
+             "body_bytes",
++            "pub struct RequestId(Arc<String>);",
++            "impl fmt::Debug for RequestId",
++            "impl Drop for RequestId",
++            "Arc::get_mut(&mut self.0)",
++            "request_id_debug_is_redacted_and_clones_share_one_owned_value",
+         ],
+         "protocol secret, target and deadline source",
+     )
+@@ -206,6 +220,7 @@ def validate(root: Path) -> None:
+         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct HeaderMap",
+         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ParsedHttpRequest",
+         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RequestEnvelope",
++        "#[derive(Clone, Debug, Eq, Hash, PartialEq)]\npub struct RequestId",
+     ]:
+         require(
+             forbidden not in protocol_source,
+@@ -235,6 +250,8 @@ def validate(root: Path) -> None:
+             "impl fmt::Debug for ServerState",
+             "server_debug_redacts_kv_paths_and_values",
+             "kv_entries",
++            "zeroize_string(&mut line)",
++            "zeroize_string(reference)",
+         ],
+         "P0 body, path and secret-response source",
+     )
+@@ -338,6 +355,8 @@ def validate(root: Path) -> None:
+             "connection-worker-spawn-failed",
+             "digest preimage",
+             "raw unescaped quotes",
++            "request IDs use one shared owned representation",
++            "reserved internal `p0-` namespace",
+         ],
+         "V1.3.1 plan",
+     )
+@@ -348,6 +367,8 @@ def validate(root: Path) -> None:
+             "128 bits",
+             "atomic operation claims the tuple",
+             "P0 registry is deliberately weaker",
++            "reserved for server-generated development attempt identities",
++            "shared owned storage for clones",
+             "Blind replay",
+         ],
+         "Authbus request-ID contract",
+@@ -360,6 +381,8 @@ def validate(root: Path) -> None:
+             "temporary unsigned assertion payload",
+             "Providers must not retain",
+             "diagnostic redaction",
++            "redacted request-ID marker",
++            "final owned value is overwritten",
+         ],
+         "Authbus integration contract",
+     )
+@@ -372,6 +395,8 @@ def validate(root: Path) -> None:
+             "Canonical targets own their path and query strings",
+             "raw unescaped quote",
+             "socket ingress also overwrites",
++            "RequestId` clones share one owned allocation",
++            "reserved internal `p0-` prefix",
+         ],
+         "protocol contract",
+     )
+@@ -386,6 +411,8 @@ def validate(root: Path) -> None:
+             "connection-worker-spawn-failed",
+             "absolute response-write deadline",
+             "operation-body-forbidden",
++            "client-request-id-reserved-prefix",
++            "temporary formatted audit line is overwritten",
+         ],
+         "P0 audit outcome contract",
+     )
+@@ -402,6 +429,8 @@ def validate(root: Path) -> None:
+             "rendered HTTP wire vector is overwritten",
+             "in-memory server-state `Debug`",
+             "unsigned signature payload vectors",
++            "request-ID clones share one owned allocation",
++            "reserved internal `p0-` prefix",
+         ],
+         "P0 execution contract",
+     )
+@@ -414,6 +443,8 @@ def validate(root: Path) -> None:
+             "Secret residue in owned user-space buffers",
+             "Malformed P0 JSON accepted as a secret value",
+             "unsigned signature payload",
++            "Client/internal request-ID namespace collision",
++            "live request IDs",
+         ],
+         "V1.3 threat model delta",
+     )
+@@ -421,12 +452,12 @@ def validate(root: Path) -> None:
+     matrix = read_yaml(root, "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
+     cases = matrix.get("cases")
+     require(
+-        isinstance(cases, list) and len(cases) == 14,
+-        "transport matrix must contain 14 cases",
++        isinstance(cases, list) and len(cases) == 15,
++        "transport matrix must contain 15 cases",
+     )
+     case_ids = [case.get("id") for case in cases if isinstance(case, dict)]
+     require(
+-        len(case_ids) == len(set(case_ids)) == 14,
++        len(case_ids) == len(set(case_ids)) == 15,
+         "transport matrix IDs must be unique",
+     )
+     require(
+@@ -435,6 +466,7 @@ def validate(root: Path) -> None:
+             "P0-TRANSPORT-012",
+             "P0-TRANSPORT-013",
+             "P0-TRANSPORT-014",
++            "P0-TRANSPORT-015",
+         }.issubset(set(case_ids)),
+         "final transport resource/body/lifetime cases missing",
+     )
+@@ -473,6 +505,9 @@ def validate(root: Path) -> None:
+             "cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings",
+             "scripts/validate_plan_v1_3_1.py",
+             "P0 transport exact-head contract PASS",
++            "p0-client-spoof-0001",
++            "client-request-id-reserved-prefix",
++            "operation-body-forbidden",
+             "scripts/h02_exact_head_matrix_v1.py",
+             "executed_entry_count",
+             "authority-sentinel",
+@@ -518,7 +553,7 @@ def main() -> int:
+         return 1
+     print(
+         "HeptaBao V1.3.1 gap-closure validation passed: "
+-        "18 repository remediations and 14 transport cases source-bound; "
++        "19 repository remediations and 15 transport cases source-bound; "
+         "exact-head and independent evidence required; qualification=false authority=NONE"
+     )
+     return 0
+diff --git a/tests/plan/test_plan_v1_3_1.py b/tests/plan/test_plan_v1_3_1.py
+index 70046a0c153e10380587b995b1d32a5fd468639a..d37b337be7ffb19fcbbced6bad94c7c5294b50c5 100644
+--- a/tests/plan/test_plan_v1_3_1.py
++++ b/tests/plan/test_plan_v1_3_1.py
