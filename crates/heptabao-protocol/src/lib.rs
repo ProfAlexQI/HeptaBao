@@ -92,6 +92,33 @@ fn zeroize_string(value: &mut String) {
     bytes.fill(0);
 }
 
+#[derive(Default)]
+struct SensitiveQueryMap(BTreeMap<String, String>);
+
+impl SensitiveQueryMap {
+    fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        self.0.insert(key, value);
+    }
+
+    fn into_pairs(mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.0).into_iter().collect()
+    }
+}
+
+impl Drop for SensitiveQueryMap {
+    fn drop(&mut self) {
+        let values = std::mem::take(&mut self.0);
+        for (mut name, mut value) in values {
+            zeroize_string(&mut name);
+            zeroize_string(&mut value);
+        }
+    }
+}
+
 #[derive(Eq, PartialEq)]
 pub struct CanonicalTarget {
     path: String,
@@ -212,7 +239,7 @@ fn parse_canonical_query(raw: Option<&str>) -> Result<Vec<(String, String)>, Pro
     if raw.is_empty() {
         return Err(ProtocolError::AmbiguousQuery);
     }
-    let mut values = BTreeMap::<String, String>::new();
+    let mut values = SensitiveQueryMap::default();
     for pair in raw.split('&') {
         let Some((name, value)) = pair.split_once('=') else {
             return Err(ProtocolError::AmbiguousQuery);
@@ -222,11 +249,12 @@ fn parse_canonical_query(raw: Option<&str>) -> Result<Vec<(String, String)>, Pro
         }
         validate_percent_encoding(name)?;
         validate_percent_encoding(value)?;
-        if values.insert(name.to_owned(), value.to_owned()).is_some() {
+        if values.contains_key(name) {
             return Err(ProtocolError::DuplicateQueryKey);
         }
+        values.insert(name.to_owned(), value.to_owned());
     }
-    Ok(values.into_iter().collect())
+    Ok(values.into_pairs())
 }
 
 fn validate_percent_encoding(value: &str) -> Result<(), ProtocolError> {
@@ -398,13 +426,12 @@ pub fn parse_http_request(input: &[u8]) -> Result<ParsedHttpRequest, ProtocolErr
             return Err(ProtocolError::InvalidHeader);
         }
         let canonical_name = name.to_ascii_lowercase();
-        if headers
-            .0
-            .insert(canonical_name, value.as_bytes().to_vec())
-            .is_some()
-        {
+        if headers.0.contains_key(&canonical_name) {
             return Err(ProtocolError::DuplicateHeader);
         }
+        headers
+            .0
+            .insert(canonical_name, value.as_bytes().to_vec());
     }
     if headers.get("host").is_none_or(str::is_empty) {
         return Err(ProtocolError::MissingHost);
