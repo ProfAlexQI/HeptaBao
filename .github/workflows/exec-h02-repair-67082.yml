@@ -206,14 +206,17 @@ jobs:
           rm -rf scripts/__pycache__
           git add -A
           git diff --cached --check
-          unexpected="$(git diff --cached --name-only | grep -v -E '^(probes/h02/openraft-tokio/src/|scripts/p0_transport_exact_v1.py$)' || true)"
+          changed="$(git diff --cached --name-only "$SOURCE_PARENT" | LC_ALL=C sort)"
+          unexpected="$(printf '%s\n' "$changed" | grep -v -E '^(probes/h02/openraft-tokio/src/|scripts/p0_transport_exact_v1.py$)' || true)"
           test -z "$unexpected"
-          test -n "$(git diff --cached --name-only)"
+          test -n "$changed"
           tree="$(git write-tree)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           commit="$(printf '%s\n' 'fix(v1.3.1): close P0 capacity recovery and H02 exact gates' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
           test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
           test "$(git rev-parse "$commit^{tree}")" = "$tree"
+          commit_files="$(git diff-tree --no-commit-id --name-only -r "$commit" | LC_ALL=C sort)"
+          test "$commit_files" = "$changed"
           printf 'source_parent=%s\nresult_commit=%s\nresult_tree=%s\n' "$SOURCE_PARENT" "$commit" "$tree"
           git push origin "$commit:refs/heads/$RESULT_BRANCH"
