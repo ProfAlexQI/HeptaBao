@@ -446,7 +446,7 @@ impl<A: AuditSink> P0Server<A> {
                 return P0Response {
                     status_code: 503,
                     body: format!(
-                        "{{\"errors\":[\"response audit failed after commit\"],\"recovery_reference\":\"{}\"}}",
+                        "{{\"errors\":[\"response audit failed after commit\"],\"committed\":true,\"recovery_reference\":\"{}\"}}",
                         escape_json(&reference)
                     )
                     .into_bytes(),
@@ -1234,6 +1234,8 @@ mod tests {
                 assert_eq!(response.status_code, 503);
                 assert!(response.committed);
                 assert!(response.recovery_reference.is_some());
+                assert!(String::from_utf8_lossy(&response.body).contains("\"committed\":true"));
+                assert!(String::from_utf8_lossy(&response.body).contains("\"recovery_reference\":"));
                 assert_eq!(server.generation(), 1);
             }
         }
