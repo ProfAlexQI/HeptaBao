@@ -1,0 +1,23 @@
+name: supersede-stale-v1-2-2-cf429
+
+on:
+  push:
+    branches:
+      - "exec/v1-2-2-cf429-exact-x64-v1"
+    paths:
+      - ".github/workflows/supersede-stale-v1-2-2-cf429.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: execute-v1-2-2-cf429-exact-x64
+  cancel-in-progress: true
+
+jobs:
+  release-stale-concurrency-slot:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Release stale concurrency slot
+        run: echo "superseded stale V1.2.2 exact-x64 execution without authority effect"
