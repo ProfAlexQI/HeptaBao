@@ -1,0 +1,136 @@
+name: execute-v1.3.1-final-repository-closure-windows-v2
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-1-final-repository-closure-windows-v2"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: execute-v1.3.1-final-repository-closure-windows-v2
+  cancel-in-progress: true
+
+env:
+  TARGET_BRANCH: codex/plan-v1.3-gap-closure-v2
+  EXPECTED_TARGET_HEAD: e3f351b23ba0ca51125ad3d5aad7273fe6b623fe
+
+jobs:
+  close:
+    runs-on: windows-2025
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact audited executor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Bind target lease and apply exact patch programs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $remoteLine = git ls-remote origin "refs/heads/$env:TARGET_BRANCH"
+          $remoteHead = ($remoteLine -split "\s+")[0]
+          if ($remoteHead -ne $env:EXPECTED_TARGET_HEAD) {
+            throw "target lease moved: $remoteHead"
+          }
+          Copy-Item bootstrap/v1.3.1-final-repository-closure/patch.py "$env:RUNNER_TEMP\patch.py"
+          Copy-Item bootstrap/v1.3.1-final-repository-closure/patch_e3f_delta.py "$env:RUNNER_TEMP\patch_e3f_delta.py"
+          git config core.autocrlf false
+          git checkout --detach $env:EXPECTED_TARGET_HEAD
+          git reset --hard $env:EXPECTED_TARGET_HEAD
+          if (git status --porcelain=v1 --untracked-files=all) {
+            throw "target checkout is not clean"
+          }
+          python "$env:RUNNER_TEMP\patch.py"
+          python "$env:RUNNER_TEMP\patch_e3f_delta.py"
+          $changed = @(git diff --name-only)
+          if ($changed.Count -eq 0) {
+            throw "patch produced no changes"
+          }
+          @'
+          import subprocess
+          from pathlib import Path
+          for relative in subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines():
+              path = Path(relative)
+              if path.is_file():
+                  path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+          '@ | python -
+          git diff --check
+          $workflowChanges = @(git diff --name-only -- ".github/workflows/**")
+          if ($workflowChanges.Count -ne 0) {
+            throw "target patch attempted to modify workflows"
+          }
+
+      - name: Execute plan and Python regression gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python scripts/validate_plan_v2.py
+          python scripts/validate_plan_v2_extensions.py
+          python scripts/validate_plan_v1_2.py
+          python scripts/validate_plan_v1_2_1.py
+          python scripts/validate_plan_v1_2_2.py
+          python scripts/validate_plan_v1_3.py
+          python scripts/validate_plan_v1_3_1.py
+          python scripts/validate_h01_h02_next_v1.py
+          python scripts/validate_h02_candidate_adapters_v1.py
+          python scripts/validate_h02_openraft_inmemory_cluster_v1.py
+          python scripts/validate_h02_openraft_fault_lab_v1.py
+          python scripts/validate_h02_blocker_closure_v1.py
+          python scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python -m unittest discover -s tests/oracle -p "test_*.py" -v
+          python -m unittest discover -s tests/platform -p "test_*.py" -v
+          python -m unittest discover -s tests/plan -p "test_*.py" -v
+
+      - name: Format test and lint root and OpenRaft graphs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          cargo +1.98.0 fmt --all
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          $manifest = "probes/h02/openraft-tokio/Cargo.toml"
+          cargo +1.98.0 fmt --manifest-path $manifest --all
+          foreach ($toolchain in @("1.88.0", "1.98.0")) {
+            $env:CARGO_TARGET_DIR = "$env:RUNNER_TEMP\openraft-target-$toolchain"
+            cargo "+$toolchain" test --locked --all-targets --manifest-path $manifest
+            cargo "+$toolchain" clippy --locked --all-targets --manifest-path $manifest -- -D warnings
+          }
+          git diff --check
+
+      - name: Commit ordinary source and fast-forward target
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git add -A
+          $workflowChanges = @(git diff --cached --name-only -- ".github/workflows/**")
+          if ($workflowChanges.Count -ne 0) {
+            throw "target commit contains workflow changes"
+          }
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(v1.3.1): close final repository-controlled gaps"
+          if (git status --porcelain=v1 --untracked-files=all) {
+            throw "post-commit tree is not clean"
+          }
+          $remoteLine = git ls-remote origin "refs/heads/$env:TARGET_BRANCH"
+          $remoteHead = ($remoteLine -split "\s+")[0]
+          if ($remoteHead -ne $env:EXPECTED_TARGET_HEAD) {
+            throw "target lease moved before push: $remoteHead"
+          }
+          git push origin "HEAD:refs/heads/$env:TARGET_BRANCH"
