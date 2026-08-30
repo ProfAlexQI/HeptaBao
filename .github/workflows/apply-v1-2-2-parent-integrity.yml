@@ -1,0 +1,104 @@
+name: apply-v1-2-2-parent-integrity
+
+on:
+  push:
+    branches: ["codex/tmp-v1.2.2-parent-integrity-v1"]
+    paths:
+      - ".github/workflows/apply-v1-2-2-parent-integrity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v1-2-2-parent-integrity
+  cancel-in-progress: false
+
+jobs:
+  materialize-verify-and-remove-transition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout exact staging head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind transition source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 668cfa2f6d6cee8d3cde239ca02890973374809a HEAD
+          test "$(git hash-object probes/h02/openraft-tokio/src/bin/durable_store_lab/store.rs)" = a4f90d29f981175637668f7fd44e758d6aa9c63c
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python3 -m py_compile scripts/apply_v1_2_2_parent_integrity.py
+
+      - name: Apply deterministic closure and remove transition surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_v1_2_2_parent_integrity.py
+          rm -f scripts/apply_v1_2_2_parent_integrity.py
+          rm -f .github/workflows/apply-v1-2-2-parent-integrity.yml
+          git diff --check
+
+      - name: Install exact Python validation dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Validate normative contracts and Python regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 scripts/validate_plan_v2.py
+          python3 scripts/validate_plan_v2_extensions.py
+          python3 scripts/validate_plan_v1_2.py
+          python3 scripts/validate_plan_v1_2_1.py
+          python3 scripts/validate_h02_exact_head_matrix_contract_v1.py
+          python3 scripts/validate_h02_blocker_closure_v1.py
+          python3 scripts/validate_h02_pr40_reconciliation_v1.py
+          python3 scripts/validate_plan_v1_2_2.py
+          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in 1.88.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          done
+
+      - name: Format test and lint exact Rust graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check
+          for toolchain in 1.88.0 1.98.0; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/openraft-parent-integrity-$toolchain"
+            cargo +"$toolchain" test --locked --all-targets --manifest-path "$manifest"
+            cargo +"$toolchain" clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings
+          done
+          git diff --check
+
+      - name: Commit verified materialized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e scripts/apply_v1_2_2_parent_integrity.py
+          test ! -e .github/workflows/apply-v1-2-2-parent-integrity.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(h02): fail closed on durable parent loss and legacy temp state"
+          git push origin HEAD:codex/tmp-v1.2.2-parent-integrity-v1
