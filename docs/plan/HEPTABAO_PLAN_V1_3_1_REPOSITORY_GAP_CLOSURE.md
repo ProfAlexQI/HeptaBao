@@ -25,11 +25,14 @@ The patch must provide all of the following on one exact remote commit and tree:
 8. legacy adoption that rejects unresolved authoritative-data temporary artifacts;
 9. one read-only exact-head workflow covering every workspace crate, plans, tests and H02 probes;
 10. machine-checked current status, transport test vectors, Authbus request-ID lifecycle and audit-outcome documentation;
-11. every transport rejection response must configure the bounded write deadline before any response bytes are written, including accept-loop capacity rejection;
-12. per-connection worker creation must use a fallible API; allocation failure releases the admission count, records `connection-worker-spawn-failed`, closes the connection and cannot panic the listener process;
-13. `deadline <= received_at` must be classified as `InvalidDeadline`, before clock-expiry evaluation, with an exact negative regression test;
-14. parsed headers, parsed request bodies, P0 response bodies, socket ingress buffers and rendered response wire buffers must not expose secret values through derived `Debug` or implicit `Clone`; owned byte buffers are overwritten on all controlled drop/return paths;
-15. P0 single-field JSON rejects raw unescaped quotes, Authbus request-binding/identity `Debug` is redacted, and the canonical request digest preimage is overwritten immediately after the digest provider returns, including provider failure.
+11. every transport rejection response must configure a bounded write deadline before any response bytes are written, including accept-loop capacity rejection;
+12. every response must share one absolute response-write deadline; partial write progress and the final flush consume the same deadline rather than restarting a per-call timeout;
+13. per-connection worker creation must use a fallible API; allocation failure releases the admission count, records `connection-worker-spawn-failed`, closes the connection and cannot panic the listener process;
+14. `deadline <= received_at` must be classified as `InvalidDeadline`, before clock-expiry evaluation, with an exact negative regression test;
+15. operation-specific body validation must reject ignored or non-exact bodies before authentication, request acceptance and dispatch, using the stable `operation-body-forbidden` detail code;
+16. parsed headers, parsed request bodies, P0 response bodies, socket ingress buffers and rendered response wire buffers must not expose secret values through derived `Debug` or implicit `Clone`; owned byte buffers are overwritten on all controlled drop/return paths;
+17. the owned canonical target and in-memory KV path must use redacted diagnostic views and controlled overwrite on drop; Authbus canonical-target verification must not allocate a duplicate target string;
+18. P0 single-field JSON rejects raw unescaped quotes, Authbus request-binding/identity `Debug` is redacted, and the canonical request digest preimage and unsigned signature payload are overwritten immediately after their providers return, including provider failure.
 
 These are process-level best-effort controls. They do not claim compiler-proof zeroization, allocator page scrubbing, swap exclusion, core-dump prevention, locked memory or independent side-channel qualification.
 
@@ -59,16 +62,19 @@ The exact binary and root unit suites must demonstrate:
 
 - loopback-only startup;
 - normal health/init/unseal/KV behavior;
+- init accepts exactly `{}` and ignored bodies fail closed before dispatch;
 - no body on HTTP 204;
 - duplicate Host and Host/listener mismatch rejection with audit evidence;
 - duplicate client request-ID rejection;
 - a partial request cannot remain connected past the total read deadline;
+- no response can remain in partial-write or flush progress past one absolute response-write deadline;
 - audit artifacts are non-empty and contain the expected stable detail codes;
-- saturation and all other transport error responses use a bounded write deadline;
+- saturation and all other transport error responses use the same bounded absolute write path;
 - the listener has no infallible per-connection thread creation path and a worker-allocation failure cannot leak capacity or panic the process;
 - deadline equal to or before receipt is rejected as an invalid envelope rather than an ordinary timeout;
 - request target, header values, body bytes, response bodies, Authbus subject and binding bytes are absent from safe `Debug` output;
-- request/response/wire/digest-preimage owned buffers execute their explicit overwrite paths;
+- canonical target, KV path, request, response, wire, digest-preimage and signature-payload owned buffers execute their explicit overwrite paths;
+- Authbus canonical-target comparison does not construct a second target string;
 - raw unescaped quotes are rejected by the bounded P0 JSON subset.
 
 ### Gate D — H02 exact-head

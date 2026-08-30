@@ -30,18 +30,19 @@ The current shared `AuditEvent` schema represents request rejection, request acc
 
 1. Parse or Host rejection is audited before the error response is written.
 2. If rejection audit fails, the response becomes 503 and states that rejection audit is unavailable.
-3. Every transport error response configures the absolute bounded write timeout before writing; failure to configure or complete the write closes the connection and never blocks admission indefinitely.
+3. Every normal and transport-error response uses one absolute response-write deadline. Before each partial write and the final flush, the remaining lifetime is recomputed; successful short writes cannot reset or extend the bound. Failure to configure or complete the write closes the connection and never blocks admission indefinitely.
 4. Per-connection worker creation uses a fallible interface. Failure releases the admission count, records `connection-worker-spawn-failed` against the attempt ID and closes the socket without dispatch.
-5. Request audit succeeds before any state mutation.
-6. Request-audit failure prevents dispatch and mutation.
-7. A successful mutating operation is marked committed before response-audit evaluation.
-8. Response-audit failure after commit returns 503 with `committed=true` and a recovery reference.
-9. A response delivery failure does not change a committed outcome and must not trigger an automatic retry.
-10. No audit event contains raw token, unseal key, secret value, signature, nonce or request body.
+5. Operation-specific body validation occurs before request acceptance and dispatch. A forbidden or non-exact body records `operation-body-forbidden`, `RequestRejected` and `NotAttempted`.
+6. Request audit succeeds before any state mutation.
+7. Request-audit failure prevents dispatch and mutation.
+8. A successful mutating operation is marked committed before response-audit evaluation.
+9. Response-audit failure after commit returns 503 with `committed=true` and a recovery reference.
+10. A response delivery failure does not change a committed outcome and must not trigger an automatic retry.
+11. No audit event contains raw token, unseal key, secret value, signature, nonce, request body, request target or KV path.
 
-## 5. Stable transport detail codes
+## 5. Stable transport and request detail codes
 
-The P0 transport uses bounded identifiers including:
+The P0 transport and request pipeline use bounded identifiers including:
 
 - `connection-capacity-exhausted`;
 - `connection-worker-spawn-failed`;
@@ -55,6 +56,7 @@ The P0 transport uses bounded identifiers including:
 - `protocol-duplicate-header`;
 - `protocol-transfer-encoding-forbidden`;
 - `protocol-content-length-mismatch`;
+- `operation-body-forbidden`;
 - `response-delivery-failed-before-commit`;
 - `response-delivery-failed-after-commit`.
 

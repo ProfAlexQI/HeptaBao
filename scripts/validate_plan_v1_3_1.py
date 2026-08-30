@@ -75,9 +75,12 @@ def validate(root: Path) -> None:
         "exact_head_consolidated_workflow",
         "machine_checked_v1_3_1_contract",
         "bounded_transport_rejection_writes",
+        "absolute_total_response_write_deadline",
         "connection_worker_spawn_fail_closed",
         "strict_invalid_deadline_and_json_string_validation",
+        "operation_specific_body_fail_closed",
         "owned_request_response_and_wire_buffer_hygiene",
+        "owned_target_and_kv_path_hygiene",
         "authbus_binding_redaction_and_digest_preimage_hygiene",
     }
     require(set(remediation) == expected_remediation, "repository remediation coverage drift")
@@ -154,6 +157,11 @@ def validate(root: Path) -> None:
             "record_transport_rejection",
             "response-delivery-failed-after-commit",
             "write_response_with_timeout",
+            "fn write_response_until(",
+            "checked_duration_since(Instant::now())",
+            "stream.write(&bytes[offset..])",
+            "set response flush timeout failed",
+            "response write deadline exceeded",
             "thread::Builder::new()",
             "connection-worker-spawn-failed",
             "spawn_failure_active.fetch_sub",
@@ -164,6 +172,10 @@ def validate(root: Path) -> None:
             "request_registry_debug_redacts_live_ids",
         ],
         "P0 transport source",
+    )
+    require(
+        "write_all(&bytes)" not in main_source,
+        "per-call write_all cannot prove one absolute response deadline",
     )
     require(
         "thread::spawn(" not in main_source,
@@ -178,6 +190,8 @@ def validate(root: Path) -> None:
     require_tokens(
         protocol_source,
         [
+            "impl Drop for CanonicalTarget",
+            "pub fn matches_canonical(&self, raw: &str) -> bool",
             "impl Drop for HeaderMap",
             "impl Drop for ParsedHttpRequest",
             "self.deadline <= self.received_at",
@@ -186,25 +200,35 @@ def validate(root: Path) -> None:
             "value.fill(0)",
             "body_bytes",
         ],
-        "protocol secret and deadline source",
+        "protocol secret, target and deadline source",
     )
     for forbidden in [
         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct HeaderMap",
         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ParsedHttpRequest",
         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RequestEnvelope",
     ]:
-        require(forbidden not in protocol_source, f"secret-bearing derived surface forbidden: {forbidden}")
+        require(
+            forbidden not in protocol_source,
+            f"secret-bearing derived surface forbidden: {forbidden}",
+        )
 
     p0_lib_source = read_text(root, "crates/heptabao-p0-server/src/lib.rs")
     require_tokens(
         p0_lib_source,
         [
+            "operation_body_is_valid(operation, &envelope.request.body)",
+            '"operation-body-forbidden"',
+            'Operation::SysInit => body == b"{}"',
+            "struct SecretPath(String);",
+            "impl Drop for SecretPath",
+            "BTreeMap<SecretPath, SecretBytes>",
             "impl Drop for P0Response",
             "response.body.fill(0)",
             "parse_secret_field",
             "byte == b'\"'",
             "append_json_string_bytes",
             "invalid_unescaped_quote_is_rejected",
+            "ignored_operation_bodies_fail_closed_before_dispatch",
             "body_bytes",
             "root_token.fill(0)",
             "unseal_key.fill(0)",
@@ -212,7 +236,14 @@ def validate(root: Path) -> None:
             "server_debug_redacts_kv_paths_and_values",
             "kv_entries",
         ],
-        "P0 secret-response source",
+        "P0 body, path and secret-response source",
+    )
+    require(
+        p0_lib_source.index(
+            "operation_body_is_valid(operation, &envelope.request.body)"
+        )
+        < p0_lib_source.index("let request_event = AuditEvent"),
+        "operation body validation must precede request acceptance audit and dispatch",
     )
     require(
         "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct P0Response" not in p0_lib_source,
@@ -228,19 +259,27 @@ def validate(root: Path) -> None:
         authbus_source,
         [
             "impl fmt::Debug for RequestBinding",
+            "canonical_target.matches_canonical(self.canonical_target)",
             "canonical_request.fill(0)",
             "payload.fill(0)",
             "[REDACTED_SUBJECT]",
             "request_binding_debug_redacts_target_host_and_body",
             "impl fmt::Debug for InMemoryReplayCache",
         ],
-        "Authbus diagnostic and provider-preimage source",
+        "Authbus canonical, diagnostic and provider-preimage source",
+    )
+    require(
+        "canonical_target.canonical_string() != self.canonical_target" not in authbus_source,
+        "Authbus canonical equality must not allocate a duplicate target string",
     )
     for forbidden in [
         "#[derive(Clone, Eq, PartialEq)]\npub struct AuthbusAssertion",
         "#[derive(Clone, Eq, PartialEq)]\npub struct VerifiedAuthbusIdentity",
     ]:
-        require(forbidden not in authbus_source, f"Authbus implicit identity copy forbidden: {forbidden}")
+        require(
+            forbidden not in authbus_source,
+            f"Authbus implicit identity copy forbidden: {forbidden}",
+        )
 
     durable_source = read_text(
         root,
@@ -293,6 +332,9 @@ def validate(root: Path) -> None:
             "Gate D",
             "Gate E",
             "bounded write deadline",
+            "absolute response-write deadline",
+            "operation-specific body validation",
+            "owned canonical target",
             "connection-worker-spawn-failed",
             "digest preimage",
             "raw unescaped quotes",
@@ -313,6 +355,7 @@ def validate(root: Path) -> None:
     require_tokens(
         authbus_contract,
         [
+            "without constructing another target string",
             "temporary canonical request byte vector is overwritten",
             "temporary unsigned assertion payload",
             "Providers must not retain",
@@ -324,7 +367,9 @@ def validate(root: Path) -> None:
         protocol_contract,
         [
             "deadline <= received_at",
+            "operation-specific",
             "Header values are stored as owned byte vectors",
+            "Canonical targets own their path and query strings",
             "raw unescaped quote",
             "socket ingress also overwrites",
         ],
@@ -336,20 +381,24 @@ def validate(root: Path) -> None:
             "Request-attempt identity",
             "REQUEST_REJECTED",
             "RESPONSE_DELIVERY_FAILED",
-            "Stable transport detail codes",
+            "Stable transport and request detail codes",
             "durable idempotency ledger",
             "connection-worker-spawn-failed",
-            "bounded write timeout",
+            "absolute response-write deadline",
+            "operation-body-forbidden",
         ],
         "P0 audit outcome contract",
     )
     require_tokens(
         p0_execution,
         [
-            "five-second socket write timeout",
+            "five-second absolute write lifetime",
+            "operation-body-forbidden",
             "fallibly created bounded worker",
             "connection-worker-spawn-failed",
             "Owned secret-material lifetime",
+            "canonical request targets",
+            "in-memory KV paths",
             "rendered HTTP wire vector is overwritten",
             "in-memory server-state `Debug`",
             "unsigned signature payload vectors",
@@ -359,6 +408,8 @@ def validate(root: Path) -> None:
     require_tokens(
         threat_model,
         [
+            "Operation/body confusion or ignored payload",
+            "Non-reading peer extends response lifetime",
             "Secret leakage through derived Debug or Clone",
             "Secret residue in owned user-space buffers",
             "Malformed P0 JSON accepted as a secret value",
@@ -370,17 +421,27 @@ def validate(root: Path) -> None:
     matrix = read_yaml(root, "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
     cases = matrix.get("cases")
     require(
-        isinstance(cases, list) and len(cases) == 12,
-        "transport matrix must contain 12 cases",
+        isinstance(cases, list) and len(cases) == 14,
+        "transport matrix must contain 14 cases",
     )
     case_ids = [case.get("id") for case in cases if isinstance(case, dict)]
     require(
-        len(case_ids) == len(set(case_ids)) == 12,
+        len(case_ids) == len(set(case_ids)) == 14,
         "transport matrix IDs must be unique",
     )
     require(
-        {"P0-TRANSPORT-011", "P0-TRANSPORT-012"}.issubset(set(case_ids)),
-        "final transport resource cases missing",
+        {
+            "P0-TRANSPORT-011",
+            "P0-TRANSPORT-012",
+            "P0-TRANSPORT-013",
+            "P0-TRANSPORT-014",
+        }.issubset(set(case_ids)),
+        "final transport resource/body/lifetime cases missing",
+    )
+    require(
+        matrix.get("resource_bounds", {}).get("response_write_deadline_mode")
+        == "ABSOLUTE_REMAINING_TIME_PER_WRITE_AND_FLUSH",
+        "response write deadline mode drift",
     )
     require(matrix.get("qualification") is False, "transport matrix cannot self-qualify")
     require(
@@ -388,6 +449,18 @@ def validate(root: Path) -> None:
         "transport matrix cannot claim compatibility",
     )
     require(matrix.get("authority_effect") == "NONE", "transport matrix authority drift")
+
+    residual_tests = read_text(root, "tests/plan/test_v1_3_1_residual_hardening.py")
+    require_tokens(
+        residual_tests,
+        [
+            "test_response_writer_uses_one_absolute_deadline",
+            "test_operation_body_policy_precedes_dispatch",
+            "test_sensitive_target_and_kv_path_lifetimes_are_controlled",
+            "test_transport_matrix_names_the_residual_closures",
+        ],
+        "V1.3.1 residual regression tests",
+    )
 
     workflow_path = ".github/workflows/plan-v1.3-gap-closure.yml"
     workflow = read_text(root, workflow_path)
@@ -445,8 +518,8 @@ def main() -> int:
         return 1
     print(
         "HeptaBao V1.3.1 gap-closure validation passed: "
-        "repository remediation source-bound; exact-head and independent evidence required; "
-        "qualification=false authority=NONE"
+        "18 repository remediations and 14 transport cases source-bound; "
+        "exact-head and independent evidence required; qualification=false authority=NONE"
     )
     return 0
 

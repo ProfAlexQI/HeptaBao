@@ -27,7 +27,7 @@ This prevents method/path/body/Host confusion and assertion reuse across request
 
 A production Authbus-capable client must create an unpredictable request ID before assertion issuance, present that same ID in `X-HeptaBao-Request-Id`, and send the exact request bytes represented by the canonical binding. A server-generated post-receive P0 attempt ID cannot be retroactively signed by Authbus. The complete acquisition, retry and HA forwarding sequence is normative in `HEPTABAO_AUTHBUS_REQUEST_ID_LIFECYCLE_V1.md`.
 
-`RequestBinding` safe `Debug` reports only the request ID, method and field byte counts; it does not render the target, Host or body. The temporary canonical request byte vector is overwritten immediately after the digest provider returns, before digest errors are propagated. The temporary unsigned assertion payload, which contains the subject and binding digest, is likewise overwritten immediately after the signature verifier returns and before verifier errors are propagated. Providers must not retain either borrowed preimage after returning.
+`RequestBinding` safe `Debug` reports only the request ID, method and field byte counts; it does not render the target, Host or body. The target parser verifies that the supplied text already equals its canonical form without constructing another target string. The temporary canonical request byte vector is overwritten immediately after the digest provider returns, before digest errors are propagated. The temporary unsigned assertion payload, which contains the subject and binding digest, is likewise overwritten immediately after the signature verifier returns and before verifier errors are propagated. Providers must not retain either borrowed preimage after returning.
 
 ## Time model
 
@@ -42,6 +42,7 @@ policy validation
 → assertion shape/version
 → issuer/audience/key allowlist
 → lifetime and current time
+→ canonical target equality without duplicate target allocation
 → canonical request digest
 → overwrite canonical digest preimage
 → signature verification
@@ -66,11 +67,12 @@ A production replay authority must atomically bind issuer, nonce, request ID, ca
 
 ## Memory and provider constraints
 
-Best-effort overwrite of the local digest and signature preimages does not prove that a digest/signature provider, compiler, allocator, process dump, swap device or kernel buffer retained no copy. Production providers must document ownership, copying, hardware boundaries, cancellation and memory-clearing behavior and must pass independent implementation and side-channel review.
+Best-effort overwrite of owned target/query strings and local digest/signature preimages does not prove that a digest/signature provider, compiler, allocator, process dump, swap device or kernel buffer retained no copy. Production providers must document ownership, copying, hardware boundaries, cancellation and memory-clearing behavior and must pass independent implementation and side-channel review.
 
 ## Required qualification cases
 
 - request ID, method, target, body and Host mismatch;
+- canonical-target comparison and cross-language byte equivalence without hidden normalization;
 - issuer, audience and key confusion;
 - expiry, future skew and clock rollback;
 - nonce/request-ID replay and concurrent duplicate races;

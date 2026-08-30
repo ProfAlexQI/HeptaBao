@@ -31,6 +31,7 @@ REQUIRED_FILES = [
     "docs/execution/HEPTABAO_P0_DEV_MEMORY_EXECUTION_CONTRACT_V1.md",
     "docs/security/HEPTABAO_V1_3_THREAT_MODEL_DELTA.md",
     "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml",
+    "tests/plan/test_v1_3_1_residual_hardening.py",
     ".github/workflows/plan-v1.3-gap-closure.yml",
 ]
 
@@ -89,6 +90,23 @@ class PlanV131Tests(unittest.TestCase):
             with self.assertRaises(MODULE.ValidationError):
                 MODULE.validate(target_root)
 
+    def test_remediation_coverage_drift_is_rejected(self) -> None:
+        status_path = ROOT / STATUS_PATH
+        status = yaml.safe_load(status_path.read_text(encoding="utf-8"))
+        mutated = copy.deepcopy(status)
+        del mutated["repository_remediation"]["operation_specific_body_fail_closed"]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            destination = target_root / STATUS_PATH
+            destination.write_text(
+                yaml.safe_dump(mutated, sort_keys=False),
+                encoding="utf-8",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
     def test_infallible_worker_spawn_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target_root = Path(temporary)
@@ -102,15 +120,28 @@ class PlanV131Tests(unittest.TestCase):
             with self.assertRaises(MODULE.ValidationError):
                 MODULE.validate(target_root)
 
-    def test_unbounded_rejection_write_is_rejected(self) -> None:
+    def test_absolute_response_deadline_removal_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target_root = Path(temporary)
             copy_validation_surface(target_root)
             mutate_text(
                 target_root,
                 "crates/heptabao-p0-server/src/main.rs",
-                "write_response_with_timeout",
-                "write_response_without_deadline",
+                "fn write_response_until(",
+                "fn write_response_without_absolute_deadline(",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_write_all_regression_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            mutate_text(
+                target_root,
+                "crates/heptabao-p0-server/src/main.rs",
+                "stream.write(&bytes[offset..])",
+                "stream.write_all(&bytes)",
             )
             with self.assertRaises(MODULE.ValidationError):
                 MODULE.validate(target_root)
@@ -124,6 +155,58 @@ class PlanV131Tests(unittest.TestCase):
                 "crates/heptabao-protocol/src/lib.rs",
                 "self.deadline <= self.received_at",
                 "self.deadline < self.received_at",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_operation_body_guard_removal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            mutate_text(
+                target_root,
+                "crates/heptabao-p0-server/src/lib.rs",
+                "operation_body_is_valid(operation, &envelope.request.body)",
+                "operation_body_is_ignored(operation, &envelope.request.body)",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_target_drop_guard_removal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            mutate_text(
+                target_root,
+                "crates/heptabao-protocol/src/lib.rs",
+                "impl Drop for CanonicalTarget",
+                "impl CanonicalTargetDropRemoved",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_kv_path_drop_guard_removal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            mutate_text(
+                target_root,
+                "crates/heptabao-p0-server/src/lib.rs",
+                "impl Drop for SecretPath",
+                "impl SecretPathDropRemoved",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_authbus_duplicate_target_allocation_regression_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            mutate_text(
+                target_root,
+                "crates/heptabao-authbus-contracts/src/lib.rs",
+                "canonical_target.matches_canonical(self.canonical_target)",
+                "canonical_target.canonical_string() == self.canonical_target",
             )
             with self.assertRaises(MODULE.ValidationError):
                 MODULE.validate(target_root)
@@ -215,6 +298,23 @@ class PlanV131Tests(unittest.TestCase):
                 "crates/heptabao-p0-server/src/lib.rs",
                 "|| byte == b'\"'",
                 "",
+            )
+            with self.assertRaises(MODULE.ValidationError):
+                MODULE.validate(target_root)
+
+    def test_transport_matrix_case_removal_is_rejected(self) -> None:
+        matrix_path = ROOT / "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml"
+        matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
+        mutated = copy.deepcopy(matrix)
+        mutated["cases"] = mutated["cases"][:-1]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary)
+            copy_validation_surface(target_root)
+            destination = target_root / "planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml"
+            destination.write_text(
+                yaml.safe_dump(mutated, sort_keys=False),
+                encoding="utf-8",
             )
             with self.assertRaises(MODULE.ValidationError):
                 MODULE.validate(target_root)

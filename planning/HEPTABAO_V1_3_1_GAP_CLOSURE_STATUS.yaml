@@ -20,9 +20,12 @@ repository_remediation:
   exact_head_consolidated_workflow: IMPLEMENTED_SOURCE
   machine_checked_v1_3_1_contract: IMPLEMENTED_SOURCE
   bounded_transport_rejection_writes: IMPLEMENTED_SOURCE
+  absolute_total_response_write_deadline: IMPLEMENTED_SOURCE
   connection_worker_spawn_fail_closed: IMPLEMENTED_SOURCE
   strict_invalid_deadline_and_json_string_validation: IMPLEMENTED_SOURCE
+  operation_specific_body_fail_closed: IMPLEMENTED_SOURCE
   owned_request_response_and_wire_buffer_hygiene: IMPLEMENTED_SOURCE
+  owned_target_and_kv_path_hygiene: IMPLEMENTED_SOURCE
   authbus_binding_redaction_and_digest_preimage_hygiene: IMPLEMENTED_SOURCE
 execution_required:
   plan_and_python: REQUIRED_EXACT_HEAD
