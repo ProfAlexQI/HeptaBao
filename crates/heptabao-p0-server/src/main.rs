@@ -1,16 +1,27 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::env;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use heptabao_p0_server::{DevelopmentCredentials, FileAuditSink, P0Response, P0Server};
-use heptabao_protocol::{
-    parse_http_request, MonotonicTick, ProtocolError, RequestEnvelope, RequestId,
+use heptabao_p0_server::{
+    AuditError, AuditSink, DevelopmentCredentials, FileAuditSink, P0Response, P0Server,
 };
+use heptabao_protocol::{
+    AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError, RequestEnvelope,
+    RequestId, parse_http_request,
+};
+
+const TOTAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+const REQUEST_ID_TTL: Duration = Duration::from_secs(60);
+const MAX_CLIENT_REQUEST_IDS: usize = 4096;
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -32,41 +43,104 @@ fn run() -> Result<(), String> {
     if !is_loopback(address.ip()) {
         return Err("P0 listener must bind to a loopback address".to_owned());
     }
+
     let token = env::var("HEPTABAO_P0_DEV_TOKEN")
         .map_err(|_| "HEPTABAO_P0_DEV_TOKEN is required".to_owned())?;
     let unseal_key = env::var("HEPTABAO_P0_DEV_UNSEAL_KEY")
         .map_err(|_| "HEPTABAO_P0_DEV_UNSEAL_KEY is required".to_owned())?;
     let audit_path = env::var("HEPTABAO_P0_AUDIT_PATH")
         .map_err(|_| "HEPTABAO_P0_AUDIT_PATH is required".to_owned())?;
+
     let credentials = DevelopmentCredentials::new(token.into_bytes(), unseal_key.into_bytes())
         .map_err(|error| error.to_string())?;
-    let audit = FileAuditSink::create_new(audit_path).map_err(|error| error.to_string())?;
-    let mut server = P0Server::new(credentials, audit);
+    let shared_audit = SharedAuditSink::new(
+        FileAuditSink::create_new(audit_path).map_err(|error| error.to_string())?,
+    );
+    let server = Arc::new(Mutex::new(P0Server::new(
+        credentials,
+        shared_audit.clone(),
+    )));
+    let request_ids = Arc::new(RequestIdRegistry::new(
+        MAX_CLIENT_REQUEST_IDS,
+        REQUEST_ID_TTL,
+    ));
+    let active_connections = Arc::new(AtomicUsize::new(0));
+
     let listener = TcpListener::bind(address).map_err(|error| format!("bind failed: {error}"))?;
     let local_address = listener
         .local_addr()
         .map_err(|error| format!("read local listener address failed: {error}"))?;
-    let expected_host = local_address.to_string();
+    let expected_host = Arc::new(local_address.to_string());
     let epoch = Instant::now();
+    let startup_id = startup_id()?;
+
     eprintln!(
         "HeptaBao P0 development server listening on \
          {local_address}; production_supported=false authority=NONE"
     );
+
     for incoming in listener.incoming() {
-        match incoming {
-            Ok(mut stream) => {
-                if let Err(error) = serve_one(&mut stream, &mut server, epoch, &expected_host) {
-                    let response = P0Response {
-                        status_code: 400,
-                        body: format!("{{\"errors\":[\"{}\"]}}", escape_json(&error)).into_bytes(),
-                        committed: false,
-                        recovery_reference: None,
-                    };
-                    let _ = write_response(&mut stream, &response);
-                }
+        let mut stream = match incoming {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("accept failed: {error}");
+                continue;
             }
-            Err(error) => eprintln!("accept failed: {error}"),
+        };
+        let attempt_id = next_request_id(&startup_id)?;
+        let previous = active_connections.fetch_add(1, Ordering::AcqRel);
+        if previous >= MAX_CONCURRENT_CONNECTIONS {
+            active_connections.fetch_sub(1, Ordering::AcqRel);
+            let status = if record_transport_rejection(
+                &shared_audit,
+                attempt_id.clone(),
+                503,
+                "connection-capacity-exhausted",
+            )
+            .is_ok()
+            {
+                503
+            } else {
+                503
+            };
+            let response = error_response(status, "connection capacity exhausted");
+            let _write_result = write_response(&mut stream, &response);
+            continue;
         }
+
+        let worker_server = Arc::clone(&server);
+        let worker_audit = shared_audit.clone();
+        let worker_ids = Arc::clone(&request_ids);
+        let worker_active = Arc::clone(&active_connections);
+        let worker_host = Arc::clone(&expected_host);
+        let _worker = thread::spawn(move || {
+            let _connection_guard = ConnectionGuard::new(worker_active);
+            if let Err(error) = serve_one(
+                &mut stream,
+                &worker_server,
+                &worker_audit,
+                &worker_ids,
+                epoch,
+                worker_host.as_str(),
+                attempt_id.clone(),
+            ) {
+                let audit_ok = record_transport_rejection(
+                    &worker_audit,
+                    attempt_id,
+                    error.status_code,
+                    error.detail_code,
+                )
+                .is_ok();
+                let status = if audit_ok { error.status_code } else { 503 };
+                let message = if audit_ok {
+                    error.message
+                } else {
+                    "transport rejection audit unavailable".to_owned()
+                };
+                let response = error_response(status, &message);
+                let _write_result = write_response(&mut stream, &response);
+            }
+        });
     }
     Ok(())
 }
@@ -75,100 +149,397 @@ fn is_loopback(address: IpAddr) -> bool {
     address.is_loopback()
 }
 
-fn serve_one<A: heptabao_p0_server::AuditSink>(
+#[derive(Clone, Debug)]
+struct SharedAuditSink {
+    inner: Arc<Mutex<FileAuditSink>>,
+}
+
+impl SharedAuditSink {
+    fn new(inner: FileAuditSink) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+}
+
+impl AuditSink for SharedAuditSink {
+    fn record(&mut self, event: &AuditEvent) -> Result<(), AuditError> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AuditError::InjectedFailure)?;
+        guard.record(event)
+    }
+}
+
+#[derive(Debug)]
+struct ConnectionGuard {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionGuard {
+    fn new(active: Arc<AtomicUsize>) -> Self {
+        Self { active }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Debug)]
+struct RequestIdRegistry {
+    entries: Mutex<BTreeMap<String, Instant>>,
+    max_entries: usize,
+    ttl: Duration,
+}
+
+impl RequestIdRegistry {
+    fn new(max_entries: usize, ttl: Duration) -> Self {
+        Self {
+            entries: Mutex::new(BTreeMap::new()),
+            max_entries,
+            ttl,
+        }
+    }
+
+    fn claim(&self, raw: &str, now: Instant) -> Result<RequestId, ServeError> {
+        let request_id = RequestId::new(raw.to_owned()).map_err(|error| ServeError {
+            status_code: 400,
+            detail_code: "client-request-id-invalid",
+            message: error.to_string(),
+        })?;
+        let mut entries = self.entries.lock().map_err(|_| ServeError {
+            status_code: 503,
+            detail_code: "request-id-registry-unavailable",
+            message: "request ID registry unavailable".to_owned(),
+        })?;
+        entries.retain(|_, expires_at| *expires_at > now);
+        if entries.contains_key(request_id.as_str()) {
+            return Err(ServeError {
+                status_code: 409,
+                detail_code: "client-request-id-replayed",
+                message: "client request ID was already used".to_owned(),
+            });
+        }
+        if entries.len() >= self.max_entries {
+            return Err(ServeError {
+                status_code: 503,
+                detail_code: "request-id-registry-saturated",
+                message: "request ID registry is saturated".to_owned(),
+            });
+        }
+        let expires_at = now.checked_add(self.ttl).ok_or_else(|| ServeError {
+            status_code: 503,
+            detail_code: "request-id-expiry-overflow",
+            message: "request ID expiry overflow".to_owned(),
+        })?;
+        entries.insert(request_id.as_str().to_owned(), expires_at);
+        Ok(request_id)
+    }
+}
+
+#[derive(Debug)]
+struct ServeError {
+    status_code: u16,
+    detail_code: &'static str,
+    message: String,
+}
+
+impl ServeError {
+    fn from_protocol(error: ProtocolError) -> Self {
+        Self {
+            status_code: protocol_status(error),
+            detail_code: protocol_detail_code(error),
+            message: error.to_string(),
+        }
+    }
+}
+
+fn serve_one(
     stream: &mut TcpStream,
-    server: &mut P0Server<A>,
+    server: &Arc<Mutex<P0Server<SharedAuditSink>>>,
+    audit: &SharedAuditSink,
+    request_ids: &RequestIdRegistry,
     epoch: Instant,
     expected_host: &str,
-) -> Result<(), String> {
+    attempt_id: RequestId,
+) -> Result<(), ServeError> {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .map_err(|error| format!("set read timeout failed: {error}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(5)))
-        .map_err(|error| format!("set write timeout failed: {error}"))?;
-    let received = tick(epoch)?;
-    let request = read_request(stream)?;
+        .set_write_timeout(Some(TOTAL_REQUEST_TIMEOUT))
+        .map_err(|error| ServeError {
+            status_code: 503,
+            detail_code: "socket-write-timeout-configuration-failed",
+            message: format!("set write timeout failed: {error}"),
+        })?;
+
+    let received = tick(epoch).map_err(internal_serve_error)?;
+    let read_deadline = Instant::now()
+        .checked_add(TOTAL_REQUEST_TIMEOUT)
+        .ok_or_else(|| internal_serve_error("request read deadline overflow".to_owned()))?;
+    let request = read_request(stream, read_deadline)?;
     if request.headers.get("host") != Some(expected_host) {
-        return Err("Host must exactly match the loopback listener address".to_owned());
+        return Err(ServeError {
+            status_code: 400,
+            detail_code: "host-listener-mismatch",
+            message: "Host must exactly match the loopback listener address".to_owned(),
+        });
     }
-    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let request_id = RequestId::new(format!("p0-{}-{sequence}", std::process::id()))
-        .map_err(|error| error.to_string())?;
+
+    let request_id = match request.headers.get("x-heptabao-request-id") {
+        Some(raw) => request_ids.claim(raw, Instant::now())?,
+        None => attempt_id,
+    };
+    let timeout_nanos = u64::try_from(TOTAL_REQUEST_TIMEOUT.as_nanos())
+        .map_err(|_| internal_serve_error("request timeout conversion overflow".to_owned()))?;
     let deadline = MonotonicTick(
         received
             .0
-            .checked_add(5_000_000_000)
-            .ok_or_else(|| "deadline overflow".to_owned())?,
+            .checked_add(timeout_nanos)
+            .ok_or_else(|| internal_serve_error("request deadline overflow".to_owned()))?,
     );
     let envelope = RequestEnvelope {
-        request_id,
+        request_id: request_id.clone(),
         request,
         received_at: received,
         deadline,
     };
-    let response = server.handle(envelope, tick(epoch)?);
-    write_response(stream, &response)
+    let now = tick(epoch).map_err(internal_serve_error)?;
+    let response = {
+        let mut guard = server.lock().map_err(|_| ServeError {
+            status_code: 503,
+            detail_code: "p0-state-lock-unavailable",
+            message: "P0 state lock unavailable".to_owned(),
+        })?;
+        guard.handle(envelope, now)
+    };
+
+    if let Err(error) = write_response(stream, &response) {
+        let _audit_result = record_transport_rejection(
+            audit,
+            request_id,
+            503,
+            if response.committed {
+                "response-delivery-failed-after-commit"
+            } else {
+                "response-delivery-failed-before-commit"
+            },
+        );
+        eprintln!("response delivery failed: {error}");
+    }
+    Ok(())
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<heptabao_protocol::ParsedHttpRequest, String> {
+fn read_request(
+    stream: &mut TcpStream,
+    absolute_deadline: Instant,
+) -> Result<heptabao_protocol::ParsedHttpRequest, ServeError> {
+    let max_total = heptabao_protocol::MAX_HTTP_HEAD_BYTES
+        + heptabao_protocol::MAX_HTTP_BODY_BYTES
+        + 4;
     let mut input = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
-        if input.len() > heptabao_protocol::MAX_HTTP_HEAD_BYTES
-            + heptabao_protocol::MAX_HTTP_BODY_BYTES
-            + 4
-        {
-            return Err("request exceeds P0 bounds".to_owned());
-        }
         match parse_http_request(&input) {
             Ok(request) => return Ok(request),
             Err(ProtocolError::IncompleteHead | ProtocolError::ContentLengthMismatch) => {}
-            Err(error) if !input.is_empty() => return Err(error.to_string()),
+            Err(error) if !input.is_empty() => return Err(ServeError::from_protocol(error)),
             Err(_) => {}
         }
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| format!("request read failed: {error}"))?;
+
+        let now = Instant::now();
+        let remaining = absolute_deadline
+            .checked_duration_since(now)
+            .ok_or_else(|| ServeError {
+                status_code: 408,
+                detail_code: "request-read-deadline-exceeded",
+                message: "request read deadline exceeded".to_owned(),
+            })?;
+        if remaining.is_zero() {
+            return Err(ServeError {
+                status_code: 408,
+                detail_code: "request-read-deadline-exceeded",
+                message: "request read deadline exceeded".to_owned(),
+            });
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| ServeError {
+                status_code: 503,
+                detail_code: "socket-read-timeout-configuration-failed",
+                message: format!("set read timeout failed: {error}"),
+            })?;
+
+        if input.len() >= max_total {
+            return Err(ServeError::from_protocol(ProtocolError::RequestTooLarge));
+        }
+        let capacity = (max_total - input.len()).min(buffer.len());
+        let count = match stream.read(&mut buffer[..capacity]) {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(ServeError {
+                    status_code: 408,
+                    detail_code: "request-read-deadline-exceeded",
+                    message: "request read deadline exceeded".to_owned(),
+                });
+            }
+            Err(error) => {
+                return Err(ServeError {
+                    status_code: 400,
+                    detail_code: "request-read-io-failed",
+                    message: format!("request read failed: {error}"),
+                });
+            }
+        };
         if count == 0 {
-            return parse_http_request(&input).map_err(|error| error.to_string());
+            return parse_http_request(&input)
+                .map_err(ServeError::from_protocol);
         }
         input.extend_from_slice(&buffer[..count]);
     }
 }
 
+fn record_transport_rejection(
+    audit: &SharedAuditSink,
+    request_id: RequestId,
+    status_code: u16,
+    detail_code: &'static str,
+) -> Result<(), AuditError> {
+    let mut sink = audit.clone();
+    sink.record(&AuditEvent {
+        request_id,
+        operation: None,
+        phase: AuditPhase::RequestRejected,
+        commit: CommitDisposition::NotAttempted,
+        status_code,
+        detail_code,
+    })
+}
+
+fn error_response(status_code: u16, message: &str) -> P0Response {
+    P0Response {
+        status_code,
+        body: format!("{{\"errors\":[\"{}\"]}}", escape_json(message)).into_bytes(),
+        committed: false,
+        recovery_reference: None,
+    }
+}
+
 fn write_response(stream: &mut TcpStream, response: &P0Response) -> Result<(), String> {
-    let reason = match response.status_code {
+    let bytes = render_response(response);
+    stream
+        .write_all(&bytes)
+        .and_then(|()| stream.flush())
+        .map_err(|error| format!("response write failed: {error}"))
+}
+
+fn render_response(response: &P0Response) -> Vec<u8> {
+    let body = if response.status_code == 204 {
+        &[][..]
+    } else {
+        response.body.as_slice()
+    };
+    let reason = status_reason(response.status_code);
+    let mut head = format!(
+        concat!(
+            "HTTP/1.1 {} {}\r\n",
+            "Content-Length: {}\r\n",
+            "Connection: close\r\n",
+            "X-HeptaBao-Profile: HB-P0-DEV-MEMORY\r\n",
+            "X-HeptaBao-Production-Supported: false\r\n"
+        ),
+        response.status_code,
+        reason,
+        body.len()
+    );
+    if !body.is_empty() {
+        head.push_str("Content-Type: application/json\r\n");
+    }
+    head.push_str("\r\n");
+    let mut wire = head.into_bytes();
+    wire.extend_from_slice(body);
+    wire
+}
+
+const fn status_reason(status_code: u16) -> &'static str {
+    match status_code {
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         408 => "Request Timeout",
+        409 => "Conflict",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
         _ => "Error",
-    };
-    let head = format!(
-        concat!(
-            "HTTP/1.1 {} {}\r\n",
-            "Content-Type: application/json\r\n",
-            "Content-Length: {}\r\n",
-            "Connection: close\r\n",
-            "X-HeptaBao-Profile: HB-P0-DEV-MEMORY\r\n",
-            "X-HeptaBao-Production-Supported: false\r\n",
-            "\r\n"
-        ),
-        response.status_code,
-        reason,
-        response.body.len()
-    );
-    stream
-        .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(&response.body))
-        .and_then(|()| stream.flush())
-        .map_err(|error| format!("response write failed: {error}"))
+    }
+}
+
+const fn protocol_status(error: ProtocolError) -> u16 {
+    match error {
+        ProtocolError::DeadlineExceeded => 408,
+        ProtocolError::UnknownOperation | ProtocolError::UnsupportedMethod => 404,
+        ProtocolError::RequestTooLarge
+        | ProtocolError::HeadTooLarge
+        | ProtocolError::BodyTooLarge => 413,
+        _ => 400,
+    }
+}
+
+const fn protocol_detail_code(error: ProtocolError) -> &'static str {
+    match error {
+        ProtocolError::RequestTooLarge => "protocol-request-too-large",
+        ProtocolError::HeadTooLarge => "protocol-head-too-large",
+        ProtocolError::BodyTooLarge => "protocol-body-too-large",
+        ProtocolError::IncompleteHead => "protocol-incomplete-head",
+        ProtocolError::BareLineFeed => "protocol-bare-line-feed",
+        ProtocolError::BareCarriageReturn => "protocol-bare-carriage-return",
+        ProtocolError::ControlCharacter => "protocol-control-character",
+        ProtocolError::NonUtf8Head => "protocol-non-utf8-head",
+        ProtocolError::NonAsciiHead => "protocol-non-ascii-head",
+        ProtocolError::InvalidRequestLine => "protocol-invalid-request-line",
+        ProtocolError::UnsupportedHttpVersion => "protocol-unsupported-http-version",
+        ProtocolError::UnsupportedMethod => "protocol-unsupported-method",
+        ProtocolError::InvalidTarget => "protocol-invalid-target",
+        ProtocolError::AmbiguousPath => "protocol-ambiguous-path",
+        ProtocolError::FragmentForbidden => "protocol-fragment-forbidden",
+        ProtocolError::InvalidPercentEncoding => "protocol-invalid-percent-encoding",
+        ProtocolError::NonCanonicalPercentEncoding => {
+            "protocol-noncanonical-percent-encoding"
+        }
+        ProtocolError::AmbiguousQuery => "protocol-ambiguous-query",
+        ProtocolError::DuplicateQueryKey => "protocol-duplicate-query-key",
+        ProtocolError::UnsupportedQuery => "protocol-unsupported-query",
+        ProtocolError::TooManyHeaders => "protocol-too-many-headers",
+        ProtocolError::InvalidHeader => "protocol-invalid-header",
+        ProtocolError::InvalidHeaderName => "protocol-invalid-header-name",
+        ProtocolError::NonCanonicalHeaderValue => "protocol-noncanonical-header-value",
+        ProtocolError::DuplicateHeader => "protocol-duplicate-header",
+        ProtocolError::MissingHost => "protocol-missing-host",
+        ProtocolError::TransferEncodingForbidden => "protocol-transfer-encoding-forbidden",
+        ProtocolError::InvalidContentLength => "protocol-invalid-content-length",
+        ProtocolError::ContentLengthMismatch => "protocol-content-length-mismatch",
+        ProtocolError::ContentLengthExceeded => "protocol-content-length-exceeded",
+        ProtocolError::UnknownOperation => "protocol-unknown-operation",
+        ProtocolError::InvalidDeadline => "protocol-invalid-deadline",
+        ProtocolError::DeadlineBudgetTooLarge => "protocol-deadline-budget-too-large",
+        ProtocolError::ClockRegression => "protocol-clock-regression",
+        ProtocolError::DeadlineExceeded => "protocol-deadline-exceeded",
+        ProtocolError::InvalidRequestId => "protocol-invalid-request-id",
+        ProtocolError::InvalidSecret => "protocol-invalid-secret",
+    }
 }
 
 fn tick(epoch: Instant) -> Result<MonotonicTick, String> {
@@ -177,10 +548,69 @@ fn tick(epoch: Instant) -> Result<MonotonicTick, String> {
     Ok(MonotonicTick(value))
 }
 
+fn startup_id() -> Result<String, String> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system time is before the Unix epoch".to_owned())?
+        .as_nanos();
+    Ok(format!("{}-{nanos:x}", std::process::id()))
+}
+
+fn next_request_id(startup_id: &str) -> Result<RequestId, String> {
+    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    RequestId::new(format!("p0-{startup_id}-{sequence:016x}")).map_err(|error| error.to_string())
+}
+
+fn internal_serve_error(message: String) -> ServeError {
+    ServeError {
+        status_code: 503,
+        detail_code: "internal-transport-failure",
+        message,
+    }
+}
+
 fn escape_json(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RequestIdRegistry, render_response};
+    use heptabao_p0_server::P0Response;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn no_content_response_never_emits_a_wire_body() {
+        let response = P0Response {
+            status_code: 204,
+            body: br#"{"unexpected":true}"#.to_vec(),
+            committed: true,
+            recovery_reference: None,
+        };
+        let wire = render_response(&response);
+        assert!(wire.starts_with(b"HTTP/1.1 204 No Content\r\n"));
+        assert!(wire.windows(19).any(|window| window == b"Content-Length: 0\r\n"));
+        assert!(wire.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn client_request_id_is_single_use_inside_the_p0_window() {
+        let registry = RequestIdRegistry::new(2, Duration::from_secs(60));
+        let now = Instant::now();
+        assert!(registry.claim("client-request-0001", now).is_ok());
+        let replay = registry.claim("client-request-0001", now);
+        assert!(replay.is_err());
+    }
+
+    #[test]
+    fn request_id_registry_fails_closed_when_saturated() {
+        let registry = RequestIdRegistry::new(1, Duration::from_secs(60));
+        let now = Instant::now();
+        assert!(registry.claim("client-request-0001", now).is_ok());
+        assert!(registry.claim("client-request-0002", now).is_err());
+    }
 }
