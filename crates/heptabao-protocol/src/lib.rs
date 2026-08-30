@@ -390,8 +390,7 @@ pub fn parse_http_request(input: &[u8]) -> Result<ParsedHttpRequest, ProtocolErr
         return Err(ProtocolError::HeadTooLarge);
     }
     validate_crlf(&input[..head_end + 4])?;
-    let head =
-        std::str::from_utf8(&input[..head_end]).map_err(|_| ProtocolError::NonUtf8Head)?;
+    let head = std::str::from_utf8(&input[..head_end]).map_err(|_| ProtocolError::NonUtf8Head)?;
     if !head.is_ascii() {
         return Err(ProtocolError::NonAsciiHead);
     }
@@ -420,8 +419,7 @@ pub fn parse_http_request(input: &[u8]) -> Result<ParsedHttpRequest, ProtocolErr
         {
             return Err(ProtocolError::NonCanonicalHeaderValue);
         }
-        if value.len() > MAX_HEADER_VALUE_BYTES
-            || value.bytes().any(|byte| byte.is_ascii_control())
+        if value.len() > MAX_HEADER_VALUE_BYTES || value.bytes().any(|byte| byte.is_ascii_control())
         {
             return Err(ProtocolError::InvalidHeader);
         }
@@ -429,9 +427,7 @@ pub fn parse_http_request(input: &[u8]) -> Result<ParsedHttpRequest, ProtocolErr
         if headers.0.contains_key(&canonical_name) {
             return Err(ProtocolError::DuplicateHeader);
         }
-        headers
-            .0
-            .insert(canonical_name, value.as_bytes().to_vec());
+        headers.0.insert(canonical_name, value.as_bytes().to_vec());
     }
     if headers.get("host").is_none_or(str::is_empty) {
         return Err(ProtocolError::MissingHost);
@@ -511,8 +507,20 @@ fn validate_header_name(name: &str) -> Result<(), ProtocolError> {
             !byte.is_ascii_alphanumeric()
                 && !matches!(
                     byte,
-                    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
-                        | b'^' | b'_' | b'`' | b'|' | b'~'
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
                 )
         })
     {
@@ -813,9 +821,7 @@ mod tests {
 
     #[test]
     fn duplicate_host_is_rejected() {
-        let result = request(
-            "GET /v1/sys/health HTTP/1.1\r\nHost: a\r\nhost: b\r\n\r\n",
-        );
+        let result = request("GET /v1/sys/health HTTP/1.1\r\nHost: a\r\nhost: b\r\n\r\n");
         assert_eq!(result, Err(ProtocolError::DuplicateHeader));
     }
 
@@ -868,8 +874,7 @@ mod tests {
     fn body_requires_exact_content_length() {
         assert!(request("POST /v1/sys/init HTTP/1.1\r\nHost: a\r\n\r\n{}").is_err());
         assert!(
-            request("POST /v1/sys/init HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\n{}")
-                .is_ok()
+            request("POST /v1/sys/init HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\n{}").is_ok()
         );
         assert_eq!(
             request("POST /v1/sys/init HTTP/1.1\r\nHost: a\r\nContent-Length: 1\r\n\r\n{}"),
@@ -947,9 +952,11 @@ mod tests {
     #[test]
     fn monotonic_duration_addition_fails_on_overflow() {
         let start = MonotonicTick::from_nanos(u64::MAX);
-        assert!(start
-            .checked_add_duration(Duration::from_nanos(1))
-            .is_none());
+        assert!(
+            start
+                .checked_add_duration(Duration::from_nanos(1))
+                .is_none()
+        );
     }
 
     #[test]

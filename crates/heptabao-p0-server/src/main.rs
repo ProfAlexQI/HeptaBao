@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::env;
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -16,8 +16,8 @@ use heptabao_p0_server::{
     AuditError, AuditSink, DevelopmentCredentials, FileAuditSink, P0Response, P0Server,
 };
 use heptabao_protocol::{
-    parse_http_request, AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError,
-    RequestEnvelope, RequestId,
+    AuditEvent, AuditPhase, CommitDisposition, MonotonicTick, ProtocolError, RequestEnvelope,
+    RequestId, parse_http_request,
 };
 
 const TOTAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -58,10 +58,7 @@ fn run() -> Result<(), String> {
     let shared_audit = SharedAuditSink::new(
         FileAuditSink::create_new(audit_path).map_err(|error| error.to_string())?,
     );
-    let server = Arc::new(Mutex::new(P0Server::new(
-        credentials,
-        shared_audit.clone(),
-    )));
+    let server = Arc::new(Mutex::new(P0Server::new(credentials, shared_audit.clone())));
     let request_ids = Arc::new(RequestIdRegistry::new(
         MAX_CLIENT_REQUEST_IDS,
         REQUEST_ID_TTL,
@@ -181,10 +178,7 @@ impl SharedAuditSink {
 
 impl AuditSink for SharedAuditSink {
     fn record(&mut self, event: &AuditEvent) -> Result<(), AuditError> {
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|_| AuditError::InjectedFailure)?;
+        let mut guard = self.inner.lock().map_err(|_| AuditError::InjectedFailure)?;
         guard.record(event)
     }
 }
@@ -363,9 +357,8 @@ fn read_request(
     stream: &mut TcpStream,
     absolute_deadline: Instant,
 ) -> Result<heptabao_protocol::ParsedHttpRequest, ServeError> {
-    let max_total = heptabao_protocol::MAX_HTTP_HEAD_BYTES
-        + heptabao_protocol::MAX_HTTP_BODY_BYTES
-        + 4;
+    let max_total =
+        heptabao_protocol::MAX_HTTP_HEAD_BYTES + heptabao_protocol::MAX_HTTP_BODY_BYTES + 4;
     let mut input = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
@@ -443,7 +436,7 @@ fn read_request(
     }
 }
 
-fn clear_request_buffers(input: &mut Vec<u8>, buffer: &mut [u8]) {
+fn clear_request_buffers(input: &mut [u8], buffer: &mut [u8]) {
     input.fill(0);
     buffer.fill(0);
 }
@@ -633,9 +626,7 @@ const fn protocol_detail_code(error: ProtocolError) -> &'static str {
         ProtocolError::AmbiguousPath => "protocol-ambiguous-path",
         ProtocolError::FragmentForbidden => "protocol-fragment-forbidden",
         ProtocolError::InvalidPercentEncoding => "protocol-invalid-percent-encoding",
-        ProtocolError::NonCanonicalPercentEncoding => {
-            "protocol-noncanonical-percent-encoding"
-        }
+        ProtocolError::NonCanonicalPercentEncoding => "protocol-noncanonical-percent-encoding",
         ProtocolError::AmbiguousQuery => "protocol-ambiguous-query",
         ProtocolError::DuplicateQueryKey => "protocol-duplicate-query-key",
         ProtocolError::UnsupportedQuery => "protocol-unsupported-query",
@@ -696,7 +687,7 @@ fn escape_json(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_response, RequestIdRegistry};
+    use super::{RequestIdRegistry, render_response};
     use heptabao_p0_server::P0Response;
     use std::time::{Duration, Instant};
 

@@ -598,7 +598,9 @@ impl<A: AuditSink> P0Server<A> {
             Ok(value) => value,
             Err(error) => return body_error_response(error),
         };
-        self.state.kv.insert(SecretPath::new(kv_key(target)), secret);
+        self.state
+            .kv
+            .insert(SecretPath::new(kv_key(target)), secret);
         self.state.generation = self.state.generation.saturating_add(1);
         P0Response::no_content(true)
     }
@@ -768,9 +770,7 @@ const fn protocol_detail_code(error: ProtocolError) -> &'static str {
         ProtocolError::AmbiguousPath => "protocol-ambiguous-path",
         ProtocolError::FragmentForbidden => "protocol-fragment-forbidden",
         ProtocolError::InvalidPercentEncoding => "protocol-invalid-percent-encoding",
-        ProtocolError::NonCanonicalPercentEncoding => {
-            "protocol-noncanonical-percent-encoding"
-        }
+        ProtocolError::NonCanonicalPercentEncoding => "protocol-noncanonical-percent-encoding",
         ProtocolError::AmbiguousQuery => "protocol-ambiguous-query",
         ProtocolError::DuplicateQueryKey => "protocol-duplicate-query-key",
         ProtocolError::UnsupportedQuery => "protocol-unsupported-query",
@@ -872,7 +872,7 @@ impl Error for P0Error {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use heptabao_protocol::{parse_http_request, MonotonicTick, RequestEnvelope, RequestId};
+    use heptabao_protocol::{MonotonicTick, RequestEnvelope, RequestId, parse_http_request};
 
     fn credentials() -> Result<DevelopmentCredentials, P0Error> {
         DevelopmentCredentials::new(
@@ -906,7 +906,8 @@ mod tests {
         let unseal = envelope(
             &format!(
                 "POST /v1/sys/unseal HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             ),
             "request-unseal-helper-0001",
         )?;
@@ -957,7 +958,8 @@ mod tests {
             let write = envelope(
                 &format!(
                     "POST /v1/secret/example HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 ),
                 "request-write-0001",
             );
@@ -980,11 +982,13 @@ mod tests {
                 assert!(!format!("{response:?}").contains("alpha"));
             }
             assert_eq!(server.audit().events().len(), 8);
-            assert!(server
-                .audit()
-                .events()
-                .iter()
-                .any(|event| event.detail_code == "response-committed"));
+            assert!(
+                server
+                    .audit()
+                    .events()
+                    .iter()
+                    .any(|event| event.detail_code == "response-committed")
+            );
         }
     }
 
@@ -997,7 +1001,8 @@ mod tests {
             let write = envelope(
                 &format!(
                     "POST /v1/secret/diagnostic-secret-path HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 ),
                 "request-debug-0001",
             );
@@ -1022,7 +1027,8 @@ mod tests {
             let write = envelope(
                 &format!(
                     "POST /v1/secret/folder/private-child HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Vault-Token: development-root-token-0001\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 ),
                 "request-list-write-0001",
             );
@@ -1101,7 +1107,8 @@ mod tests {
             let init = envelope(
                 &format!(
                     "POST /v1/sys/init HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 ),
                 "request-init-body-policy-0001",
             );
@@ -1132,10 +1139,7 @@ mod tests {
 
     #[test]
     fn trailing_escape_is_rejected() {
-        assert_eq!(
-            decode_json_string("alpha\\"),
-            Err(BodyError::InvalidEscape)
-        );
+        assert_eq!(decode_json_string("alpha\\"), Err(BodyError::InvalidEscape));
     }
 
     #[test]
@@ -1211,8 +1215,9 @@ mod tests {
             if let Ok(read) = read {
                 let response = server.handle(read, MonotonicTick(20));
                 assert_eq!(response.status_code, 503);
-                assert!(String::from_utf8_lossy(&response.body)
-                    .contains("rejection audit unavailable"));
+                assert!(
+                    String::from_utf8_lossy(&response.body).contains("rejection audit unavailable")
+                );
                 assert_eq!(server.generation(), 0);
             }
         }
@@ -1235,7 +1240,9 @@ mod tests {
                 assert!(response.committed);
                 assert!(response.recovery_reference.is_some());
                 assert!(String::from_utf8_lossy(&response.body).contains("\"committed\":true"));
-                assert!(String::from_utf8_lossy(&response.body).contains("\"recovery_reference\":"));
+                assert!(
+                    String::from_utf8_lossy(&response.body).contains("\"recovery_reference\":")
+                );
                 assert_eq!(server.generation(), 1);
             }
         }
@@ -1243,10 +1250,8 @@ mod tests {
 
     #[test]
     fn file_audit_requires_new_absolute_non_symlink_path() {
-        let root = std::env::temp_dir().join(format!(
-            "heptabao-p0-audit-test-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("heptabao-p0-audit-test-{}", std::process::id()));
         let _remove_result = fs::remove_dir_all(&root);
         assert!(fs::create_dir_all(&root).is_ok());
         let relative = FileAuditSink::create_new("relative-audit.log");

@@ -14,7 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Mutex;
 
-use heptabao_protocol::{CanonicalTarget, Method, RequestId, MAX_HTTP_BODY_BYTES};
+use heptabao_protocol::{CanonicalTarget, MAX_HTTP_BODY_BYTES, Method, RequestId};
 
 pub const MAX_ASSERTION_TTL_SECONDS: u64 = 30;
 pub const MAX_CLOCK_SKEW_SECONDS: u64 = 5;
@@ -233,8 +233,7 @@ pub fn verify_bound_assertion(
     if assertion.version != 1 {
         return Err(AuthbusError::UnsupportedAssertionVersion);
     }
-    if assertion.issuer != policy.required_issuer
-        || assertion.audience != policy.required_audience
+    if assertion.issuer != policy.required_issuer || assertion.audience != policy.required_audience
     {
         return Err(AuthbusError::IssuerOrAudienceMismatch);
     }
@@ -466,7 +465,9 @@ mod tests {
             let mut output = [0_u8; 32];
             for (index, byte) in input.iter().copied().enumerate() {
                 let slot = index % output.len();
-                output[slot] = output[slot].wrapping_add(byte).rotate_left((slot % 7) as u32);
+                output[slot] = output[slot]
+                    .wrapping_add(byte)
+                    .rotate_left((slot % 7) as u32);
             }
             if output == [0; 32] {
                 return Err(AuthbusError::DigestProviderFailure);
