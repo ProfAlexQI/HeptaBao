@@ -1,0 +1,486 @@
+name: exec-v1-3-1-deterministic-binding-077661
+
+on:
+  push:
+    branches: ["exec/v1-3-1-deterministic-binding-077661-v1"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1-3-1-deterministic-binding-077661
+  cancel-in-progress: false
+
+env:
+  SOURCE_PARENT: 077661e11fabaee29d149c5d14cb8a528b5a7077
+  SOURCE_TREE: cf66532e1cede8425b26cec0488b952986a5d107
+  RESULT_BRANCH: exec/v1-3-1-deterministic-binding-result-v1
+
+jobs:
+  patch-validate-publish:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated execution source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact canonical parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$SOURCE_PARENT^{tree}")" = "$SOURCE_TREE"
+          test "$(git diff --name-only "$SOURCE_PARENT...HEAD")" = ".github/workflows/exec-v1-3-1-deterministic-binding-077661.yml"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Apply deterministic-capacity and evidence-binding patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_one(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              assert text.count(old) == 1, f"{label} anchor count={text.count(old)}"
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          main = Path("crates/heptabao-p0-server/src/main.rs")
+          replace_one(
+              main,
+              "const REQUEST_ID_TTL: Duration = Duration::from_secs(60);\nconst MAX_CLIENT_REQUEST_IDS: usize = 4096;\n",
+              "const REQUEST_ID_TTL: Duration = Duration::from_secs(60);\nconst MAX_CLIENT_REQUEST_IDS: usize = 4096;\nconst MIN_CONFIGURED_CLIENT_REQUEST_IDS: usize = 16;\n",
+              "P0 capacity constants",
+          )
+          replace_one(
+              main,
+              "    let audit_path = env::var(\"HEPTABAO_P0_AUDIT_PATH\")\n        .map_err(|_| \"HEPTABAO_P0_AUDIT_PATH is required\".to_owned())?;\n\n    let credentials = DevelopmentCredentials::new(token.into_bytes(), unseal_key.into_bytes())\n",
+              "    let audit_path = env::var(\"HEPTABAO_P0_AUDIT_PATH\")\n        .map_err(|_| \"HEPTABAO_P0_AUDIT_PATH is required\".to_owned())?;\n    let max_client_request_ids = configured_client_request_id_capacity()?;\n\n    let credentials = DevelopmentCredentials::new(token.into_bytes(), unseal_key.into_bytes())\n",
+              "P0 configured capacity load",
+          )
+          replace_one(
+              main,
+              "    let request_ids = Arc::new(RequestIdRegistry::new(\n        MAX_CLIENT_REQUEST_IDS,\n        REQUEST_ID_TTL,\n    ));\n",
+              "    let request_ids = Arc::new(RequestIdRegistry::new(\n        max_client_request_ids,\n        REQUEST_ID_TTL,\n    ));\n",
+              "P0 registry construction",
+          )
+          replace_one(
+              main,
+              "    eprintln!(\n        \"HeptaBao P0 development server listening on \\\n         {local_address}; production_supported=false authority=NONE\"\n    );\n",
+              "    eprintln!(\n        \"HeptaBao P0 development server listening on \\\n         {local_address}; production_supported=false authority=NONE \\\n         request_id_capacity={max_client_request_ids}\"\n    );\n",
+              "P0 startup capacity evidence",
+          )
+          replace_one(
+              main,
+              "fn is_loopback(address: IpAddr) -> bool {\n    address.is_loopback()\n}\n\n#[derive(Clone, Debug)]\nstruct SharedAuditSink {\n",
+              dedent('''\
+              fn is_loopback(address: IpAddr) -> bool {
+                  address.is_loopback()
+              }
+
+              fn configured_client_request_id_capacity() -> Result<usize, String> {
+                  let raw = env::var("HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY").ok();
+                  parse_client_request_id_capacity(raw.as_deref())
+              }
+
+              fn parse_client_request_id_capacity(raw: Option<&str>) -> Result<usize, String> {
+                  let Some(raw) = raw else {
+                      return Ok(MAX_CLIENT_REQUEST_IDS);
+                  };
+                  if raw.is_empty()
+                      || !raw.bytes().all(|byte| byte.is_ascii_digit())
+                      || (raw.len() > 1 && raw.starts_with('0'))
+                  {
+                      return Err(
+                          "HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY must be canonical decimal"
+                              .to_owned(),
+                      );
+                  }
+                  let value = raw.parse::<usize>().map_err(|_| {
+                      "HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY is outside usize".to_owned()
+                  })?;
+                  if !(MIN_CONFIGURED_CLIENT_REQUEST_IDS..=MAX_CLIENT_REQUEST_IDS).contains(&value)
+                  {
+                      return Err(format!(
+                          "HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY must be between {} and {}",
+                          MIN_CONFIGURED_CLIENT_REQUEST_IDS, MAX_CLIENT_REQUEST_IDS
+                      ));
+                  }
+                  Ok(value)
+              }
+
+              #[derive(Clone, Debug)]
+              struct SharedAuditSink {
+              '''),
+              "P0 capacity parser",
+          )
+          replace_one(
+              main,
+              "    use super::{RequestIdRegistry, render_response};\n",
+              "    use super::{\n        MAX_CLIENT_REQUEST_IDS, MIN_CONFIGURED_CLIENT_REQUEST_IDS, RequestIdRegistry,\n        parse_client_request_id_capacity, render_response,\n    };\n",
+              "P0 test imports",
+          )
+          replace_one(
+              main,
+              "    #[test]\n    fn request_id_registry_fails_closed_when_saturated() {\n        let registry = RequestIdRegistry::new(1, Duration::from_secs(60));\n        let now = Instant::now();\n        assert!(registry.claim(\"client-request-0001\", now).is_ok());\n        assert!(registry.claim(\"client-request-0002\", now).is_err());\n    }\n}\n",
+              dedent('''\
+                  #[test]
+                  fn request_id_registry_fails_closed_when_saturated() {
+                      let registry = RequestIdRegistry::new(1, Duration::from_secs(60));
+                      let now = Instant::now();
+                      assert!(registry.claim("client-request-0001", now).is_ok());
+                      assert!(registry.claim("client-request-0002", now).is_err());
+                  }
+
+                  #[test]
+                  fn configured_request_id_capacity_is_canonical_bounded_and_default_safe() {
+                      assert_eq!(
+                          parse_client_request_id_capacity(None),
+                          Ok(MAX_CLIENT_REQUEST_IDS)
+                      );
+                      assert_eq!(
+                          parse_client_request_id_capacity(Some("256")),
+                          Ok(256)
+                      );
+                      assert!(parse_client_request_id_capacity(Some("0256")).is_err());
+                      assert!(parse_client_request_id_capacity(Some("0")).is_err());
+                      assert!(
+                          parse_client_request_id_capacity(Some(
+                              &(MIN_CONFIGURED_CLIENT_REQUEST_IDS - 1).to_string()
+                          ))
+                          .is_err()
+                      );
+                      assert!(
+                          parse_client_request_id_capacity(Some(
+                              &(MAX_CLIENT_REQUEST_IDS + 1).to_string()
+                          ))
+                          .is_err()
+                      );
+                  }
+              }
+              '''),
+              "P0 capacity tests",
+          )
+
+          runner = Path("scripts/p0_transport_exact_v1.py")
+          replace_one(
+              runner,
+              "MAX_CLIENT_REQUEST_IDS = 4096\nMAX_CLIENT_REQUEST_IDS = 4096\n" if False else "MAX_CLIENT_REQUEST_IDS = 4096\nSATURATION_WORKERS = 24\n",
+              "MAX_CLIENT_REQUEST_IDS = 4096\nMIN_CONFIGURED_CLIENT_REQUEST_IDS = 16\nSATURATION_WORKERS = 24\n",
+              "P0 runner capacity constants",
+          )
+          replace_one(
+              runner,
+              "def fill_request_id_registry(\n    host: str,\n    port: int,\n    address: str,\n    existing_ids: int,\n) -> tuple[float, set[int]]:\n    count = MAX_CLIENT_REQUEST_IDS - existing_ids\n",
+              "def fill_request_id_registry(\n    host: str,\n    port: int,\n    address: str,\n    existing_ids: int,\n    configured_capacity: int,\n) -> tuple[float, set[int]]:\n    count = configured_capacity - existing_ids\n",
+              "P0 runner saturation signature",
+          )
+          replace_one(
+              runner,
+              "    require(\n        elapsed < 55.0,\n        f\"request-ID capacity could not be exercised inside its 60-second TTL: {elapsed:.3f}s\",\n    )\n",
+              "    require(\n        elapsed < 30.0,\n        f\"configured request-ID capacity exceeded the 30-second exact-head budget: {elapsed:.3f}s\",\n    )\n",
+              "P0 runner saturation budget",
+          )
+          replace_one(
+              runner,
+              "    require(bool(unseal_key), \"HEPTABAO_P0_DEV_UNSEAL_KEY is required by the matrix\")\n\n    host, port = wait_for_address(stderr_path)\n",
+              dedent('''\
+                  require(bool(unseal_key), "HEPTABAO_P0_DEV_UNSEAL_KEY is required by the matrix")
+                  raw_capacity = os.environ.get(
+                      "HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY",
+                      str(MAX_CLIENT_REQUEST_IDS),
+                  )
+                  require(
+                      raw_capacity.isdigit()
+                      and (len(raw_capacity) == 1 or not raw_capacity.startswith("0")),
+                      "configured request-ID capacity must be canonical decimal",
+                  )
+                  configured_capacity = int(raw_capacity)
+                  require(
+                      MIN_CONFIGURED_CLIENT_REQUEST_IDS
+                      <= configured_capacity
+                      <= MAX_CLIENT_REQUEST_IDS,
+                      "configured request-ID capacity is outside the bounded P0 range",
+                  )
+
+                  host, port = wait_for_address(stderr_path)
+              '''),
+              "P0 runner configured capacity parse",
+          )
+          replace_one(
+              runner,
+              "    fill_elapsed, filler_statuses = fill_request_id_registry(host, port, address, existing_ids=1)\n",
+              "    fill_elapsed, filler_statuses = fill_request_id_registry(\n        host, port, address, existing_ids=1, configured_capacity=configured_capacity\n    )\n",
+              "P0 runner configured saturation",
+          )
+          replace_one(
+              runner,
+              '            "declared_capacity": MAX_CLIENT_REQUEST_IDS,\n',
+              '            "configured_capacity": configured_capacity,\n            "default_maximum_capacity": MAX_CLIENT_REQUEST_IDS,\n',
+              "P0 runner capacity evidence",
+          )
+          replace_one(
+              runner,
+              '        "server": {"loopback": True, "port": port},\n',
+              '        "server": {\n            "loopback": True,\n            "port": port,\n            "configured_request_id_capacity": configured_capacity,\n            "default_maximum_request_id_capacity": MAX_CLIENT_REQUEST_IDS,\n        },\n',
+              "P0 runner server evidence",
+          )
+
+          workflow = Path(".github/workflows/plan-v1.3.1-final-exact.yml")
+          replace_one(
+              workflow,
+              "          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/p0-final/audit.log\n",
+              "          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/p0-final/audit.log\n          HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY: \"256\"\n",
+              "final exact configured capacity",
+          )
+
+          matrix = Path("planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
+          replace_one(
+              matrix,
+              "  maximum_client_request_ids: 4096\n  client_request_id_ttl_seconds: 60\n",
+              "  maximum_client_request_ids: 4096\n  exact_head_configured_client_request_ids: 256\n  configured_capacity_scope: DEVELOPMENT_ONLY_BOUNDED_16_TO_4096\n  client_request_id_ttl_seconds: 60\n",
+              "P0 matrix deterministic capacity",
+          )
+
+          addendum = Path(
+              "docs/execution/HEPTABAO_P0_STATE_LOCK_AND_DISPATCH_DEADLINE_ADDENDUM_V1.md"
+          )
+          text = addendum.read_text(encoding="utf-8")
+          marker = "`qualification=false`, `compatibility_claim=false`, `authority_effect=NONE`.\n"
+          assert text.count(marker) == 1, "P0 addendum closure marker drift"
+          section = dedent('''\
+
+          ## Deterministic request-ID saturation evidence
+
+          The development server defaults to a maximum of 4096 live client-proposed request IDs
+          with a 60-second replay window. Exact-head execution may lower that capacity through
+          `HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY` only to make saturation evidence independent of
+          runner I/O speed. The accepted value is canonical decimal in the closed range 16..=4096;
+          zero, leading-zero, non-numeric, under-minimum and over-maximum values fail process start.
+
+          The final exact-head profile uses 256 entries, sends more than that configured live
+          capacity, and still records the compiled default maximum of 4096 in its result object.
+          This development-only test control cannot raise the maximum and grants no production
+          configuration, compatibility, qualification or authority.
+          ''')
+          addendum.write_text(text.replace(marker, section + "\n" + marker), encoding="utf-8")
+
+          h02 = Path("scripts/h02_exact_head_matrix_v1.py")
+          replace_one(
+              h02,
+              '        "state_publish_after_durable_write",\n        "full_cluster_disk_restart",\n',
+              '        "state_publish_after_durable_write",\n        "explicit_legacy_adoption_executed",\n        "full_cluster_disk_restart",\n',
+              "H02 legacy adoption scope binding",
+          )
+
+          manifest = Path("planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml")
+          manifest_text = manifest.read_text(encoding="utf-8")
+          anchor = "closure_semantics:\n"
+          assert manifest_text.count(anchor) == 1, "V1.3.1 manifest closure anchor drift"
+          entries = dedent('''\
+          - id: HB-RUNNER-P0-TRANSPORT-EXACT-V1
+            path: scripts/p0_transport_exact_v1.py
+            kind: NORMATIVE
+            owner_role: qualification-request-pipeline
+            digest: RESOLVE_FROM_EXACT_SOURCE
+            effective_revision: '1.3.1'
+            authority_effect: NONE
+          - id: HB-RUNNER-H02-EXACT-HEAD-MATRIX-V1
+            path: scripts/h02_exact_head_matrix_v1.py
+            kind: NORMATIVE
+            owner_role: distributed-systems-qualification
+            digest: RESOLVE_FROM_EXACT_SOURCE
+            effective_revision: '1.3.1'
+            authority_effect: NONE
+          - id: HB-WORKFLOW-PLAN-V1_3_1-FINAL-EXACT
+            path: .github/workflows/plan-v1.3.1-final-exact.yml
+            kind: NORMATIVE
+            owner_role: qualification-platform-security
+            digest: RESOLVE_FROM_EXACT_SOURCE
+            effective_revision: '1.3.1'
+            authority_effect: NONE
+          - id: HB-TEST-V1_3_1-EXECUTION-BINDING
+            path: tests/plan/test_v1_3_1_execution_binding.py
+            kind: NORMATIVE
+            owner_role: qualification-security
+            digest: RESOLVE_FROM_EXACT_SOURCE
+            effective_revision: '1.3.1'
+            authority_effect: NONE
+          ''')
+          manifest.write_text(manifest_text.replace(anchor, entries + anchor), encoding="utf-8")
+
+          test = Path("tests/plan/test_v1_3_1_execution_binding.py")
+          test.write_text(
+              dedent('''\
+              from __future__ import annotations
+
+              import re
+              import unittest
+              from pathlib import Path
+
+              import yaml
+
+
+              ROOT = Path(__file__).resolve().parents[2]
+              EXPECTED_CASE_IDS = {f"P0-TRANSPORT-{index:03d}" for index in range(1, 15)}
+
+
+              class V131ExecutionBindingTests(unittest.TestCase):
+                  def read(self, relative: str) -> str:
+                      return (ROOT / relative).read_text(encoding="utf-8")
+
+                  def yaml(self, relative: str):
+                      return yaml.safe_load(self.read(relative))
+
+                  def test_normative_manifest_binds_runners_workflow_and_test(self):
+                      manifest = self.yaml(
+                          "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml"
+                      )
+                      paths = {entry["path"] for entry in manifest["documents"]}
+                      self.assertTrue(
+                          {
+                              "scripts/p0_transport_exact_v1.py",
+                              "scripts/h02_exact_head_matrix_v1.py",
+                              ".github/workflows/plan-v1.3.1-final-exact.yml",
+                              "tests/plan/test_v1_3_1_execution_binding.py",
+                          }
+                          <= paths
+                      )
+
+                  def test_p0_runner_covers_exact_matrix_and_closed_authority(self):
+                      matrix = self.yaml("planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
+                      matrix_ids = {entry["id"] for entry in matrix["cases"]}
+                      self.assertEqual(matrix_ids, EXPECTED_CASE_IDS)
+                      runner = self.read("scripts/p0_transport_exact_v1.py")
+                      runner_ids = set(re.findall(r"P0-TRANSPORT-\\d{3}", runner))
+                      self.assertEqual(runner_ids, EXPECTED_CASE_IDS)
+                      for token in (
+                          "request-id-registry-saturated",
+                          "connection-capacity-exhausted",
+                          "response-delivery-failed-before-commit",
+                          "response-delivery-failed-after-commit",
+                          "operation-body-forbidden",
+                          '"qualification": False',
+                          '"compatibility_claim": False',
+                          '"authority_effect": "NONE"',
+                      ):
+                          self.assertIn(token, runner)
+
+                  def test_request_id_capacity_is_default_safe_and_exactly_testable(self):
+                      source = self.read("crates/heptabao-p0-server/src/main.rs")
+                      for token in (
+                          "const MAX_CLIENT_REQUEST_IDS: usize = 4096;",
+                          "const MIN_CONFIGURED_CLIENT_REQUEST_IDS: usize = 16;",
+                          "HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY",
+                          "parse_client_request_id_capacity",
+                          "configured_request_id_capacity_is_canonical_bounded_and_default_safe",
+                      ):
+                          self.assertIn(token, source)
+                      matrix = self.yaml("planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml")
+                      bounds = matrix["resource_bounds"]
+                      self.assertEqual(bounds["maximum_client_request_ids"], 4096)
+                      self.assertEqual(bounds["exact_head_configured_client_request_ids"], 256)
+                      final = self.read(".github/workflows/plan-v1.3.1-final-exact.yml")
+                      self.assertIn(
+                          'HEPTABAO_P0_CLIENT_REQUEST_ID_CAPACITY: "256"', final
+                      )
+
+                  def test_h02_durable_execution_requires_explicit_legacy_adoption(self):
+                      runner = self.read("scripts/h02_exact_head_matrix_v1.py")
+                      durable = self.read(
+                          "probes/h02/openraft-tokio/src/bin/durable_store_lab.rs"
+                      )
+                      self.assertIn('"explicit_legacy_adoption_executed"', runner)
+                      self.assertIn('"explicit_legacy_adoption_executed": true', durable)
+                      self.assertIn("DurableLogStore::adopt_legacy", durable)
+                      self.assertIn("DurableStateMachine::adopt_legacy", durable)
+
+                  def test_final_exact_workflow_is_read_only_complete_and_standard_runner_bound(self):
+                      workflow = self.read(".github/workflows/plan-v1.3.1-final-exact.yml")
+                      self.assertIn("permissions:\\n  contents: read", workflow)
+                      self.assertNotIn("contents: write", workflow)
+                      self.assertNotIn("persist-credentials: true", workflow)
+                      self.assertNotRegex(workflow, r"(?m)^\\s*git (?:push|commit|merge|rebase)\\b")
+                      self.assertGreaterEqual(workflow.count("runs-on: ubuntu-24.04"), 4)
+                      self.assertIn("python3 scripts/p0_transport_exact_v1.py", workflow)
+                      self.assertIn("python3 scripts/h02_exact_head_matrix_v1.py", workflow)
+                      self.assertIn("1.88.0 1.98.0", workflow)
+                      self.assertIn("authority-sentinel", workflow)
+
+
+              if __name__ == "__main__":
+                  unittest.main()
+              '''),
+              encoding="utf-8",
+          )
+          PY
+          python3 -m py_compile scripts/p0_transport_exact_v1.py tests/plan/test_v1_3_1_execution_binding.py
+          git diff --check
+
+      - name: Install pinned validation dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+      - run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+
+      - name: Validate root Rust and all affected Python contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          python3 scripts/validate_plan_v1_3_1.py
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
+
+      - name: Emit pure canonical-parent commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/exec-v1-3-1-deterministic-binding-077661.yml
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add -A
+          git diff --cached --check
+          changed="$(git diff --cached --name-only "$SOURCE_PARENT" | LC_ALL=C sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/plan-v1.3.1-final-exact.yml \
+            crates/heptabao-p0-server/src/main.rs \
+            docs/execution/HEPTABAO_P0_STATE_LOCK_AND_DISPATCH_DEADLINE_ADDENDUM_V1.md \
+            planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml \
+            planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml \
+            scripts/h02_exact_head_matrix_v1.py \
+            scripts/p0_transport_exact_v1.py \
+            tests/plan/test_v1_3_1_execution_binding.py \
+            | LC_ALL=C sort)"
+          test "$changed" = "$expected"
+          tree="$(git write-tree)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          commit="$(printf '%s\n' 'test(v1.3.1): bind deterministic P0 and H02 exact evidence' | git commit-tree "$tree" -p "$SOURCE_PARENT")"
+          test "$(git rev-parse "$commit^")" = "$SOURCE_PARENT"
+          test "$(git rev-parse "$commit^{tree}")" = "$tree"
+          test "$(git diff-tree --no-commit-id --name-only -r "$commit" | LC_ALL=C sort)" = "$expected"
+          printf 'source_parent=%s\nresult_commit=%s\nresult_tree=%s\n' "$SOURCE_PARENT" "$commit" "$tree"
+          git push origin "$commit:refs/heads/$RESULT_BRANCH"
