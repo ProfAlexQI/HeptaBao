@@ -12,11 +12,11 @@ permissions:
 
 concurrency:
   group: apply-v1-2-2-parent-integrity
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   materialize-verify-and-remove-transition:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     steps:
       - name: Checkout exact staging head
