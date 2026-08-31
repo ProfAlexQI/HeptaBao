@@ -141,6 +141,29 @@ class RepositoryIdentityTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.IdentityFailure, "bootstrap-only"):
             MODULE.validate_repository_identity(root)
 
+    def test_generated_bytecode_is_not_treated_as_exported_source(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        cache = root / "scripts/__pycache__"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "validator.cpython-313.pyc").write_bytes(
+            f"generated:{MODULE.DEPRECATED_OWNER}/HeptaBao".encode("utf-8")
+        )
+        self.assertGreater(MODULE.validate_repository_identity(root), 0)
+
+    def test_source_archive_symlink_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        target = root / "ordinary.txt"
+        target.write_text("ordinary", encoding="utf-8")
+        alias = root / "alias.txt"
+        try:
+            alias.symlink_to(target.name)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation is unavailable")
+        with self.assertRaisesRegex(MODULE.IdentityFailure, "refuses symlink"):
+            MODULE.validate_repository_identity(root)
+
     def test_deprecated_owner_alias_is_rejected_anywhere_tracked(self) -> None:
         temporary, root = self.fixture()
         self.addCleanup(temporary.cleanup)

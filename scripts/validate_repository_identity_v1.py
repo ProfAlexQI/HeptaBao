@@ -167,15 +167,52 @@ def parse_workflow_identity_environment(text: str) -> dict[str, Any]:
     return result
 
 
+FALLBACK_IGNORED_COMPONENTS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "target",
+    }
+)
+FALLBACK_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
+def _fallback_source_paths(root: Path) -> list[Path]:
+    """Enumerate source-archive files without admitting generated caches.
+
+    A Git checkout uses ``git ls-files`` as the canonical tracked-file set.  An
+    exact-source export intentionally omits ``.git``, so the fallback must be
+    deterministic and must not let Python bytecode, test caches or Rust build
+    output alter identity validation after tools execute in the extracted tree.
+    """
+
+    result: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if any(component in FALLBACK_IGNORED_COMPONENTS for component in relative.parts):
+            continue
+        if path.suffix in FALLBACK_IGNORED_SUFFIXES:
+            continue
+        if path.is_symlink():
+            raise IdentityFailure(
+                f"source-archive identity scan refuses symlink: {relative.as_posix()}"
+            )
+        result.append(path)
+    return sorted(result, key=lambda item: item.relative_to(root).as_posix())
+
+
 def tracked_paths(root: Path) -> list[Path]:
     try:
         payload = subprocess.check_output(
             ["git", "ls-files", "-z"], cwd=root, stderr=subprocess.DEVNULL
         )
     except (OSError, subprocess.CalledProcessError):
-        return sorted(
-            path for path in root.rglob("*") if path.is_file() and ".git" not in path.parts
-        )
+        return _fallback_source_paths(root)
     return [root / item.decode("utf-8") for item in payload.split(b"\0") if item]
 
 
