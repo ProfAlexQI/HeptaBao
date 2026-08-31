@@ -64,8 +64,8 @@ validate expected generation
 
 Plaintext must not cross the `DurableGenerationStore` boundary. A stale
 expected generation is rejected before barrier-provider work. A commit path
-that may have changed `CURRENT` but cannot prove durable completion returns an
-explicit outcome-unknown error and forbids blind mutation retry.
+that may have changed `CURRENT` but cannot prove durable completion returns the
+explicit `CommitOutcomeUnknown` error and forbids blind mutation retry.
 
 ## 4. Lifecycle
 
