@@ -11,7 +11,8 @@ The binary requires:
 - `HEPTABAO_P0_BIND`, defaulting to `127.0.0.1:18200`, and rejects a non-loopback IP;
 - `HEPTABAO_P0_DEV_TOKEN`;
 - `HEPTABAO_P0_DEV_UNSEAL_KEY`;
-- `HEPTABAO_P0_AUDIT_PATH`, an absolute new file path.
+- `HEPTABAO_P0_AUDIT_PATH`, an absolute new file path;
+- optional `HEPTABAO_P0_REQUEST_ID_CAPACITY`, a canonical decimal in `1..=4096`, defaulting to `64`. This knob exists only in the disposable P0 profile so exact tests can exercise a real saturation boundary without making success depend on completing 4096 fsync-backed requests inside the 60-second replay TTL.
 
 The token and unseal key must be distinct and at least 24 bytes. Rejected weak/equal credential inputs are overwritten before returning an error. The audit file is created with create-new semantics. Existing files, symlink components and non-directory parent components are rejected. Pure-std path inspection cannot eliminate every platform TOCTOU; production audit devices require descriptor-relative, no-follow platform adapters and independent review.
 
@@ -57,7 +58,7 @@ Unexpected or otherwise ignored bodies are rejected with `operation-body-forbidd
 
 The ingress allocates a request-attempt ID immediately after `accept` and before reading request bytes. Parser, framing, Host, timeout and socket errors therefore have an auditable identity without retaining raw request bytes.
 
-A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after parsing and exact Host verification. The P0 registry permits at most 4096 live identifiers for 60 seconds and rejects duplicate use with 409 or saturation with 503. It is process-local development machinery, not the Authbus HA replay authority, and it is intentionally lost on restart. Registry `Debug` redacts the entire active-ID map and reports only capacity and TTL configuration.
+A syntactically valid `X-HeptaBao-Request-Id` may replace the attempt ID after parsing and exact Host verification. The P0 registry permits at most 4096 live identifiers for 60 seconds and rejects duplicate use with 409 or saturation with 503. The default capacity is 64 and the hard maximum is 4096; exact CI must fill all 64 default live slots through real socket requests before observing the overflow rejection. The override cannot exceed 4096, cannot be zero, and rejects signs, whitespace, leading zeroes, non-ASCII and non-decimal forms. It changes only how quickly the development saturation boundary is reached; it does not weaken duplicate detection, TTL, fail-closed saturation, or any production/HA claim. The registry is process-local development machinery, not the Authbus HA replay authority, and it is intentionally lost on restart. Registry `Debug` redacts the entire active-ID map and reports only capacity and TTL configuration.
 
 ## Owned secret-material lifetime
 

@@ -25,7 +25,9 @@ from typing import Any
 TOTAL_TIMEOUT_SECONDS = 5.0
 MAX_OBSERVED_SECONDS = 8.0
 MAX_CONCURRENT_CONNECTIONS = 32
+DEFAULT_CLIENT_REQUEST_ID_CAPACITY = 64
 MAX_CLIENT_REQUEST_IDS = 4096
+REQUEST_ID_CAPACITY_ENV = "HEPTABAO_P0_REQUEST_ID_CAPACITY"
 SATURATION_WORKERS = 24
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -67,6 +69,25 @@ class HttpResponse:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise MatrixFailure(message)
+
+
+def configured_request_id_capacity() -> int:
+    raw = os.environ.get(REQUEST_ID_CAPACITY_ENV)
+    if raw is None:
+        return DEFAULT_CLIENT_REQUEST_ID_CAPACITY
+    require(
+        bool(raw)
+        and raw.isascii()
+        and raw.isdecimal()
+        and (len(raw) == 1 or not raw.startswith("0")),
+        f"{REQUEST_ID_CAPACITY_ENV} must be canonical ASCII decimal",
+    )
+    capacity = int(raw)
+    require(
+        1 <= capacity <= MAX_CLIENT_REQUEST_IDS,
+        f"{REQUEST_ID_CAPACITY_ENV} must be between 1 and {MAX_CLIENT_REQUEST_IDS}",
+    )
+    return capacity
 
 
 def git_value(root: Path, *arguments: str) -> str:
@@ -294,9 +315,14 @@ def fill_request_id_registry(
     host: str,
     port: int,
     address: str,
+    capacity: int,
     existing_ids: int,
-) -> tuple[float, set[int]]:
-    count = MAX_CLIENT_REQUEST_IDS - existing_ids
+) -> tuple[float, set[int], int]:
+    require(
+        existing_ids < capacity <= MAX_CLIENT_REQUEST_IDS,
+        "request-ID saturation capacity does not leave a bounded overflow slot",
+    )
+    count = capacity - existing_ids
     started = time.monotonic()
 
     def claim(index: int) -> tuple[int, bytes]:
@@ -331,7 +357,7 @@ def fill_request_id_registry(
         elapsed < 55.0,
         f"request-ID capacity could not be exercised inside its 60-second TTL: {elapsed:.3f}s",
     )
-    return elapsed, statuses
+    return elapsed, statuses, count
 
 
 def hold_connection(host: str, port: int, address: str) -> socket.socket:
@@ -405,6 +431,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
     unseal_key = os.environ.get("HEPTABAO_P0_DEV_UNSEAL_KEY")
     require(bool(token), "HEPTABAO_P0_DEV_TOKEN is required by the matrix")
     require(bool(unseal_key), "HEPTABAO_P0_DEV_UNSEAL_KEY is required by the matrix")
+    request_id_capacity = configured_request_id_capacity()
 
     host, port = wait_for_address(stderr_path)
     address = f"{host}:{port}"
@@ -505,7 +532,13 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         {"first_status": 200, "second_status": 409, "detail": "client-request-id-replayed"},
     )
 
-    fill_elapsed, filler_statuses = fill_request_id_registry(host, port, address, existing_ids=1)
+    fill_elapsed, filler_statuses, filler_count = fill_request_id_registry(
+        host,
+        port,
+        address,
+        capacity=request_id_capacity,
+        existing_ids=1,
+    )
     start = len(audit_lines(audit_path))
     saturated = exchange(
         host,
@@ -526,7 +559,9 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         {
             "status": 503,
             "detail": "request-id-registry-saturated",
-            "declared_capacity": MAX_CLIENT_REQUEST_IDS,
+            "declared_capacity": request_id_capacity,
+            "maximum_supported_capacity": MAX_CLIENT_REQUEST_IDS,
+            "filler_request_count": filler_count,
             "fill_elapsed_seconds": round(fill_elapsed, 6),
             "filler_statuses": sorted(filler_statuses),
         },

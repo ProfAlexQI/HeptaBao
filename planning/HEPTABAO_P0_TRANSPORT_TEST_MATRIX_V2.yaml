@@ -109,6 +109,9 @@ resource_bounds:
   total_response_write_timeout_seconds: 5
   maximum_concurrent_connections: 32
   maximum_client_request_ids: 4096
+  default_client_request_id_capacity: 64
+  exact_head_saturation_test_capacity: 64
+  client_request_id_capacity_override: BOUNDED_CANONICAL_DECIMAL_1_TO_4096_P0_ONLY
   client_request_id_ttl_seconds: 60
   per_connection_worker_spawn: FALLIBLE_NO_PANIC
   response_write_deadline_mode: ABSOLUTE_REMAINING_TIME_PER_WRITE_AND_FLUSH

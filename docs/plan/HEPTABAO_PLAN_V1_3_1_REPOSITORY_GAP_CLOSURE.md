@@ -19,7 +19,7 @@ The patch must provide all of the following on one exact remote commit and tree:
 2. a hard concurrent-connection bound with fail-closed saturation behavior;
 3. a request-attempt identity allocated before parsing so malformed, Host-invalid and socket-failed requests can be audited;
 4. stable transport rejection detail codes;
-5. an optional bounded single-use `X-HeptaBao-Request-Id` development contract, separated from the future HA Authbus replay authority;
+5. an optional bounded single-use `X-HeptaBao-Request-Id` development contract, separated from the future HA Authbus replay authority; its development default is 64 live identities, its hard maximum remains 4096, and exact P0 saturation execution must still reach the overflow through real socket requests;
 6. HTTP 204 wire responses with zero body bytes and `Content-Length: 0`;
 7. durable-store writes that never recreate an opened storage root after deletion or replacement;
 8. legacy adoption that rejects unresolved authoritative-data temporary artifacts;

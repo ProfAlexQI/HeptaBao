@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -147,6 +148,60 @@ class P0TransportResetToleranceTests(unittest.TestCase):
                 lines, "response-delivery-failed-after-commit"
             )
         )
+
+    def test_request_id_capacity_override_is_strict_and_bounded(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(
+                MODULE.core.configured_request_id_capacity(),
+                MODULE.core.DEFAULT_CLIENT_REQUEST_ID_CAPACITY,
+            )
+        with mock.patch.dict(
+            "os.environ",
+            {MODULE.core.REQUEST_ID_CAPACITY_ENV: "64"},
+            clear=True,
+        ):
+            self.assertEqual(MODULE.core.configured_request_id_capacity(), 64)
+        for invalid in ("", "0", "01", "+1", " 1", "4097", "one"):
+            with self.subTest(invalid=invalid), mock.patch.dict(
+                "os.environ",
+                {MODULE.core.REQUEST_ID_CAPACITY_ENV: invalid},
+                clear=True,
+            ):
+                with self.assertRaises(MODULE.MatrixFailure):
+                    MODULE.core.configured_request_id_capacity()
+
+    def test_saturation_filler_uses_the_exact_configured_capacity(self) -> None:
+        observed_ids: list[str] = []
+        original_exchange = MODULE.core.exchange
+
+        def fake_exchange(host, port, raw, timeout_seconds=10.0):
+            del host, port, timeout_seconds
+            marker = b"X-HeptaBao-Request-Id: "
+            start = raw.index(marker) + len(marker)
+            end = raw.index(b"\r\n", start)
+            observed_ids.append(raw[start:end].decode("ascii"))
+            return MODULE.HttpResponse(
+                status=400,
+                headers={"content-length": "2"},
+                body=b"{}",
+                raw=b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\n\r\n{}",
+                elapsed_seconds=0.001,
+            )
+
+        MODULE.core.exchange = fake_exchange
+        try:
+            _elapsed, statuses, count = MODULE.core.fill_request_id_registry(
+                "127.0.0.1",
+                1,
+                "127.0.0.1:1",
+                capacity=4,
+                existing_ids=1,
+            )
+        finally:
+            MODULE.core.exchange = original_exchange
+        self.assertEqual(count, 3)
+        self.assertEqual(len(observed_ids), 3)
+        self.assertEqual(statuses, {400})
 
     def test_delegated_runner_bytes_and_regression_are_manifest_bound(self) -> None:
         manifest = yaml.safe_load(

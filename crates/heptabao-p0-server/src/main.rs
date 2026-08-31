@@ -23,7 +23,9 @@ use heptabao_protocol::{
 const TOTAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 const REQUEST_ID_TTL: Duration = Duration::from_secs(60);
+const DEFAULT_CLIENT_REQUEST_ID_CAPACITY: usize = 64;
 const MAX_CLIENT_REQUEST_IDS: usize = 4096;
+const REQUEST_ID_CAPACITY_ENV: &str = "HEPTABAO_P0_REQUEST_ID_CAPACITY";
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -52,6 +54,7 @@ fn run() -> Result<(), String> {
         .map_err(|_| "HEPTABAO_P0_DEV_UNSEAL_KEY is required".to_owned())?;
     let audit_path = env::var("HEPTABAO_P0_AUDIT_PATH")
         .map_err(|_| "HEPTABAO_P0_AUDIT_PATH is required".to_owned())?;
+    let request_id_capacity = configured_request_id_capacity()?;
 
     let credentials = DevelopmentCredentials::new(token.into_bytes(), unseal_key.into_bytes())
         .map_err(|error| error.to_string())?;
@@ -60,7 +63,7 @@ fn run() -> Result<(), String> {
     );
     let server = Arc::new(Mutex::new(P0Server::new(credentials, shared_audit.clone())));
     let request_ids = Arc::new(RequestIdRegistry::new(
-        MAX_CLIENT_REQUEST_IDS,
+        request_id_capacity,
         REQUEST_ID_TTL,
     ));
     let active_connections = Arc::new(AtomicUsize::new(0));
@@ -75,7 +78,8 @@ fn run() -> Result<(), String> {
 
     eprintln!(
         "HeptaBao P0 development server listening on \
-         {local_address}; production_supported=false authority=NONE"
+         {local_address}; request_id_capacity={request_id_capacity}; \
+         production_supported=false authority=NONE"
     );
 
     for incoming in listener.incoming() {
@@ -168,6 +172,36 @@ fn run() -> Result<(), String> {
 
 fn is_loopback(address: IpAddr) -> bool {
     address.is_loopback()
+}
+
+fn configured_request_id_capacity() -> Result<usize, String> {
+    match env::var(REQUEST_ID_CAPACITY_ENV) {
+        Ok(value) => parse_request_id_capacity(&value),
+        Err(env::VarError::NotPresent) => Ok(DEFAULT_CLIENT_REQUEST_ID_CAPACITY),
+        Err(env::VarError::NotUnicode(_)) => Err(format!(
+            "{REQUEST_ID_CAPACITY_ENV} must be canonical ASCII decimal"
+        )),
+    }
+}
+
+fn parse_request_id_capacity(value: &str) -> Result<usize, String> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(format!(
+            "{REQUEST_ID_CAPACITY_ENV} must be canonical ASCII decimal"
+        ));
+    }
+    let capacity = value.parse::<usize>().map_err(|_| {
+        format!("{REQUEST_ID_CAPACITY_ENV} is outside the supported integer range")
+    })?;
+    if !(1..=MAX_CLIENT_REQUEST_IDS).contains(&capacity) {
+        return Err(format!(
+            "{REQUEST_ID_CAPACITY_ENV} must be between 1 and {MAX_CLIENT_REQUEST_IDS}"
+        ));
+    }
+    Ok(capacity)
 }
 
 fn discard_available_ingress(stream: &mut TcpStream) {
@@ -733,7 +767,10 @@ fn escape_json(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestIdRegistry, render_response};
+    use super::{
+        DEFAULT_CLIENT_REQUEST_ID_CAPACITY, MAX_CLIENT_REQUEST_IDS, RequestIdRegistry,
+        parse_request_id_capacity, render_response,
+    };
     use heptabao_p0_server::P0Response;
     use std::time::{Duration, Instant};
 
@@ -752,6 +789,19 @@ mod tests {
                 .any(|window| window == b"Content-Length: 0\r\n")
         );
         assert!(wire.ends_with(b"\r\n\r\n"));
+    }
+
+    #[test]
+    fn request_id_capacity_override_is_strict_and_bounded() {
+        assert_eq!(DEFAULT_CLIENT_REQUEST_ID_CAPACITY, 64);
+        assert_eq!(parse_request_id_capacity("64"), Ok(64));
+        assert_eq!(
+            parse_request_id_capacity(&MAX_CLIENT_REQUEST_IDS.to_string()),
+            Ok(MAX_CLIENT_REQUEST_IDS)
+        );
+        for invalid in ["", "0", "01", "+1", " 1", "1 ", "4097", "-1", "one"] {
+            assert!(parse_request_id_capacity(invalid).is_err(), "accepted {invalid:?}");
+        }
     }
 
     #[test]
