@@ -112,6 +112,29 @@ class P0TransportResetToleranceTests(unittest.TestCase):
         self.assertIn("core.exchange = exchange", wrapper)
         self.assertIn("core.trickle_request = trickle_request", wrapper)
 
+    def test_serial_closure_uses_canonical_p0_v2_count_shape(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/plan-v1.3.1-final-exact.yml"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            '"executed_pass": 11',
+            '"source_bound_pass": 2',
+            '"best_effort_source_bound_pass": 1',
+            '"fail": 0',
+            '"blocked": 0',
+            '"unexecuted": 0',
+            '"total": 14',
+        ):
+            self.assertIn(marker, workflow)
+        for forbidden in (
+            '"runtime_socket_observed": 11',
+            '"exact_head_compiled_source_bound": 2',
+            '"best_effort_controlled_drop_source_bound": 1',
+            '"failed": 0',
+            '"unknown": 0',
+        ):
+            self.assertNotIn(forbidden, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

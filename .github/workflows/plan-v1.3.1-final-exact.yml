@@ -298,13 +298,13 @@ jobs:
           p0 = json.load(open(sys.argv[1], encoding="utf-8"))
           assert p0["result"] == "PASS", p0
           assert p0["counts"] == {
-              "runtime_socket_observed": 11,
-              "exact_head_compiled_source_bound": 2,
-              "best_effort_controlled_drop_source_bound": 1,
-              "failed": 0,
+              "executed_pass": 11,
+              "source_bound_pass": 2,
+              "best_effort_source_bound_pass": 1,
+              "fail": 0,
               "blocked": 0,
-              "unknown": 0,
               "unexecuted": 0,
+              "total": 14,
           }, p0
           h02 = json.load(open(sys.argv[2], encoding="utf-8"))
           assert h02["result"] == "PASS", h02
