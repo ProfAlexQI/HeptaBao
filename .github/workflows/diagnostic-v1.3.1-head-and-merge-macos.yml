@@ -169,7 +169,7 @@ jobs:
       - name: Execute and classify P0 transport evidence
         shell: bash
         env:
-          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/v1.3.1-final-exact/p0/audit-source.log
+          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/diagnostic-v1.3.1-${{ matrix.source_kind }}/p0/audit-source.log
         run: |
           set +e
           set -u
@@ -273,10 +273,10 @@ jobs:
 
       - name: Upload complete evidence before the final gate
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
-          name: v1.3.1-final-exact-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/v1.3.1-final-exact/
+          name: diagnostic-v1.3.1-${{ matrix.source_kind }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diagnostic-v1.3.1-${{ matrix.source_kind }}/
           if-no-files-found: error
           retention-days: 30
 
@@ -289,7 +289,7 @@ jobs:
           grep -qx 'fmt=0' "$evidence/root/root-rust-exits.txt"
           grep -qx 'test=0' "$evidence/root/root-rust-exits.txt"
           grep -qx 'clippy=0' "$evidence/root/root-rust-exits.txt"
-          grep -qx 'clean=0' "$evidence/root/root/root-rust-exits.txt"
+          grep -qx 'clean=0' "$evidence/root/root-rust-exits.txt"
           grep -qx 'p0=0' "$evidence/p0/exits.txt"
           grep -qx 'classify=0' "$evidence/p0/exits.txt"
           grep -qx 'validate=0' "$evidence/p0/exits.txt"
@@ -326,9 +326,9 @@ jobs:
               "unexecuted": 0,
           }, h02
           for result in (p0, h02):
-            assert result["qualification"] is False
-            assert result["compatibility_claim"] is False
-            assert result["authority_effect"] == "NONE"
+              assert result["qualification"] is False
+              assert result["compatibility_claim"] is False
+              assert result["authority_effect"] == "NONE"
           assert h02["selection_effect"] == "NONE"
           PY
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
