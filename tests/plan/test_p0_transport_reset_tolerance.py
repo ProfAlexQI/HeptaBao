@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import errno
+import importlib.util
+import sys
+import time
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+MODULE_PATH = SCRIPTS / "p0_transport_exact_v1.py"
+SPEC = importlib.util.spec_from_file_location("p0_transport_exact_v1", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+
+
+class FakeReadableSocket:
+    def __init__(self, events: list[bytes | BaseException]) -> None:
+        self.events = list(events)
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def recv(self, size: int) -> bytes:
+        del size
+        if not self.events:
+            return b""
+        event = self.events.pop(0)
+        if isinstance(event, BaseException):
+            raise event
+        return event
+
+
+class P0TransportResetToleranceTests(unittest.TestCase):
+    def read(self, events: list[bytes | BaseException]):
+        started = time.monotonic()
+        return MODULE._read_response(
+            FakeReadableSocket(events),
+            started=started,
+            deadline=started + 1.0,
+            timeout_message="test timeout",
+            reset_message="test reset before bytes",
+        )
+
+    def test_complete_response_followed_by_reset_is_accepted(self) -> None:
+        response = self.read(
+            [
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+                ConnectionResetError(errno.ECONNRESET, "reset after response"),
+            ]
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, b"{}")
+
+    def test_reset_before_response_bytes_fails_closed(self) -> None:
+        with self.assertRaisesRegex(MODULE.MatrixFailure, "test reset before bytes"):
+            self.read([ConnectionResetError(errno.ECONNRESET, "reset")])
+
+    def test_partial_response_followed_by_reset_still_fails_closed(self) -> None:
+        with self.assertRaises(MODULE.MatrixFailure):
+            self.read(
+                [
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n{}",
+                    ConnectionResetError(errno.ECONNRESET, "reset after partial body"),
+                ]
+            )
+
+    def test_non_reset_socket_error_is_not_relabelled(self) -> None:
+        with self.assertRaises(PermissionError):
+            self.read([PermissionError(errno.EACCES, "denied")])
+
+
+if __name__ == "__main__":
+    unittest.main()
