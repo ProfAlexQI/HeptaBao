@@ -1177,7 +1177,12 @@ def _validate_job_identity_artifact(
         require(name not in names, f"GitHub API job step name is duplicated: {name}")
         numbers.add(number)
         names.add(name)
-        status = raw_step.get("status")
+        provider_status = raw_step.get("status")
+        # The live GitHub jobs API spells a not-yet-started step ``pending``.
+        # The normalized receipt has one canonical pre-execution state,
+        # ``queued``. Preserve the exact API bytes/digest, but compare the
+        # artifact against the same canonical status used by the collector.
+        status = "queued" if provider_status == "pending" else provider_status
         conclusion = raw_step.get("conclusion")
         outcome = _step_outcome(status, conclusion)
         started_at = _check_timestamp(raw_step.get("started_at"), f"GitHub API job step {name} started_at")

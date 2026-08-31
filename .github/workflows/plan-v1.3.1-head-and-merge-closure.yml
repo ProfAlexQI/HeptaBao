@@ -1166,11 +1166,12 @@ jobs:
               encoding="utf-8",
           ).read(), "GitHub job identity artifact")
           runner = value["runner"]
+          assert runner["name"] == job_identity["runner_name"], "runner_name"
           for field in (
               "run_id", "run_attempt", "job", "job_id", "job_name", "workflow_name",
               "job_status", "job_conclusion", "runner_id", "runner_group_id", "runner_group",
               "runner_labels",
-              "name", "os", "arch", "head_sha", "source_kind", "job_started_at",
+              "os", "arch", "head_sha", "source_kind", "job_started_at",
               "job_completed_at", "required_step_names", "steps", "step_outcomes_digest",
               "api_response_digest", "raw_log_manifest_digest",
           ):

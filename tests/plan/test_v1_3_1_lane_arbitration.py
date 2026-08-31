@@ -683,6 +683,60 @@ class LaneArbitrationTests(unittest.TestCase):
             companion.write_text("{}\n", encoding="utf-8")
             self.assertEqual(MODULE._companion_path(receipt_path, "p0/classified-result.json"), companion)
 
+    def test_companion_lookup_stops_at_own_downloaded_artifact_boundary(self) -> None:
+        """A lane may not search sibling artifacts, the host root, or /root."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            input_root = Path(temporary) / "receipts"
+            lane = input_root / "v1.3.1-head-technical-receipt"
+            nested = lane / "nested"
+            nested.mkdir(parents=True)
+            receipt_path = nested / "technical-completion-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            companion = lane / "root/github-identity-verification.json"
+            companion.parent.mkdir()
+            companion.write_text("{}\n", encoding="utf-8")
+
+            self.assertEqual(
+                MODULE._companion_path(
+                    receipt_path,
+                    "root/github-identity-verification.json",
+                    input_root=input_root,
+                ),
+                companion,
+            )
+
+            # A look-alike companion outside the lane artifact must not become
+            # a second candidate and must never cause traversal toward /root.
+            sibling = input_root / "root/github-identity-verification.json"
+            sibling.parent.mkdir()
+            sibling.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(
+                MODULE._companion_path(
+                    receipt_path,
+                    "root/github-identity-verification.json",
+                    input_root=input_root,
+                ),
+                companion,
+            )
+
+    def test_flattened_companion_lookup_is_bounded_by_input_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            input_root = Path(temporary)
+            receipt_path = input_root / "technical-completion-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            companion = input_root / "root/github-identity-verification.json"
+            companion.parent.mkdir()
+            companion.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(
+                MODULE._companion_path(
+                    receipt_path,
+                    "root/github-identity-verification.json",
+                    input_root=input_root,
+                ),
+                companion,
+            )
+
     def test_artifact_path_components_reject_symlink_and_traversal_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -152,6 +152,7 @@ def _load_receipt_validator() -> Any:
 # checked separately; these bytes are the code that interprets the receipt.
 _SOURCE_VALIDATOR_SURFACE = (
     "scripts/validate_v1_3_1_technical_completion_receipt_v1.py",
+    "scripts/validate_v1_3_1_technical_completion_receipt_v1_core.py",
     "scripts/h02_exact_head_matrix_v1.py",
     "schemas/heptabao_v1_3_1_technical_completion_receipt_v1.schema.json",
     "schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json",
@@ -255,47 +256,110 @@ def _regular_file(path: Path, label: str) -> None:
     require(path.is_file(), f"{label} is missing or not a regular file")
 
 
-def _companion(receipt_path: Path, relative: str) -> Path:
-    """Find one companion artifact next to a downloaded receipt.
+def _companion(
+    receipt_path: Path,
+    relative: str,
+    *,
+    input_root: Path | None = None,
+) -> Path:
+    """Find one companion artifact within the receipt's downloaded artifact."""
 
-    ``download-artifact`` keeps each artifact in its own directory.  Walking
-    ancestors makes the lookup robust to either a flattened artifact root or
-    one extra directory level, while rejecting ambiguous duplicate copies.
-    """
-
-    candidate = _companion_path(receipt_path, relative)
+    candidate = _companion_path(receipt_path, relative, input_root=input_root)
     _regular_file(candidate, f"receipt companion {relative}")
     return candidate
 
 
-def _companion_dir(receipt_path: Path, relative: str) -> Path:
-    candidate = _companion_path(receipt_path, relative)
-    require(not candidate.is_symlink(), f"receipt companion directory {relative} must not be a symlink")
+def _companion_dir(
+    receipt_path: Path,
+    relative: str,
+    *,
+    input_root: Path | None = None,
+) -> Path:
+    candidate = _companion_path(receipt_path, relative, input_root=input_root)
+    require(
+        not candidate.is_symlink(),
+        f"receipt companion directory {relative} must not be a symlink",
+    )
     require(candidate.is_dir(), f"receipt companion directory {relative} is missing")
     return candidate
 
 
-def _companion_path(receipt_path: Path, relative: str) -> Path:
-    """Resolve one companion path while rejecting ambiguous copies."""
+def _receipt_artifact_boundary(receipt_path: Path, input_root: Path | None) -> Path:
+    """Return the highest directory that may contain this receipt's companions.
+
+    ``actions/download-artifact`` normally creates one immediate child directory
+    per artifact below ``input_root``.  A receipt and all of its companions must
+    stay inside that one artifact directory.  For a flattened download the
+    boundary is ``input_root`` itself.  When no input root is supplied (focused
+    unit use), the receipt's immediate parent is the only allowed boundary.
+    """
+
+    receipt_path = _guard_path_components(receipt_path, "receipt")
+    if input_root is None:
+        return receipt_path.parent
+
+    input_root = _guard_path_components(input_root, "receipt input root")
+    require(not input_root.is_symlink(), "receipt input root must not be a symlink")
+    try:
+        root = input_root.resolve(strict=True)
+        receipt = receipt_path.resolve(strict=True)
+        relative_receipt = receipt.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ArbitrationError(
+            f"receipt path is not contained by the downloaded input root: {receipt_path}"
+        ) from error
+    require(relative_receipt.parts, "receipt path must not equal the input root")
+    if len(relative_receipt.parts) == 1:
+        return root
+    return root / relative_receipt.parts[0]
+
+
+def _companion_path(
+    receipt_path: Path,
+    relative: str,
+    *,
+    input_root: Path | None = None,
+) -> Path:
+    """Resolve one companion without escaping into sibling artifacts or host paths."""
 
     receipt_path = _guard_path_components(receipt_path, "receipt")
     relative_path = Path(relative)
     require(not relative_path.is_absolute(), "receipt companion path must be relative")
     _guard_path_components(relative_path, "receipt companion")
+    boundary = _receipt_artifact_boundary(receipt_path, input_root)
+    boundary = _guard_path_components(boundary, "receipt artifact boundary")
+    require(not boundary.is_symlink(), "receipt artifact boundary must not be a symlink")
+    require(boundary.is_dir(), "receipt artifact boundary is missing")
+
+    try:
+        receipt = receipt_path.resolve(strict=True)
+        boundary_resolved = boundary.resolve(strict=True)
+        receipt.relative_to(boundary_resolved)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ArbitrationError(
+            f"receipt path escapes its downloaded artifact boundary: {receipt_path}"
+        ) from error
+
     candidates: list[Path] = []
-    # ``Path.parents`` already starts with ``receipt_path.parent``.  Do not
-    # prepend it a second time: doing so turns every ordinary companion into
-    # two lexical candidates and makes the strict ambiguity check reject a
-    # valid downloaded artifact.
-    for ancestor in receipt_path.parents:
+    ancestor = receipt.parent
+    while True:
         candidate = _guard_path_components(ancestor / relative_path, "receipt companion")
-        # Check the lexical candidate before resolving it.  A symlink alias to
-        # an otherwise valid file must not be collapsed into the same resolved
-        # path and silently accepted as a duplicate-free companion.
+        try:
+            candidate.relative_to(boundary_resolved)
+        except ValueError as error:
+            raise ArbitrationError(
+                f"receipt companion path escapes artifact boundary: {relative}"
+            ) from error
         if candidate.is_symlink():
             raise ArbitrationError(f"receipt companion {relative} must not be a symlink")
         if candidate.exists():
             candidates.append(candidate)
+        if ancestor == boundary_resolved:
+            break
+        parent = ancestor.parent
+        require(parent != ancestor, "receipt artifact boundary was not reached")
+        ancestor = parent
+
     require(len(candidates) == 1, f"receipt companion {relative} is missing or ambiguous")
     return candidates[0]
 
@@ -819,13 +883,17 @@ def _validate_one(
     expected_lanes = ["head"] if pull_request_number == "workflow_dispatch" else ["head", "merge"]
     require(arbitration.get("required_lanes") == expected_lanes, f"receipt {path} required lane set drift")
 
-    p0 = _companion(path, "p0/classified-result.json")
-    h02 = _companion(path, "h02/matrix/matrix-summary.json")
-    h02_evidence_dir = _companion_dir(path, "h02/matrix")
-    identity = _companion(path, "root/github-identity-verification.json")
-    github_job = _companion(path, "root/github-job-identity.json")
-    github_job_api = _companion(path, "root/github-job-api.json")
-    raw_log_manifest = _companion(path, "root/raw-log-manifest.json")
+    p0 = _companion(path, "p0/classified-result.json", input_root=input_root)
+    h02 = _companion(path, "h02/matrix/matrix-summary.json", input_root=input_root)
+    h02_evidence_dir = _companion_dir(path, "h02/matrix", input_root=input_root)
+    identity = _companion(
+        path,
+        "root/github-identity-verification.json",
+        input_root=input_root,
+    )
+    github_job = _companion(path, "root/github-job-identity.json", input_root=input_root)
+    github_job_api = _companion(path, "root/github-job-api.json", input_root=input_root)
+    raw_log_manifest = _companion(path, "root/raw-log-manifest.json", input_root=input_root)
     source_validator_tmp: tempfile.TemporaryDirectory[str] | None = None
     try:
         if git_root is not None:

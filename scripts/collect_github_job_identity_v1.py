@@ -278,7 +278,15 @@ def build_log_manifest(
     target = manifest_path.resolve()
     excluded = {path.resolve() for path in excluded_paths} | {target}
     files: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*")):
+    # Sort by the serialized POSIX-relative path, not ``Path`` component
+    # ordering. Component ordering places ``h02/matrix/...`` before the sibling
+    # file ``h02/matrix-runner.log``, while the normative manifest verifier
+    # compares the actual wire strings. One ordering must govern both sides.
+    candidates = sorted(
+        root.rglob("*"),
+        key=lambda candidate: candidate.relative_to(root).as_posix(),
+    )
+    for path in candidates:
         if path.resolve() in excluded:
             continue
         if path.is_symlink():
