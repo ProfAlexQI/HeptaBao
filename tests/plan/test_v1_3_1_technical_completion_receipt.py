@@ -31,7 +31,9 @@ collector = load_module(ROOT / "scripts/collect_github_job_identity_v1.py", "git
 
 COMMIT = "a" * 40
 TREE = "b" * 40
-HEAD_OWNER = "ProfHepta"
+HEAD_OWNER = "TrillionniumFoundation"
+RATIFIER_LOGIN = "ProfHepta"
+REPOSITORY_ID = 1349115072
 ACCOUNT_ID = 102159240
 
 
@@ -153,10 +155,14 @@ def receipt(kind: str = "head", arbitration_pr: str | None = None) -> dict[str, 
         "github_identity": {
             "artifact_digest": "sha256:" + "0" * 64,
             "source_sha": COMMIT,
+            "repository_id": REPOSITORY_ID,
+            "repository_full_name": validator.REPOSITORY,
             "expected_head_owner": HEAD_OWNER,
             "head_owner": HEAD_OWNER,
-            "author_login": HEAD_OWNER,
-            "committer_login": HEAD_OWNER,
+            "expected_ratifier_login": RATIFIER_LOGIN,
+            "expected_ratifier_id": ACCOUNT_ID,
+            "author_login": RATIFIER_LOGIN,
+            "committer_login": RATIFIER_LOGIN,
             "author_id": ACCOUNT_ID,
             "committer_id": ACCOUNT_ID,
             "verification": {"verified": False, "reason": "unsigned"},
@@ -264,10 +270,14 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 def github_identity_artifact() -> dict[str, Any]:
     return {
         "source_sha": COMMIT,
+        "repository_id": REPOSITORY_ID,
+        "repository_full_name": validator.REPOSITORY,
         "expected_head_owner": HEAD_OWNER,
         "head_owner": HEAD_OWNER,
-        "author_login": HEAD_OWNER,
-        "committer_login": HEAD_OWNER,
+        "expected_ratifier_login": RATIFIER_LOGIN,
+        "expected_ratifier_id": ACCOUNT_ID,
+        "author_login": RATIFIER_LOGIN,
+        "committer_login": RATIFIER_LOGIN,
         "author_id": ACCOUNT_ID,
         "committer_id": ACCOUNT_ID,
         "verification": {"verified": False, "reason": "unsigned"},
@@ -830,6 +840,29 @@ class TechnicalCompletionReceiptTests(unittest.TestCase):
             mutated = json.loads(json.dumps(value))
             mutated["arbitration"]["required_lanes"] = ["head"]
             validator.validate(mutated, require_artifacts=False)
+
+    def test_repository_transfer_identity_cannot_masquerade_as_ratifier(self) -> None:
+        value = receipt()
+        mutations = []
+
+        repository_id_drift = json.loads(json.dumps(value))
+        repository_id_drift["github_identity"]["repository_id"] = REPOSITORY_ID + 1
+        mutations.append(repository_id_drift)
+
+        historical_full_name = json.loads(json.dumps(value))
+        historical_full_name["github_identity"]["repository_full_name"] = "ProfHepta/HeptaBao"
+        mutations.append(historical_full_name)
+
+        owner_as_ratifier = json.loads(json.dumps(value))
+        owner_as_ratifier["github_identity"]["expected_ratifier_login"] = HEAD_OWNER
+        owner_as_ratifier["github_identity"]["author_login"] = HEAD_OWNER
+        owner_as_ratifier["github_identity"]["committer_login"] = HEAD_OWNER
+        mutations.append(owner_as_ratifier)
+
+        for mutated in mutations:
+            with self.subTest(identity=mutated["github_identity"]):
+                with self.assertRaises(validator.ValidationError):
+                    validator.validate(mutated, require_artifacts=False)
 
     def test_digest_mutation_and_partial_artifact_pair_fail_closed(self) -> None:
         value, p0_path, h02_path, identity_path, temporary = bound_fixture()

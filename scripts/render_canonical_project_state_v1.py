@@ -18,7 +18,9 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 REF_SAFE = re.compile(r"^[A-Za-z0-9._/@+:-]+$")
 DEFAULT_STATE_INPUT = "planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml"
 DEFAULT_MANIFEST = "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml"
-EXPECTED_REPOSITORY = "ProfHepta/HeptaBao"
+HISTORICAL_REPOSITORY = "ProfHepta/HeptaBao"
+CURRENT_REPOSITORY = "TrillionniumFoundation/HeptaBao"
+ACTIVE_STATE_INPUT = "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml"
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -237,11 +239,15 @@ def validate_inputs(
 
 def resolve(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
-    if getattr(args, "repository", EXPECTED_REPOSITORY) != EXPECTED_REPOSITORY:
-        raise Failure("repository identity drift")
     source_path, state_rel = repository_file(
         root, getattr(args, "state_input", None), DEFAULT_STATE_INPUT, "state input"
     )
+    expected_repository = (
+        CURRENT_REPOSITORY if state_rel == ACTIVE_STATE_INPUT else HISTORICAL_REPOSITORY
+    )
+    repository = getattr(args, "repository", expected_repository)
+    if repository != expected_repository:
+        raise Failure("repository identity drift")
     manifest_path, manifest_rel = repository_file(
         root, getattr(args, "manifest", None), DEFAULT_MANIFEST, "manifest"
     )
@@ -289,7 +295,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
         **state,
         "binding": {
             "mode": "EXACT_SOURCE_RESOLVED",
-            "repository": EXPECTED_REPOSITORY,
+            "repository": repository,
             "ref": ref,
             "commit": commit,
             "tree": tree,
@@ -328,7 +334,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
     value.add_argument("--root", default=".")
-    value.add_argument("--repository", default="ProfHepta/HeptaBao")
+    value.add_argument("--repository", default=HISTORICAL_REPOSITORY)
     value.add_argument("--state-input", default=DEFAULT_STATE_INPUT)
     value.add_argument("--manifest", default=DEFAULT_MANIFEST)
     value.add_argument("--ref")

@@ -7,7 +7,9 @@ current_state: planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml
 current_state_input: planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml
 normative_manifest: planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml
 canonical_integration:
-  repository: ProfHepta/HeptaBao
+  repository_id: 1349115072
+  repository: TrillionniumFoundation/HeptaBao
+  repository_owner: TrillionniumFoundation
   branch: codex/plan-v1.3-gap-closure-v2
   pull_request: 45
   source_identity: RESOLVE_FROM_EVENT_AND_GIT_NOT_FROM_STATIC_DOCUMENT
@@ -15,8 +17,11 @@ canonical_integration:
 ratification_authenticity:
   source_of_truth: EXACT_HEAD_GIT_METADATA
   required_subject: 'chore(provenance): owner-ratify V1.3.1 canonical source tree'
-  author_identity_policy: NON_AUTOMATION_IDENTITY
-  committer_identity_policy: NON_AUTOMATION_IDENTITY
+  author_identity_policy: DESIGNATED_ACCOUNT_NON_AUTOMATION_IDENTITY
+  committer_identity_policy: DESIGNATED_ACCOUNT_NON_AUTOMATION_IDENTITY
+  designated_ratifier_login: ProfHepta
+  designated_ratifier_account_id: 102159240
+  repository_owner_may_differ_from_ratifier: true
   forbidden_identity_fragments:
   - github-actions
   - '[bot]'

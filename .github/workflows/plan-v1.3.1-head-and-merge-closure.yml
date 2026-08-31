@@ -36,7 +36,11 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
       PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+      EXPECTED_REPOSITORY_ID: "1349115072"
+      EXPECTED_REPOSITORY: TrillionniumFoundation/HeptaBao
       EXPECTED_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || github.repository_owner }}
+      EXPECTED_RATIFIER_LOGIN: ProfHepta
+      EXPECTED_RATIFIER_ID: "102159240"
       ARBITRATION_KEY: "${{ github.event.pull_request.number || 'workflow_dispatch' }}:${{ github.event.pull_request.head.sha || github.sha }}:${{ matrix.source_kind }}"
       HEPTABAO_P0_BIND: 127.0.0.1:0
       HEPTABAO_P0_DEV_TOKEN: v1-3-1-final-development-root-token-000001
@@ -96,9 +100,10 @@ jobs:
             test "$SOURCE_SHA" = "$HEAD_SHA"
           fi
 
-          # Git metadata is necessary but not sufficient for owner ratification:
-          # read the GitHub REST representation and bind both API identities to
-          # the PR head owner.  Signature verification is recorded, not required;
+          # Git metadata is necessary but not sufficient for source ratification:
+          # bind the stable repository ID/current owner separately from the
+          # designated accountable ratifier. Signature verification is recorded,
+          # not required; a repository transfer must not silently redefine either role.
           # signing custody remains the external EXT-004 control boundary.
           umask 077
           api_tmp="$RUNNER_TEMP/v1.3.1-api-$SOURCE_KIND"
@@ -156,8 +161,17 @@ jobs:
           commit_path, pr_path, output_path = map(Path, sys.argv[1:])
           commit = strict_json(commit_path)
           pr = strict_json(pr_path)
+          expected_repository_id = int(os.environ["EXPECTED_REPOSITORY_ID"])
+          expected_repository = os.environ["EXPECTED_REPOSITORY"]
           expected_owner = os.environ["EXPECTED_HEAD_OWNER"]
+          expected_ratifier_login = os.environ["EXPECTED_RATIFIER_LOGIN"]
+          expected_ratifier_id = int(os.environ["EXPECTED_RATIFIER_ID"])
           head_sha = os.environ["HEAD_SHA"]
+          if os.environ.get("GITHUB_REPOSITORY") != expected_repository:
+              raise SystemExit(
+                  f"workflow repository drift: event={os.environ.get('GITHUB_REPOSITORY')!r} "
+                  f"policy={expected_repository!r}"
+              )
           if commit.get("sha") != head_sha:
               raise SystemExit("GitHub commit API returned a different SHA")
 
@@ -168,15 +182,29 @@ jobs:
               head_repo = head.get("repo")
               if not isinstance(head_repo, dict):
                   raise SystemExit("GitHub PR API head repository is unavailable")
+              repository_id = head_repo.get("id")
+              repository_full_name = head_repo.get("full_name")
               owner = head_repo.get("owner")
               if not isinstance(owner, dict) or not isinstance(owner.get("login"), str):
                   raise SystemExit("GitHub PR API head owner login is unavailable")
               api_head_owner = owner["login"]
+              if repository_id != expected_repository_id:
+                  raise SystemExit(
+                      f"PR head repository ID drift: api={repository_id!r} "
+                      f"policy={expected_repository_id!r}"
+                  )
+              if repository_full_name != expected_repository:
+                  raise SystemExit(
+                      f"PR head repository full-name drift: api={repository_full_name!r} "
+                      f"policy={expected_repository!r}"
+                  )
               if api_head_owner != expected_owner:
                   raise SystemExit(
                       f"PR head owner drift: event={expected_owner!r} api={api_head_owner!r}"
                   )
           else:
+              repository_id = expected_repository_id
+              repository_full_name = expected_repository
               api_head_owner = expected_owner
 
           author = commit.get("author")
@@ -185,10 +213,19 @@ jobs:
               raise SystemExit("GitHub commit API omitted author or committer identity")
           author_login = author.get("login")
           committer_login = committer.get("login")
-          if author_login != expected_owner or committer_login != expected_owner:
+          author_id = author.get("id")
+          committer_id = committer.get("id")
+          if (
+              author_login != expected_ratifier_login
+              or committer_login != expected_ratifier_login
+              or author_id != expected_ratifier_id
+              or committer_id != expected_ratifier_id
+          ):
               raise SystemExit(
-                  "GitHub commit API identity does not match PR head owner: "
-                  f"author={author_login!r} committer={committer_login!r} owner={expected_owner!r}"
+                  "GitHub commit API identity does not match designated ratifier: "
+                  f"author={author_login!r}/{author_id!r} "
+                  f"committer={committer_login!r}/{committer_id!r} "
+                  f"ratifier={expected_ratifier_login!r}/{expected_ratifier_id!r}"
               )
 
           commit_verification = commit.get("commit", {}).get("verification", {})
@@ -196,12 +233,16 @@ jobs:
               raise SystemExit("GitHub commit verification object is unavailable")
           result = {
               "source_sha": head_sha,
+              "repository_id": repository_id,
+              "repository_full_name": repository_full_name,
               "expected_head_owner": expected_owner,
               "head_owner": api_head_owner,
+              "expected_ratifier_login": expected_ratifier_login,
+              "expected_ratifier_id": expected_ratifier_id,
               "author_login": author_login,
               "committer_login": committer_login,
-              "author_id": author.get("id"),
-              "committer_id": committer.get("id"),
+              "author_id": author_id,
+              "committer_id": committer_id,
               "verification": {
                   "verified": commit_verification.get("verified"),
                   "reason": commit_verification.get("reason"),
@@ -211,12 +252,11 @@ jobs:
           }
           if not isinstance(result["verification"]["verified"], bool):
               raise SystemExit("GitHub commit verification.verified is not boolean")
-          for identity_field in ("author_id", "committer_id"):
-              if type(result[identity_field]) is not int or result[identity_field] < 1:
-                  raise SystemExit(f"GitHub commit {identity_field} is unavailable")
           for identity_field in (
+              "repository_full_name",
               "expected_head_owner",
               "head_owner",
+              "expected_ratifier_login",
               "author_login",
               "committer_login",
           ):
@@ -251,8 +291,9 @@ jobs:
           )
           rm -f "$commit_api" "$pr_api"
           trap - EXIT
-          printf 'repository=%s\nsource_kind=%s\narbitration_key=%s\ncommit=%s\ntree=%s\nhead=%s\nbase=%s\nevent_merge=%s\nratification_author=%s\nratification_committer=%s\nratification_parent=%s\ngithub_api_identity_verified=true\ngithub_api_author_login=%s\ngithub_api_author_id=%s\ngithub_api_verification.verified=%s\n' \
-            "$GITHUB_REPOSITORY" "$SOURCE_KIND" "$ARBITRATION_KEY" "$SOURCE_SHA" "$(git rev-parse 'HEAD^{tree}')" \
+          printf 'repository=%s\nrepository_id=%s\nrepository_owner=%s\ndesignated_ratifier=%s\ndesignated_ratifier_id=%s\nsource_kind=%s\narbitration_key=%s\ncommit=%s\ntree=%s\nhead=%s\nbase=%s\nevent_merge=%s\nratification_author=%s\nratification_committer=%s\nratification_parent=%s\ngithub_api_identity_verified=true\ngithub_api_author_login=%s\ngithub_api_author_id=%s\ngithub_api_verification.verified=%s\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_REPOSITORY_ID" "$EXPECTED_HEAD_OWNER" "$EXPECTED_RATIFIER_LOGIN" "$EXPECTED_RATIFIER_ID" \
+            "$SOURCE_KIND" "$ARBITRATION_KEY" "$SOURCE_SHA" "$(git rev-parse 'HEAD^{tree}')" \
             "$HEAD_SHA" "$BASE_SHA" "$GITHUB_SHA" "$ratification_author" "$ratification_committer" "$ratified_parent" \
             "$api_author_login" "$api_author_id" "$api_signature_verified" \
             | tee "$evidence/root/source-binding.txt"
@@ -339,6 +380,10 @@ jobs:
               pass
 
           def construct_unique_mapping(loader, node, deep=False):
+              # SafeLoader requires merge-key expansion before constructing
+              # ``<<``.  Flattening also lets the duplicate-key guard inspect
+              # the effective mapping instead of rejecting every valid alias.
+              loader.flatten_mapping(node)
               mapping = {}
               for key_node, value_node in node.value:
                   key = loader.construct_object(key_node, deep=deep)
@@ -860,8 +905,12 @@ jobs:
               raise AssertionError("GitHub job identity artifact must be one object")
           identity_fields = {
               "source_sha",
+              "repository_id",
+              "repository_full_name",
               "expected_head_owner",
               "head_owner",
+              "expected_ratifier_login",
+              "expected_ratifier_id",
               "author_login",
               "committer_login",
               "author_id",
@@ -874,16 +923,27 @@ jobs:
               raise AssertionError("GitHub identity artifact fields drift")
           if identity.get("source_sha") != os.environ["HEAD_SHA"]:
               raise AssertionError("GitHub identity artifact source SHA does not match event head")
-          owners = tuple(identity.get(field) for field in (
-              "expected_head_owner", "head_owner", "author_login", "committer_login"
-          ))
-          if not all(isinstance(owner, str) and owner.strip() for owner in owners):
-              raise AssertionError("GitHub identity owner/login fields are unavailable")
-          if len(set(owners)) != 1 or owners[0] != os.environ["EXPECTED_HEAD_OWNER"]:
-              raise AssertionError("GitHub identity owner/login fields do not match event owner")
-          for field in ("author_id", "committer_id"):
-              if type(identity.get(field)) is not int or identity[field] < 1:
-                  raise AssertionError(f"GitHub identity {field} is unavailable")
+          if identity.get("repository_id") != int(os.environ["EXPECTED_REPOSITORY_ID"]):
+              raise AssertionError("GitHub identity repository ID drift")
+          if identity.get("repository_full_name") != os.environ["EXPECTED_REPOSITORY"]:
+              raise AssertionError("GitHub identity repository full-name drift")
+          if (
+              identity.get("expected_head_owner") != os.environ["EXPECTED_HEAD_OWNER"]
+              or identity.get("head_owner") != os.environ["EXPECTED_HEAD_OWNER"]
+          ):
+              raise AssertionError("GitHub identity repository-owner fields drift")
+          if (
+              identity.get("expected_ratifier_login") != os.environ["EXPECTED_RATIFIER_LOGIN"]
+              or identity.get("expected_ratifier_id") != int(os.environ["EXPECTED_RATIFIER_ID"])
+          ):
+              raise AssertionError("GitHub identity ratifier policy drift")
+          if (
+              identity.get("author_login") != identity.get("expected_ratifier_login")
+              or identity.get("committer_login") != identity.get("expected_ratifier_login")
+              or identity.get("author_id") != identity.get("expected_ratifier_id")
+              or identity.get("committer_id") != identity.get("expected_ratifier_id")
+          ):
+              raise AssertionError("GitHub identity author/committer do not match ratifier")
           verification = identity.get("verification")
           if not isinstance(verification, dict):
               raise AssertionError("GitHub identity verification object is unavailable")
@@ -1084,12 +1144,16 @@ jobs:
           )
           identity = value["github_identity"]
           assert identity["source_sha"] == value["source"]["head"]
+          assert identity["repository_id"] == int(os.environ["EXPECTED_REPOSITORY_ID"])
+          assert identity["repository_full_name"] == os.environ["EXPECTED_REPOSITORY"]
           assert identity["expected_head_owner"] == os.environ["EXPECTED_HEAD_OWNER"]
           assert identity["head_owner"] == identity["expected_head_owner"]
-          assert identity["author_login"] == identity["expected_head_owner"]
-          assert identity["committer_login"] == identity["expected_head_owner"]
-          assert type(identity["author_id"]) is int and identity["author_id"] >= 1
-          assert type(identity["committer_id"]) is int and identity["committer_id"] >= 1
+          assert identity["expected_ratifier_login"] == os.environ["EXPECTED_RATIFIER_LOGIN"]
+          assert identity["expected_ratifier_id"] == int(os.environ["EXPECTED_RATIFIER_ID"])
+          assert identity["author_login"] == identity["expected_ratifier_login"]
+          assert identity["committer_login"] == identity["expected_ratifier_login"]
+          assert identity["author_id"] == identity["expected_ratifier_id"]
+          assert identity["committer_id"] == identity["expected_ratifier_id"]
           assert identity["identity_verified"] is True
           assert identity["signature_required"] is False
           job_identity = strict_json(open(
@@ -1456,7 +1520,7 @@ jobs:
               lanes = ["head", "merge"]
           value = {
               "schema": "heptabao.v1-3-1-lane-arbitration.v1",
-              "repository": "ProfHepta/HeptaBao",
+              "repository": "TrillionniumFoundation/HeptaBao",
               "pull_request_number": pr,
               "head_sha": head,
               "head_tree": "0" * 40,

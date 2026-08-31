@@ -337,7 +337,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
             lock.write_text("version = 4\n", encoding="utf-8")
             summary = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -364,7 +364,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
             lock.write_text("version = 4\n", encoding="utf-8")
             summary = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -397,7 +397,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
                     manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
                     lock.write_text("version = 4\n", encoding="utf-8")
                     summary = runner.build_summary(
-                        repository="ProfHepta/HeptaBao",
+                        repository="TrillionniumFoundation/HeptaBao",
                         ref="codex/test",
                         commit="1" * 40,
                         tree="2" * 40,
@@ -426,7 +426,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
                     manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
                     lock.write_text("version = 4\n", encoding="utf-8")
                     summary = runner.build_summary(
-                        repository="ProfHepta/HeptaBao",
+                        repository="TrillionniumFoundation/HeptaBao",
                         ref="codex/test",
                         commit="1" * 40,
                         tree="2" * 40,
@@ -472,7 +472,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
             lock.write_text("version = 4\n", encoding="utf-8")
             summary = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -503,7 +503,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             entries = complete_entries()
             # No evidence root must never yield a production PASS.
             missing = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -519,7 +519,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
 
             write_entry_evidence(root, entries)
             valid = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -534,7 +534,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             self.assertEqual(valid["result"], "PASS")
             (root / entries[0]["stdout_path"]).write_bytes(b"tampered")
             tampered = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -560,7 +560,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             write_entry_evidence(root, entries)
             entries[0]["stdout_path"] = "../escape.stdout"
             summary = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -583,7 +583,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
             manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
             lock.write_text("version = 4\n", encoding="utf-8")
             summary = runner.build_summary(
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 ref="codex/test",
                 commit="1" * 40,
                 tree="2" * 40,
@@ -604,6 +604,28 @@ class ExactHeadMatrixTests(unittest.TestCase):
         self.assertEqual(summary["result"], "FAIL")
         self.assertFalse(summary["source_binding"]["clean_tree"])
 
+    def test_source_binding_rejects_historical_repository_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = root / "probes/h02/openraft-tokio/Cargo.toml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("[package]\nname='x'\nversion='0.0.0'\n", encoding="utf-8")
+            manifest.with_name("Cargo.lock").write_text("version=4\n", encoding="utf-8")
+            outside = root.parent / "outside-evidence"
+            with (
+                mock.patch.object(runner, "REPOSITORY_ROOT", root),
+                mock.patch.object(runner, "EXPECTED_MANIFEST", manifest),
+                self.assertRaises(runner.ValidationError),
+            ):
+                runner.verify_source_binding(
+                    repository="ProfHepta/HeptaBao",
+                    commit="a" * 40,
+                    tree="b" * 40,
+                    manifest=manifest,
+                    output_dir=outside,
+                    target_root=outside / "target",
+                )
+
     def test_source_binding_rejects_declared_head_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -620,7 +642,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
                 self.assertRaises(runner.ValidationError),
             ):
                 runner.verify_source_binding(
-                    repository="ProfHepta/HeptaBao",
+                    repository="TrillionniumFoundation/HeptaBao",
                     commit="b" * 40,
                     tree="c" * 40,
                     manifest=manifest,
@@ -648,7 +670,7 @@ class ExactHeadMatrixTests(unittest.TestCase):
                 self.assertRaises(runner.ValidationError),
             ):
                 runner.verify_source_binding(
-                    repository="ProfHepta/HeptaBao",
+                    repository="TrillionniumFoundation/HeptaBao",
                     commit="a" * 40,
                     tree="b" * 40,
                     manifest=manifest,

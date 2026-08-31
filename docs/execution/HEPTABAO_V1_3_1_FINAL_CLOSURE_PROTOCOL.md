@@ -6,15 +6,17 @@ This protocol closes the remaining repository-controlled evidence gaps on PR #45
 
 ## Canonical source identity
 
-No static document is permitted to claim a moving pull-request head. Every execution resolves and records repository, exact commit, exact tree, event head, event base and GitHub's synthetic merge commit directly from the event and from Git. The source-head lane and merge-candidate lane must execute different commits on a pull-request event.
+No static document is permitted to claim a moving pull-request head. Every execution resolves and records repository, stable repository ID, exact commit, exact tree, event head, event base and GitHub's synthetic merge commit directly from the event, Git and the GitHub API. The source-head lane and merge-candidate lane must execute different commits on a pull-request event.
 
-The canonical source head must end in an ordinary owner-ratification commit. The ratification commit must be authored outside the `github-actions[bot]` identity, carry the exact subject `chore(provenance): owner-ratify V1.3.1 canonical source tree`, have one parent and preserve its parent's exact Git tree. This republishes the complete reviewed tree through a human-controlled source event while retaining bot-authored ancestors as provenance rather than hiding them.
+The current execution repository is `TrillionniumFoundation/HeptaBao` with stable GitHub repository ID `1349115072` and repository-owner login `TrillionniumFoundation`. Historical full name `ProfHepta/HeptaBao` is retained only as audit lineage. The designated source ratifier is separately bound to GitHub account `ProfHepta` with account ID `102159240`; a repository transfer does not transfer or redefine that accountable identity. The repository owner and ratifier are intentionally permitted to differ, and both are verified independently.
+
+The canonical source head must end in an ordinary designated-ratifier commit. The ratification commit must be authored and committed by the designated ratifier outside the `github-actions[bot]` identity, carry the exact subject `chore(provenance): owner-ratify V1.3.1 canonical source tree`, have one parent and preserve its parent's exact Git tree. This republishes the complete reviewed tree through a human-controlled source event while retaining bot-authored ancestors as provenance rather than hiding them.
 
 The machine-readable final input records this as
 `ratification_authenticity`. Verification must inspect both the Git author
-and committer identities and reject automation fragments such as
-`github-actions` or `[bot]`; no static document may predeclare the author,
-commit or tree. A passing provenance check still is not a cryptographic
+and committer identities, bind their GitHub login and numeric account ID to the
+designated ratifier, and reject automation fragments such as `github-actions`
+or `[bot]`; no static document may predeclare the moving commit or tree. A passing provenance check still is not a cryptographic
 signature, an independent review or a qualification/authority decision.
 
 For machine checks, the required phrases are: **both the Git author and committer identities** are inspected; this is **not a cryptographic signature**. The wording is intentionally explicit so a stale or abbreviated workflow cannot silently weaken the provenance rule.

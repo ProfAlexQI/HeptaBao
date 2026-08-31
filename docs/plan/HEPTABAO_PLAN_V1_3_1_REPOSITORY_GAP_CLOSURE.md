@@ -33,6 +33,7 @@ The patch must provide all of the following on one exact remote commit and tree:
 16. parsed headers, parsed request bodies, P0 response bodies, socket ingress buffers and rendered response wire buffers must not expose secret values through derived `Debug` or implicit `Clone`; owned byte buffers are overwritten on all controlled drop/return paths;
 17. the owned canonical target and in-memory KV path must use redacted diagnostic views and controlled overwrite on drop; Authbus canonical-target verification must not allocate a duplicate target string;
 18. P0 single-field JSON rejects raw unescaped quotes, Authbus request-binding/identity `Debug` is redacted, and the canonical request digest preimage and unsigned signature payload are overwritten immediately after their providers return, including provider failure.
+19. repository identity is bound to stable GitHub repository ID `1349115072` and current full name `TrillionniumFoundation/HeptaBao`, while source ratification is bound separately to designated accountable account `ProfHepta` (`102159240`); an organization transfer cannot silently redefine the ratifier or make historical repository names valid for current execution.
 
 These are process-level best-effort controls. They do not claim compiler-proof zeroization, allocator page scrubbing, swap exclusion, core-dump prevention, locked memory or independent side-channel qualification.
 
@@ -128,9 +129,15 @@ V1.3.1 gap-closure status object, and `current_state_input` is the final
 closure input.  The V1.2 manifest and its status objects remain indexed as
 historical evidence; they are not deleted or silently rewritten.
 
-Static status and manifest objects never carry a commit, tree, author or
-runner claim.  Ratification authenticity is resolved only from the exact
-head Git object: the subject is exactly
+Static status and manifest objects never carry a moving commit, tree or runner
+claim.  Repository identity and ratifier policy are nevertheless explicit and
+non-moving: the current execution repository is `TrillionniumFoundation/HeptaBao`
+with stable GitHub repository ID `1349115072`, while the designated source
+ratifier is account `ProfHepta` with account ID `102159240`.  The repository
+owner organization may differ from that ratifier after transfer; neither role
+is inferred from the other.  Historical name `ProfHepta/HeptaBao` remains audit
+lineage only and is rejected by current execution receipts.  Ratification
+authenticity is resolved only from the exact head Git object: the subject is exactly
 `chore(provenance): owner-ratify V1.3.1 canonical source tree`, both author and
 committer identities are non-automation identities, the commit has one parent,
 and its tree equals the parent's tree.  This source check is provenance

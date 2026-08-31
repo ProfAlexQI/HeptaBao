@@ -107,7 +107,7 @@ class PlanV12Tests(unittest.TestCase):
             output = Path(temporary) / "state.json"
             args = Namespace(
                 root=str(ROOT),
-                repository="ProfHepta/HeptaBao",
+                repository="TrillionniumFoundation/HeptaBao",
                 state_input="planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml",
                 manifest="planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml",
                 ref="test/v131",

@@ -35,6 +35,11 @@ HISTORICAL_MANIFEST = "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml"
 HISTORICAL_PLAN = "docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md"
 HISTORICAL_STATE_INPUT = "planning/HEPTABAO_CANONICAL_PROJECT_STATE_V1.yaml"
 RATIFICATION_SUBJECT = "chore(provenance): owner-ratify V1.3.1 canonical source tree"
+CURRENT_REPOSITORY_ID = 1349115072
+CURRENT_REPOSITORY = "TrillionniumFoundation/HeptaBao"
+CURRENT_REPOSITORY_OWNER = "TrillionniumFoundation"
+DESIGNATED_RATIFIER_LOGIN = "ProfHepta"
+DESIGNATED_RATIFIER_ACCOUNT_ID = 102159240
 CANONICAL_WORKFLOW = ".github/workflows/plan-v1.3.1-head-and-merge-closure.yml"
 EXPECTED_HISTORICAL_WORKFLOWS = {
     ".github/workflows/plan-v1.3-gap-closure.yml",
@@ -725,6 +730,12 @@ def validate_workflow_semantics(workflow: str) -> None:
         'mkdir -p "$evidence" "$evidence/matrix"' in h02_run,
         "H02 always-run step must initialize diagnostics directories before redirects",
     )
+    gate_a_run = by_name["Validate Gate A inherited contracts and Python regression"].get("run")
+    require(isinstance(gate_a_run, str), "Gate A step has no shell body")
+    require(
+        "loader.flatten_mapping(node)" in gate_a_run,
+        "Gate A YAML scanner must expand safe merge keys before duplicate checking",
+    )
     p0_run = by_name["Execute and classify P0 socket and audit evidence"].get("run")
     require(isinstance(p0_run, str), "P0 evidence step has no shell body")
     require(
@@ -933,8 +944,29 @@ def validate_ratification_authenticity(
     require(isinstance(ratification, dict), "ratification authenticity metadata missing")
     require(ratification.get("source_of_truth") == "EXACT_HEAD_GIT_METADATA", "ratification source must be exact-head Git metadata")
     require(ratification.get("required_subject") == RATIFICATION_SUBJECT, "ratification subject drift")
-    require(ratification.get("author_identity_policy") == "NON_AUTOMATION_IDENTITY", "author identity policy drift")
-    require(ratification.get("committer_identity_policy") == "NON_AUTOMATION_IDENTITY", "committer identity policy drift")
+    require(
+        ratification.get("author_identity_policy")
+        == "DESIGNATED_ACCOUNT_NON_AUTOMATION_IDENTITY",
+        "author identity policy drift",
+    )
+    require(
+        ratification.get("committer_identity_policy")
+        == "DESIGNATED_ACCOUNT_NON_AUTOMATION_IDENTITY",
+        "committer identity policy drift",
+    )
+    require(
+        ratification.get("designated_ratifier_login") == DESIGNATED_RATIFIER_LOGIN,
+        "designated ratifier login drift",
+    )
+    require(
+        ratification.get("designated_ratifier_account_id")
+        == DESIGNATED_RATIFIER_ACCOUNT_ID,
+        "designated ratifier account ID drift",
+    )
+    require(
+        ratification.get("repository_owner_may_differ_from_ratifier") is True,
+        "repository owner and ratifier roles must remain explicitly separated",
+    )
     forbidden = ratification.get("forbidden_identity_fragments")
     require(forbidden == ["github-actions", "[bot]"], "ratification automation deny-list drift")
     require(ratification.get("required_parent_count") == 1, "ratification must have exactly one parent")
@@ -950,7 +982,8 @@ def validate_ratification_authenticity(
         (
             "ratification_authenticity",
             "both the Git author and committer identities",
-            "no static document may predeclare the author",
+            "no static document may predeclare the moving commit or tree",
+            "repository owner and ratifier are intentionally permitted to differ",
             "not a cryptographic signature",
         ),
         "ratification protocol",
@@ -970,6 +1003,14 @@ def validate_ratification_authenticity(
             "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA",
             "author_login",
             "committer_login",
+            "EXPECTED_REPOSITORY_ID",
+            "EXPECTED_REPOSITORY",
+            "EXPECTED_RATIFIER_LOGIN",
+            "EXPECTED_RATIFIER_ID",
+            "repository_id",
+            "repository_full_name",
+            "expected_ratifier_login",
+            "expected_ratifier_id",
             "identity_verified",
             "signature_required",
             "jobs:",
@@ -1036,6 +1077,10 @@ def validate_workflow_coverage(
             "DEFAULT_MANIFEST",
             'value.add_argument("--state-input"',
             'value.add_argument("--manifest"',
+            "HISTORICAL_REPOSITORY",
+            "CURRENT_REPOSITORY",
+            "ACTIVE_STATE_INPUT",
+            "expected_repository",
             "def validate_inputs(",
             '"resolution_inputs"',
             '"state_input_sha256"',
@@ -1153,7 +1198,9 @@ def validate(root: Path) -> None:
     require(status.get("status") == FINAL_INPUT_STATUS, "final closure status drift")
     integration = status.get("canonical_integration")
     require(isinstance(integration, dict), "canonical integration missing")
-    require(integration.get("repository") == "ProfHepta/HeptaBao", "canonical repository drift")
+    require(integration.get("repository_id") == CURRENT_REPOSITORY_ID, "canonical repository ID drift")
+    require(integration.get("repository") == CURRENT_REPOSITORY, "canonical repository drift")
+    require(integration.get("repository_owner") == CURRENT_REPOSITORY_OWNER, "canonical repository owner drift")
     require(integration.get("branch") == "codex/plan-v1.3-gap-closure-v2", "canonical branch drift")
     require(integration.get("pull_request") == 45, "canonical PR drift")
     require(

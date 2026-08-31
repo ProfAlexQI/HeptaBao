@@ -96,7 +96,7 @@ def resolve_source_binding(args: argparse.Namespace, root: Path) -> dict[str, An
         commit = actual_commit
     if tree is None:
         tree = actual_tree
-    require(repository == "ProfHepta/HeptaBao", "unexpected repository identity")
+    require(repository == "TrillionniumFoundation/HeptaBao", "unexpected repository identity")
     require(isinstance(commit, str) and SHA40.fullmatch(commit) is not None, "P0 source commit is malformed")
     require(isinstance(tree, str) and SHA40.fullmatch(tree) is not None, "P0 source tree is malformed")
     require(commit == actual_commit, "P0 source commit does not match checked-out HEAD")

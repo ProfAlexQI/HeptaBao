@@ -37,7 +37,7 @@ def raw_report() -> dict:
     return {
         "schema": "heptabao.p0-transport-exact-result.v1",
         "source": {
-            "repository": "ProfHepta/HeptaBao",
+            "repository": "TrillionniumFoundation/HeptaBao",
             "commit": "a" * 40,
             "tree": "b" * 40,
             "clean_tree": True,
@@ -61,11 +61,22 @@ class P0TransportEvidenceClassificationTests(unittest.TestCase):
             result,
             expected_commit="a" * 40,
             expected_tree="b" * 40,
-            expected_repository="ProfHepta/HeptaBao",
+            expected_repository="TrillionniumFoundation/HeptaBao",
         )
         self.assertEqual(result["counts"]["executed_pass"], 11)
         self.assertEqual(result["counts"]["source_bound_pass"], 2)
         self.assertEqual(result["counts"]["best_effort_source_bound_pass"], 1)
+
+    def test_historical_repository_name_is_rejected_for_current_execution(self) -> None:
+        raw = raw_report()
+        raw["source"]["repository"] = "ProfHepta/HeptaBao"
+        with self.assertRaises(CLASSIFIER.ClassificationError):
+            CLASSIFIER.classify(raw)
+
+        result = CLASSIFIER.classify(raw_report())
+        result["source"]["repository"] = "ProfHepta/HeptaBao"
+        with self.assertRaises(VALIDATOR.EvidenceValidationError):
+            VALIDATOR.validate(result)
 
     def test_source_bound_case_cannot_be_relabelled_as_runtime(self) -> None:
         result = CLASSIFIER.classify(raw_report())
@@ -123,7 +134,7 @@ class P0TransportEvidenceClassificationTests(unittest.TestCase):
             result,
             expected_commit="a" * 40,
             expected_tree="b" * 40,
-            expected_repository="ProfHepta/HeptaBao",
+            expected_repository="TrillionniumFoundation/HeptaBao",
         )
         with self.assertRaises(VALIDATOR.EvidenceValidationError):
             VALIDATOR.validate(result)
@@ -168,7 +179,7 @@ class P0TransportEvidenceClassificationTests(unittest.TestCase):
             result,
             expected_commit="a" * 40,
             expected_tree="b" * 40,
-            expected_repository="ProfHepta/HeptaBao",
+            expected_repository="TrillionniumFoundation/HeptaBao",
         )
 
         # A partial PASS label must retain its canonical class and execution

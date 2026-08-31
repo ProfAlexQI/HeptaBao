@@ -92,7 +92,10 @@
       "pattern": "^[1-9][0-9]*$"
     },
     "date_time_or_null": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "date_time": {
@@ -120,10 +123,17 @@
           "$ref": "#/$defs/non_empty"
         },
         "status": {
-          "enum": ["queued", "in_progress", "completed"]
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ]
         },
         "conclusion": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "success",
             "failure",
@@ -142,42 +152,83 @@
           "$ref": "#/$defs/date_time_or_null"
         },
         "outcome": {
-          "enum": ["PASS", "FAIL", "BLOCKED", "SKIPPED", "IN_PROGRESS", "QUEUED"]
+          "enum": [
+            "PASS",
+            "FAIL",
+            "BLOCKED",
+            "SKIPPED",
+            "IN_PROGRESS",
+            "QUEUED"
+          ]
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": {"status": {"const": "queued"}},
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "queued"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
             "properties": {
-              "conclusion": {"const": null},
-              "started_at": {"const": null},
-              "completed_at": {"const": null},
-              "outcome": {"const": "QUEUED"}
+              "conclusion": {
+                "const": null
+              },
+              "started_at": {
+                "const": null
+              },
+              "completed_at": {
+                "const": null
+              },
+              "outcome": {
+                "const": "QUEUED"
+              }
             }
           }
         },
         {
           "if": {
-            "properties": {"status": {"const": "in_progress"}},
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "in_progress"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
             "properties": {
-              "conclusion": {"const": null},
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"const": null},
-              "outcome": {"const": "IN_PROGRESS"}
+              "conclusion": {
+                "const": null
+              },
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "const": null
+              },
+              "outcome": {
+                "const": "IN_PROGRESS"
+              }
             }
           }
         },
         {
           "if": {
-            "properties": {"status": {"const": "completed"}},
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
             "properties": {
@@ -192,74 +243,135 @@
                   "action_required"
                 ]
               },
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"$ref": "#/$defs/date_time"}
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "$ref": "#/$defs/date_time"
+              }
             }
           }
         },
         {
           "if": {
             "properties": {
-              "status": {"const": "completed"},
-              "conclusion": {"const": "success"}
-            },
-            "required": ["status", "conclusion"]
-          },
-          "then": {
-            "properties": {
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"$ref": "#/$defs/date_time"},
-              "outcome": {"const": "PASS"}
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "status": {"const": "completed"},
-              "conclusion": {"const": "failure"}
-            },
-            "required": ["status", "conclusion"]
-          },
-          "then": {
-            "properties": {
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"$ref": "#/$defs/date_time"},
-              "outcome": {"const": "FAIL"}
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "status": {"const": "completed"},
+              "status": {
+                "const": "completed"
+              },
               "conclusion": {
-                "enum": ["cancelled", "timed_out", "action_required"]
+                "const": "success"
               }
             },
-            "required": ["status", "conclusion"]
+            "required": [
+              "status",
+              "conclusion"
+            ]
           },
           "then": {
             "properties": {
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"$ref": "#/$defs/date_time"},
-              "outcome": {"const": "BLOCKED"}
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "outcome": {
+                "const": "PASS"
+              }
             }
           }
         },
         {
           "if": {
             "properties": {
-              "status": {"const": "completed"},
-              "conclusion": {"enum": ["skipped", "neutral"]}
+              "status": {
+                "const": "completed"
+              },
+              "conclusion": {
+                "const": "failure"
+              }
             },
-            "required": ["status", "conclusion"]
+            "required": [
+              "status",
+              "conclusion"
+            ]
           },
           "then": {
             "properties": {
-              "started_at": {"$ref": "#/$defs/date_time"},
-              "completed_at": {"$ref": "#/$defs/date_time"},
-              "outcome": {"const": "SKIPPED"}
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "outcome": {
+                "const": "FAIL"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              },
+              "conclusion": {
+                "enum": [
+                  "cancelled",
+                  "timed_out",
+                  "action_required"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "conclusion"
+            ]
+          },
+          "then": {
+            "properties": {
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "outcome": {
+                "const": "BLOCKED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              },
+              "conclusion": {
+                "enum": [
+                  "skipped",
+                  "neutral"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "conclusion"
+            ]
+          },
+          "then": {
+            "properties": {
+              "started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "completed_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "outcome": {
+                "const": "SKIPPED"
+              }
             }
           }
         }
@@ -279,10 +391,13 @@
       ],
       "properties": {
         "repository": {
-          "const": "ProfHepta/HeptaBao"
+          "const": "TrillionniumFoundation/HeptaBao"
         },
         "kind": {
-          "enum": ["head", "merge"]
+          "enum": [
+            "head",
+            "merge"
+          ]
         },
         "commit": {
           "$ref": "#/$defs/sha40"
@@ -309,7 +424,9 @@
                 "const": "merge"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
             "properties": {
@@ -371,10 +488,17 @@
           "$ref": "#/$defs/non_empty"
         },
         "job_status": {
-          "enum": ["queued", "in_progress", "completed"]
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ]
         },
         "job_conclusion": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "success",
             "failure",
@@ -419,7 +543,10 @@
           "$ref": "#/$defs/sha40"
         },
         "source_kind": {
-          "enum": ["head", "merge"]
+          "enum": [
+            "head",
+            "merge"
+          ]
         },
         "job_started_at": {
           "$ref": "#/$defs/date_time_or_null"
@@ -458,40 +585,76 @@
       "allOf": [
         {
           "if": {
-            "properties": {"job_status": {"const": "queued"}},
-            "required": ["job_status"]
+            "properties": {
+              "job_status": {
+                "const": "queued"
+              }
+            },
+            "required": [
+              "job_status"
+            ]
           },
           "then": {
             "properties": {
-              "job_conclusion": {"const": null},
-              "job_started_at": {"const": null},
-              "job_completed_at": {"const": null}
+              "job_conclusion": {
+                "const": null
+              },
+              "job_started_at": {
+                "const": null
+              },
+              "job_completed_at": {
+                "const": null
+              }
             }
           }
         },
         {
           "if": {
-            "properties": {"job_status": {"const": "in_progress"}},
-            "required": ["job_status"]
+            "properties": {
+              "job_status": {
+                "const": "in_progress"
+              }
+            },
+            "required": [
+              "job_status"
+            ]
           },
           "then": {
             "properties": {
-              "job_conclusion": {"const": null},
-              "job_started_at": {"$ref": "#/$defs/date_time"},
-              "job_completed_at": {"const": null}
+              "job_conclusion": {
+                "const": null
+              },
+              "job_started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "job_completed_at": {
+                "const": null
+              }
             }
           }
         },
         {
           "if": {
-            "properties": {"job_status": {"const": "completed"}},
-            "required": ["job_status"]
+            "properties": {
+              "job_status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "job_status"
+            ]
           },
           "then": {
             "properties": {
-              "job_conclusion": {"const": "success"},
-              "job_started_at": {"$ref": "#/$defs/date_time"},
-              "job_completed_at": {"$ref": "#/$defs/date_time"}
+              "job_conclusion": {
+                "const": "success"
+              },
+              "job_started_at": {
+                "$ref": "#/$defs/date_time"
+              },
+              "job_completed_at": {
+                "$ref": "#/$defs/date_time"
+              }
             }
           }
         }
@@ -520,10 +683,21 @@
           "$ref": "#/$defs/sha40"
         },
         "source_kind": {
-          "enum": ["head", "merge"]
+          "enum": [
+            "head",
+            "merge"
+          ]
         },
         "required_lanes": {
-          "enum": [["head"], ["head", "merge"]]
+          "enum": [
+            [
+              "head"
+            ],
+            [
+              "head",
+              "merge"
+            ]
+          ]
         }
       }
     },
@@ -533,8 +707,12 @@
       "required": [
         "artifact_digest",
         "source_sha",
+        "repository_id",
+        "repository_full_name",
         "expected_head_owner",
         "head_owner",
+        "expected_ratifier_login",
+        "expected_ratifier_id",
         "author_login",
         "committer_login",
         "author_id",
@@ -550,25 +728,35 @@
         "source_sha": {
           "$ref": "#/$defs/sha40"
         },
+        "repository_id": {
+          "const": 1349115072
+        },
+        "repository_full_name": {
+          "const": "TrillionniumFoundation/HeptaBao"
+        },
         "expected_head_owner": {
-          "$ref": "#/$defs/non_empty"
+          "const": "TrillionniumFoundation"
         },
         "head_owner": {
-          "$ref": "#/$defs/non_empty"
+          "const": "TrillionniumFoundation"
+        },
+        "expected_ratifier_login": {
+          "const": "ProfHepta"
+        },
+        "expected_ratifier_id": {
+          "const": 102159240
         },
         "author_login": {
-          "$ref": "#/$defs/non_empty"
+          "const": "ProfHepta"
         },
         "committer_login": {
-          "$ref": "#/$defs/non_empty"
+          "const": "ProfHepta"
         },
         "author_id": {
-          "type": "integer",
-          "minimum": 1
+          "const": 102159240
         },
         "committer_id": {
-          "type": "integer",
-          "minimum": 1
+          "const": 102159240
         },
         "verification": {
           "$ref": "#/$defs/github_verification"
@@ -584,20 +772,31 @@
     "github_verification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["verified", "reason"],
+      "required": [
+        "verified",
+        "reason"
+      ],
       "properties": {
         "verified": {
           "type": "boolean"
         },
         "reason": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
     "gates": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["plan_python", "root_rust_1_98", "p0", "h02"],
+      "required": [
+        "plan_python",
+        "root_rust_1_98",
+        "p0",
+        "h02"
+      ],
       "properties": {
         "plan_python": {
           "const": "PASS"
@@ -640,7 +839,11 @@
     "h02_gate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["executed_entries", "pass", "artifact_digest"],
+      "required": [
+        "executed_entries",
+        "pass",
+        "artifact_digest"
+      ],
       "properties": {
         "executed_entries": {
           "const": 24

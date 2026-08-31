@@ -38,7 +38,7 @@ SCHEMA_ID = "heptabao.v1-3-1-lane-arbitration.v1"
 SCHEMA_URI = "https://heptabao.dev/schemas/heptabao_v1_3_1_lane_arbitration_v1.schema.json"
 DRAFT202012_SCHEMA_URI = "https://json-schema.org/draft/2020-12/schema"
 RECEIPT_SCHEMA_ID = "heptabao.v1-3-1-technical-completion-receipt.v1"
-REPOSITORY = "ProfHepta/HeptaBao"
+REPOSITORY = "TrillionniumFoundation/HeptaBao"
 WORKFLOW_NAME = "plan-v1.3.1-head-and-merge-closure"
 JOB_NAME = "full-technical-matrix"
 RUNNER_LABEL = "ubuntu-24.04"
@@ -1043,7 +1043,7 @@ def arbitrate(
     callers that need a machine-readable failure should use :func:`run`.
     """
 
-    require(repository == REPOSITORY, "repository identity must be ProfHepta/HeptaBao")
+    require(repository == REPOSITORY, "repository identity must be TrillionniumFoundation/HeptaBao")
     _check_pr(pull_request_number)
     head_sha = _check_sha(head_sha, "head SHA")
     synthetic_merge_sha = _check_sha(synthetic_merge_sha, "synthetic merge SHA")

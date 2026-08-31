@@ -69,10 +69,9 @@ mod hostile_cluster {
             && before_metrics.last_applied == after_metrics.last_applied
             && before_metrics.snapshot == after_metrics.snapshot
             && before_metrics.purged == after_metrics.purged;
-        let state_machine_unchanged =
-            before_state.last_applied_log == after_state.last_applied_log
-                && before_membership == after_membership
-                && before_client_status == after_state.client_status;
+        let state_machine_unchanged = before_state.last_applied_log == after_state.last_applied_log
+            && before_membership == after_membership
+            && before_client_status == after_state.client_status;
         let guarded_state_unchanged = metrics_unchanged && state_machine_unchanged;
 
         let (transport_outcome, transport_detail, timed_out) = match install_result {

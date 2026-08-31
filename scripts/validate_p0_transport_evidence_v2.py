@@ -103,7 +103,7 @@ def validate(
 
     source = report.get("source")
     require(isinstance(source, dict), "source binding missing")
-    require(source.get("repository") == "ProfHepta/HeptaBao", "source repository identity missing or drifted")
+    require(source.get("repository") == "TrillionniumFoundation/HeptaBao", "source repository identity missing or drifted")
     for field in ("commit", "tree"):
         value = source.get(field)
         require(isinstance(value, str) and SHA40.fullmatch(value) is not None,
@@ -214,7 +214,7 @@ def validate_failed(
 
     source = report.get("source")
     require(isinstance(source, dict), "source binding missing")
-    require(source.get("repository") == "ProfHepta/HeptaBao", "source repository identity drift")
+    require(source.get("repository") == "TrillionniumFoundation/HeptaBao", "source repository identity drift")
     for field in ("commit", "tree"):
         value = source.get(field)
         require(

@@ -186,7 +186,7 @@ def verify_source_binding(
 ) -> None:
     """Bind caller-supplied metadata to the actual immutable checkout."""
 
-    require(repository == "ProfHepta/HeptaBao", "unexpected repository identity")
+    require(repository == "TrillionniumFoundation/HeptaBao", "unexpected repository identity")
     require(HEX40.fullmatch(commit) is not None, "commit must be full lowercase 40-hex")
     require(HEX40.fullmatch(tree) is not None, "tree must be full lowercase 40-hex")
 

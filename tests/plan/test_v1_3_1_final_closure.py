@@ -206,6 +206,23 @@ class V131FinalClosureTests(unittest.TestCase):
             with self.assertRaises(MODULE.FinalClosureValidationError):
                 MODULE.validate(target)
 
+    def test_repository_transfer_ratifier_policy_drift_is_rejected(self) -> None:
+        mutations = (
+            ("designated_ratifier_login", "TrillionniumFoundation"),
+            ("designated_ratifier_account_id", 262513357),
+            ("repository_owner_may_differ_from_ratifier", False),
+        )
+        for key, replacement in mutations:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary)
+                copy_surface(target)
+                path = target / "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml"
+                value = yaml.safe_load(path.read_text(encoding="utf-8"))
+                value["ratification_authenticity"][key] = replacement
+                path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+                with self.assertRaises(MODULE.FinalClosureValidationError):
+                    MODULE.validate(target)
+
     def test_ratification_subject_or_parent_policy_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary)
@@ -275,6 +292,13 @@ class V131FinalClosureTests(unittest.TestCase):
         steps[first], steps[second] = steps[second], steps[first]
         with self.assertRaises(MODULE.FinalClosureValidationError):
             MODULE.validate_workflow_semantics(yaml.safe_dump(value, sort_keys=False))
+
+    def test_workflow_gate_a_yaml_scanner_requires_merge_key_expansion(self) -> None:
+        workflow_path = ROOT / ".github/workflows/plan-v1.3.1-head-and-merge-closure.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        forged = workflow.replace("              loader.flatten_mapping(node)\n", "", 1)
+        with self.assertRaises(MODULE.FinalClosureValidationError):
+            MODULE.validate_workflow_semantics(forged)
 
     def test_workflow_gate_a_must_execute_each_validator(self) -> None:
         workflow_path = ROOT / ".github/workflows/plan-v1.3.1-head-and-merge-closure.yml"

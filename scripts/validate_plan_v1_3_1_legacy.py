@@ -82,6 +82,7 @@ def validate(root: Path) -> None:
         "owned_request_response_and_wire_buffer_hygiene",
         "owned_target_and_kv_path_hygiene",
         "authbus_binding_redaction_and_digest_preimage_hygiene",
+        "repository_identity_transfer_and_ratifier_separation",
     }
     require(set(remediation) == expected_remediation, "repository remediation coverage drift")
     require(

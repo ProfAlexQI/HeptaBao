@@ -27,7 +27,7 @@ from typing import Any, Mapping
 
 SCHEMA_ID = "heptabao.github-actions-job-identity.v1"
 LOG_MANIFEST_SCHEMA_ID = "heptabao.github-actions-log-manifest.v1"
-REPOSITORY = "ProfHepta/HeptaBao"
+REPOSITORY = "TrillionniumFoundation/HeptaBao"
 WORKFLOW_NAME = "plan-v1.3.1-head-and-merge-closure"
 JOB_NAME = "full-technical-matrix"
 CANONICAL_RUNNER_LABEL = "ubuntu-24.04"

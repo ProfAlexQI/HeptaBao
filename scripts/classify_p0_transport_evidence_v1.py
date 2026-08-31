@@ -103,7 +103,7 @@ def classify(report: dict[str, Any]) -> dict[str, Any]:
 
     source = report.get("source")
     require(isinstance(source, dict), "raw P0 source binding missing")
-    require(source.get("repository") == "ProfHepta/HeptaBao", "raw P0 repository identity drift")
+    require(source.get("repository") == "TrillionniumFoundation/HeptaBao", "raw P0 repository identity drift")
     for field in ("commit", "tree"):
         value = source.get(field)
         require(isinstance(value, str) and SHA40.fullmatch(value) is not None,

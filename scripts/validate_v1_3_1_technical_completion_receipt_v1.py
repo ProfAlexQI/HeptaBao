@@ -31,7 +31,11 @@ JOB_IDENTITY_SCHEMA_PATH = ROOT / "schemas/heptabao_github_actions_job_identity_
 LOG_MANIFEST_SCHEMA_PATH = ROOT / "schemas/heptabao_github_actions_log_manifest_v1.schema.json"
 SCHEMA_ID = "heptabao.v1-3-1-technical-completion-receipt.v1"
 SCHEMA_URI = "https://heptabao.dev/schemas/heptabao_v1_3_1_technical_completion_receipt_v1.schema.json"
-REPOSITORY = "ProfHepta/HeptaBao"
+REPOSITORY = "TrillionniumFoundation/HeptaBao"
+REPOSITORY_ID = 1349115072
+REPOSITORY_OWNER = "TrillionniumFoundation"
+RATIFIER_LOGIN = "ProfHepta"
+RATIFIER_ID = 102159240
 WORKFLOW_NAME = "plan-v1.3.1-head-and-merge-closure"
 JOB_NAME = "full-technical-matrix"
 RUNNER_LABEL = "ubuntu-24.04"
@@ -199,8 +203,12 @@ REQUIRED_LOG_MANIFEST_PATHS = {
 }
 GITHUB_IDENTITY_ARTIFACT_FIELDS = (
     "source_sha",
+    "repository_id",
+    "repository_full_name",
     "expected_head_owner",
     "head_owner",
+    "expected_ratifier_login",
+    "expected_ratifier_id",
     "author_login",
     "committer_login",
     "author_id",
@@ -711,13 +719,44 @@ def _validate_github_identity_intrinsic(
         "GitHub identity artifact source SHA must equal receipt source.head",
     )
 
-    owner = _check_non_empty(identity.get("expected_head_owner"), "github_identity.expected_head_owner")
+    repository_id = identity.get("repository_id")
+    require(
+        type(repository_id) is int and repository_id == REPOSITORY_ID,
+        "GitHub identity repository ID drift",
+    )
+    repository_full_name = _check_non_empty(
+        identity.get("repository_full_name"), "github_identity.repository_full_name"
+    )
+    require(
+        repository_full_name == REPOSITORY == source.get("repository"),
+        "GitHub identity repository full name drift",
+    )
+
+    owner = _check_non_empty(
+        identity.get("expected_head_owner"), "github_identity.expected_head_owner"
+    )
     head_owner = _check_non_empty(identity.get("head_owner"), "github_identity.head_owner")
+    require(
+        owner == head_owner == REPOSITORY_OWNER,
+        "GitHub repository owner fields disagree",
+    )
+
+    expected_ratifier_login = _check_non_empty(
+        identity.get("expected_ratifier_login"),
+        "github_identity.expected_ratifier_login",
+    )
+    expected_ratifier_id = identity.get("expected_ratifier_id")
+    require(
+        expected_ratifier_login == RATIFIER_LOGIN
+        and type(expected_ratifier_id) is int
+        and expected_ratifier_id == RATIFIER_ID,
+        "GitHub designated ratifier policy drift",
+    )
     author_login = _check_non_empty(identity.get("author_login"), "github_identity.author_login")
     committer_login = _check_non_empty(identity.get("committer_login"), "github_identity.committer_login")
     require(
-        owner == head_owner == author_login == committer_login,
-        "GitHub identity owner/login fields disagree",
+        author_login == committer_login == expected_ratifier_login,
+        "GitHub author/committer do not match designated ratifier",
     )
 
     for field in ("author_id", "committer_id"):
@@ -725,13 +764,9 @@ def _validate_github_identity_intrinsic(
         # bool is an int subclass; reject it explicitly because the API emits
         # numeric account IDs and a boolean would be an ambiguous forgery.
         require(
-            type(value) is int and value >= 1,
-            f"github_identity.{field} must be a positive integer",
+            type(value) is int and value == expected_ratifier_id,
+            f"github_identity.{field} does not match designated ratifier account ID",
         )
-    require(
-        identity.get("author_id") == identity.get("committer_id"),
-        "GitHub author and committer account IDs disagree",
-    )
 
     verification = identity.get("verification")
     require(isinstance(verification, Mapping), "GitHub identity verification object is missing")
