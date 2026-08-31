@@ -112,6 +112,9 @@ workflow_coverage:
     - pull_request_number
     - head_sha
     lane_key_component: source_kind
+    workflow_concurrency_epoch: v2
+    matrix_max_parallel: 1
+    cancelled_predecessor_aggregate: SKIP
     newer_head_policy: CANCEL_OLDER_RUN_AND_RETAIN_HISTORY
     ancestor_evidence: REJECT
     duplicate_entry_ids: FAIL

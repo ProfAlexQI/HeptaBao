@@ -9,7 +9,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: plan-v1.3.1-head-and-merge-closure-${{ github.event.pull_request.number || github.ref }}
+  # Epoch v2 retires the predecessor group whose cancelled matrix could still
+  # enqueue the aggregate job through always() and keep the successor pending.
+  group: plan-v1.3.1-head-and-merge-closure-v2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +24,9 @@ jobs:
       cancel-in-progress: true
     strategy:
       fail-fast: false
+      # Keep the head and merge receipts distinct while admitting only one
+      # heavy Rust/H02 lane at a time on constrained hosted-runner capacity.
+      max-parallel: 1
       matrix:
         source_kind: ${{ fromJSON(github.event_name == 'pull_request' && '["head","merge"]' || '["head"]') }}
     runs-on: ubuntu-24.04
@@ -1267,7 +1272,10 @@ jobs:
     # Selection basis is EXACT_HEAD_AND_SYNTHETIC_MERGE_ONLY; no ancestor or
     # superseded artifact is eligible for a technical PASS.
     needs: full-technical-matrix
-    if: ${{ always() }}
+    # Aggregate every technical success/failure, but do not start new checkout
+    # work after a workflow-level cancellation. This prevents a superseded run
+    # from retaining the concurrency group while its replacement stays pending.
+    if: ${{ !cancelled() }}
     concurrency:
       group: plan-v1.3.1-arbitration-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
       cancel-in-progress: true

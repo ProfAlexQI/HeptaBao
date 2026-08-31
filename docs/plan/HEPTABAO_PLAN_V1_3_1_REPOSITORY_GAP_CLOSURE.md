@@ -157,8 +157,14 @@ results are non-authoritative and cannot satisfy this lane's closure
 arbitration.  Duplicate or stale evidence is arbitrated fail-closed: a newer
 head cancels an older run while retaining its history, ancestor-only artifacts
 are rejected, duplicate matrix entry IDs fail the aggregate, and a technical
-result is usable only when both source lanes complete.  Each lane's technical
-receipt additionally binds the digest and fields of the GitHub REST identity
+result is usable only when both source lanes complete. The two heavy lanes
+remain separate jobs but are admitted with `strategy.max-parallel: 1`. A
+superseded workflow skips its aggregate when `cancelled()`: using `always()`
+at job scope can start checkout work even after cancellation and retain the old
+workflow-level concurrency group, leaving the replacement run pending. The
+corrected group uses the `v2` epoch so an already queued predecessor cannot
+block the repaired lane. Each lane's technical receipt additionally binds the
+digest and fields of the GitHub REST identity
 record used for owner-ratification checks and records a locally recomputed
 arbitration key (PR/dispatch, head SHA and source lane) plus the required lane
 set.  These fields support deterministic head/merge aggregation without
@@ -168,7 +174,9 @@ authority.
 ### Post-run lane arbitration
 
 The canonical workflow runs `scripts/arbitrate_v1_3_1_lanes_v1.py` after the
-matrix jobs with `always()`.  Its strict aggregate schema requires exactly the
+matrix jobs with `!cancelled()`: ordinary success, failure or skipped-needs
+outcomes are still aggregated, while an explicitly cancelled superseded run
+does not enqueue a new aggregate job. Its strict aggregate schema requires exactly the
 `head` and synthetic `merge` receipts for a pull request, the same immutable
 head SHA/base/event-merge binding, a distinct merge source commit, and
 digest-bound PASS technical receipts.  Current run/attempt IDs, numeric job

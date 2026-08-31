@@ -657,6 +657,17 @@ def validate_workflow_semantics(workflow: str) -> None:
     require(isinstance(value, dict), "canonical workflow must be one mapping")
     _validate_workflow_triggers(value, workflow)
     _validate_workflow_permissions(value)
+    workflow_concurrency = value.get("concurrency")
+    require(isinstance(workflow_concurrency, Mapping), "workflow concurrency is missing")
+    require(
+        workflow_concurrency.get("group")
+        == "plan-v1.3.1-head-and-merge-closure-v2-${{ github.event.pull_request.number || github.ref }}",
+        "workflow concurrency epoch/group drift",
+    )
+    require(
+        workflow_concurrency.get("cancel-in-progress") is True,
+        "workflow concurrency must cancel superseded runs",
+    )
     jobs = value.get("jobs")
     require(isinstance(jobs, dict), "canonical workflow jobs are missing")
     matrix_job = jobs.get("full-technical-matrix")
@@ -665,6 +676,10 @@ def validate_workflow_semantics(workflow: str) -> None:
     strategy = matrix_job.get("strategy")
     require(isinstance(strategy, dict), "canonical matrix strategy is missing")
     require(strategy.get("fail-fast") is False, "canonical matrix must disable fail-fast")
+    require(
+        strategy.get("max-parallel") == 1,
+        "canonical matrix must serialize heavy source-lane admission",
+    )
     matrix = strategy.get("matrix")
     require(isinstance(matrix, dict), "canonical source-kind matrix is missing")
     source_expression = matrix.get("source_kind")
@@ -801,7 +816,10 @@ def validate_workflow_semantics(workflow: str) -> None:
     aggregate = jobs.get("arbitrate-head-and-merge-evidence")
     require(isinstance(aggregate, dict), "canonical aggregate job is missing")
     require(aggregate.get("needs") == "full-technical-matrix", "aggregate job dependency drift")
-    require(aggregate.get("if") == "${{ always() }}", "aggregate job must run with always()")
+    require(
+        aggregate.get("if") == "${{ !cancelled() }}",
+        "aggregate job must run after technical failure but skip cancelled predecessors",
+    )
     require(aggregate.get("runs-on") == "ubuntu-24.04", "aggregate runner image drift")
     aggregate_steps = aggregate.get("steps")
     require(isinstance(aggregate_steps, list), "aggregate steps are missing")
@@ -1133,6 +1151,18 @@ def validate_workflow_coverage(
         "duplicate run key must bind PR number and head SHA",
     )
     require(arbitration.get("lane_key_component") == "source_kind", "duplicate lane key must bind source kind")
+    require(
+        arbitration.get("workflow_concurrency_epoch") == "v2",
+        "workflow concurrency epoch drift",
+    )
+    require(
+        arbitration.get("matrix_max_parallel") == 1,
+        "canonical matrix admission parallelism drift",
+    )
+    require(
+        arbitration.get("cancelled_predecessor_aggregate") == "SKIP",
+        "cancelled predecessor aggregate policy drift",
+    )
     require(arbitration.get("newer_head_policy") == "CANCEL_OLDER_RUN_AND_RETAIN_HISTORY", "new-head arbitration policy drift")
     require(arbitration.get("ancestor_evidence") == "REJECT", "ancestor evidence must be rejected")
     require(arbitration.get("duplicate_entry_ids") == "FAIL", "duplicate matrix IDs must fail closed")

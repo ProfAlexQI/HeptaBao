@@ -93,8 +93,16 @@ gates. Other legacy workflows may still be triggered for historical or
 diagnostic evidence; they are non-authoritative and cannot satisfy this
 closure's lane arbitration. Concurrency is scoped to a pull request and its
 head SHA (with `source_kind` retained as the lane key): a newer head cancels an
-older run but does not erase its recorded history. The latest exact-head run
-is selected only if both lanes complete; ancestor-only artifacts are rejected.
+older run but does not erase its recorded history. The heavy source matrix uses
+`strategy.max-parallel: 1`; this bounds hosted-runner admission without
+collapsing the distinct head and merge jobs or allowing either receipt to stand
+in for the other. A cancelled predecessor must skip its post-run aggregate via
+`if: ${{ !cancelled() }}`. Failure or skipped technical lanes still reach the
+aggregate, but workflow-level cancellation cannot enqueue fresh checkout work
+and keep the predecessor concurrency group alive. The workflow-level group is
+versioned (`v2`) so already wedged predecessor runs cannot block the corrected
+policy. The latest exact-head run is selected only if both lanes complete;
+ancestor-only artifacts are rejected.
 Within a matrix summary, missing, unexpected or duplicate entry IDs are
 aggregate failures, never a reason to discard a conflicting result.
 

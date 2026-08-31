@@ -256,6 +256,48 @@ class V131FinalClosureTests(unittest.TestCase):
             with self.assertRaises(MODULE.FinalClosureValidationError):
                 MODULE.validate(target)
 
+    def test_workflow_cancelled_predecessor_policy_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary)
+            copy_surface(target)
+            path = target / "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml"
+            value = yaml.safe_load(path.read_text(encoding="utf-8"))
+            mutations = (
+                ("workflow_concurrency_epoch", "v1"),
+                ("matrix_max_parallel", 2),
+                ("cancelled_predecessor_aggregate", "RUN"),
+            )
+            for key, replacement in mutations:
+                with self.subTest(key=key):
+                    mutated = yaml.safe_load(path.read_text(encoding="utf-8"))
+                    mutated["workflow_coverage"]["duplicate_arbitration"][key] = replacement
+                    path.write_text(yaml.safe_dump(mutated, sort_keys=False), encoding="utf-8")
+                    with self.assertRaises(MODULE.FinalClosureValidationError):
+                        MODULE.validate(target)
+                    path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+    def test_workflow_cancel_handoff_is_fail_closed(self) -> None:
+        workflow_path = ROOT / ".github/workflows/plan-v1.3.1-head-and-merge-closure.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        mutations = (
+            workflow.replace(
+                "plan-v1.3.1-head-and-merge-closure-v2-",
+                "plan-v1.3.1-head-and-merge-closure-",
+                1,
+            ),
+            workflow.replace("      max-parallel: 1\n", "      max-parallel: 2\n", 1),
+            workflow.replace(
+                "    if: ${{ !cancelled() }}\n",
+                "    if: ${{ always() }}\n",
+                1,
+            ),
+        )
+        for forged in mutations:
+            self.assertNotEqual(forged, workflow)
+            with self.subTest(mutation=forged[:120]):
+                with self.assertRaises(MODULE.FinalClosureValidationError):
+                    MODULE.validate_workflow_semantics(forged)
+
     def test_source_bound_case_cannot_be_declared_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary)

@@ -21,7 +21,7 @@ repository_remediation:
   http_204_zero_wire_body: IMPLEMENTED_SOURCE
   durable_active_parent_fail_closed: IMPLEMENTED_SOURCE
   legacy_data_temporary_artifact_guard: IMPLEMENTED_SOURCE
-  exact_head_consolidated_workflow: IMPLEMENTED_SOURCE_FAIL_CLOSED_YML_YAML_ADMISSION
+  exact_head_consolidated_workflow: IMPLEMENTED_SOURCE_FAIL_CLOSED_YML_YAML_ADMISSION_CANCELLATION_SAFE
   machine_checked_v1_3_1_contract: IMPLEMENTED_SOURCE_DEPENDENCIES_MANIFEST_BOUND
   bounded_transport_rejection_writes: IMPLEMENTED_SOURCE
   absolute_total_response_write_deadline: IMPLEMENTED_SOURCE
