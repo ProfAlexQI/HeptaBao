@@ -1,21 +1,6 @@
 name: h02-openraft-fault-lab
 
 on:
-  pull_request:
-    paths:
-      - "planning/HEPTABAO_H02_OPENRAFT_HOSTILE_FAULTS_LINEARIZABILITY_V1.yaml"
-      - "planning/HEPTABAO_H02_EXECUTION_QUEUE_V3.yaml"
-      - "schemas/heptabao_h02_linearizability_history_v1.schema.json"
-      - "schemas/heptabao_h02_linearizability_result_v1.schema.json"
-      - "schemas/heptabao_h02_openraft_hostile_snapshot_result_v1.schema.json"
-      - "schemas/heptabao_h02_openraft_fault_lab_evidence_v1.schema.json"
-      - "scripts/h02_linearizability_checker_v1.py"
-      - "scripts/h02_openraft_fault_lab_evidence_v1.py"
-      - "scripts/validate_h02_openraft_fault_lab_v1.py"
-      - "tests/platform/test_h02_linearizability_checker_v1.py"
-      - "tests/platform/test_h02_openraft_fault_lab_evidence_v1.py"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/h02-openraft-fault-lab.yml"
   push:
     branches:
       - "codex/h02-openraft-hostile-faults-linearizability-v1"

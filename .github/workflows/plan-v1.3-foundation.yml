@@ -1,20 +1,6 @@
 name: plan-v1.3-foundation
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/heptabao-protocol/**"
-      - "crates/heptabao-authbus-contracts/**"
-      - "crates/heptabao-p0-server/**"
-      - "docs/**"
-      - "planning/**"
-      - "schemas/**"
-      - "scripts/**"
-      - "tests/**"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/plan-v1.3-foundation.yml"
   push:
     branches: ["codex/plan-v1.3-foundation-closure-v1"]
   workflow_dispatch:

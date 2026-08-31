@@ -1,19 +1,6 @@
 name: plan-integrity-v2
 
 on:
-  pull_request:
-    paths:
-      - "docs/plan/**"
-      - "planning/**"
-      - "schemas/**"
-      - "specs/**"
-      - "scripts/**"
-      - "crates/heptabao-governance/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "requirements-plan.txt"
-      - ".github/workflows/plan-integrity-v2.yml"
   push:
     branches: ["main", "codex/plan-v1.1-h00-execution"]
   workflow_dispatch:

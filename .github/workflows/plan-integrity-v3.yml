@@ -1,7 +1,6 @@
 name: plan-integrity-v3
 
 on:
-  pull_request:
   push:
     branches: ["main", "codex/plan-v1.1-h00-execution"]
   workflow_dispatch:

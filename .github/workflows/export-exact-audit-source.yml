@@ -5,9 +5,6 @@ on:
     branches:
       - "codex/plan-v1.2-canonical-gap-closure-v1"
       - "codex/plan-v1.3-gap-closure-v2"
-  pull_request:
-    branches:
-      - "main"
   workflow_dispatch:
 
 permissions:

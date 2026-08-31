@@ -1,24 +1,6 @@
 name: h02-source-integrity-evidence
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/heptabao-platform-contracts/**"
-      - "planning/HEPTABAO_H02_SOURCE_INTEGRITY_POLICY_V1.yaml"
-      - "planning/HEPTABAO_H02_EXECUTION_PROFILES_V1.yaml"
-      - "planning/HEPTABAO_H02_CANDIDATE_PROBE_MATRIX_V1.yaml"
-      - "planning/evidence/h02/**"
-      - "schemas/heptabao_dependency_registry_evidence_v1.schema.json"
-      - "schemas/heptabao_dependency_execution_profiles_v1.schema.json"
-      - "scripts/h02_dependency_probe_v1.py"
-      - "scripts/validate_dependency_registry_evidence_v1.py"
-      - "scripts/validate_dependency_execution_profiles_v1.py"
-      - "scripts/validate_dependency_research_captures_v1.py"
-      - "tests/platform/**"
-      - "probes/h02/**"
-      - ".github/workflows/h02-source-integrity-evidence.yml"
   push:
     branches:
       - "codex/h02-source-integrity-evidence"

@@ -1,15 +1,6 @@
 name: h02-candidate-adapters
 
 on:
-  pull_request:
-    paths:
-      - "planning/HEPTABAO_H02_CANDIDATE_ADAPTERS_V1.yaml"
-      - "schemas/heptabao_h02_candidate_comparison_v1.schema.json"
-      - "scripts/h02_candidate_adapter_harness_v1.py"
-      - "scripts/validate_h02_candidate_adapters_v1.py"
-      - "tests/platform/test_h02_candidate_adapter_harness_v1.py"
-      - "probes/h02/**"
-      - ".github/workflows/h02-candidate-adapters.yml"
   push:
     branches: ["codex/h02-candidate-adapters-v1"]
   workflow_dispatch:

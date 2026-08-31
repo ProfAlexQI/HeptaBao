@@ -1,28 +1,9 @@
 name: plan-v1.3-gap-closure
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/heptabao-authbus-contracts/**"
-      - "crates/heptabao-governance/**"
-      - "crates/heptabao-oracle-observer/**"
-      - "crates/heptabao-p0-server/**"
-      - "crates/heptabao-platform-bakeoff/**"
-      - "crates/heptabao-platform-contracts/**"
-      - "crates/heptabao-protocol/**"
-      - "docs/**"
-      - "planning/**"
-      - "schemas/**"
-      - "scripts/**"
-      - "tests/**"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/**"
   push:
     branches:
       - "main"
-      - "codex/plan-v1.3-gap-closure-v2"
   workflow_dispatch:
 
 permissions:

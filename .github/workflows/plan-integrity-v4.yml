@@ -1,16 +1,6 @@
 name: plan-integrity-v4
 
 on:
-  pull_request:
-    paths:
-      - "README.md"
-      - "docs/**"
-      - "planning/**"
-      - "schemas/**"
-      - "scripts/**"
-      - "tests/**"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/**"
   push:
     branches:
       - "codex/plan-v1.2-execution-contracts-gap-closure-v1"

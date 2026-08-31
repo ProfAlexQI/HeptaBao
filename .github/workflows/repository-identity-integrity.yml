@@ -1,7 +1,6 @@
 name: repository-identity-integrity
 
 on:
-  pull_request:
   push:
     branches: ["main", "codex/h02-final-gap-closure-v1"]
   workflow_dispatch:

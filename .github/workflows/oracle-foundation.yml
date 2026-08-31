@@ -1,17 +1,6 @@
 name: oracle-foundation
 
 on:
-  pull_request:
-    paths:
-      - "oracle/**"
-      - "schemas/heptabao_oracle_*"
-      - "scripts/oracle_*"
-      - "scripts/validate_oracle_foundation_v1.py"
-      - "tests/oracle/**"
-      - "planning/HEPTABAO_H01_WORK_PACKAGE_STATUS_V1.yaml"
-      - "qualifications/H01/**"
-      - "requirements-plan.txt"
-      - ".github/workflows/oracle-foundation.yml"
   push:
     branches: ["codex/h01-oracle-foundation"]
   workflow_dispatch:

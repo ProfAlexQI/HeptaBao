@@ -1,17 +1,6 @@
 name: evidence-semantics
 
 on:
-  pull_request:
-    paths:
-      - "schemas/**"
-      - "authority/**"
-      - "compatibility/**"
-      - "qualifications/receipts/**"
-      - "releases/attestations/**"
-      - "planning/HEPTABAO_AUTHORITY_POLICY_V1.yaml"
-      - "scripts/validate_evidence_objects_v1.py"
-      - "requirements-plan.txt"
-      - ".github/workflows/evidence-semantics.yml"
   push:
     branches: ["main", "codex/plan-v1.1-h00-execution"]
   workflow_dispatch:

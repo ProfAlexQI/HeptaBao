@@ -1,33 +1,6 @@
 name: h01-h02-next-foundation
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/heptabao-oracle-observer/**"
-      - "crates/heptabao-platform-bakeoff/**"
-      - "oracle/advisories/**"
-      - "oracle/fixtures/synthetic/**"
-      - "oracle/inventory/openbao-v2.6.2/cli-command-seed.yaml"
-      - "oracle/inventory/openbao-v2.6.2/config-*-seed.yaml"
-      - "planning/evidence/h02/**"
-      - "planning/HEPTABAO_H01_WORK_PACKAGE_STATUS_V1.yaml"
-      - "planning/HEPTABAO_H02_*.yaml"
-      - "qualifications/H01/**"
-      - "qualifications/H02/**"
-      - "schemas/heptabao_dependency_*.json"
-      - "schemas/heptabao_oracle_cli_inventory_v1.schema.json"
-      - "schemas/heptabao_oracle_regression_registry_v1.schema.json"
-      - "schemas/heptabao_oracle_side_effect_observation_v1.schema.json"
-      - "scripts/oracle_side_effect_diff_v1.py"
-      - "scripts/validate_dependency_bakeoff_v1.py"
-      - "scripts/validate_dependency_research_captures_v1.py"
-      - "scripts/validate_h01_h02_next_v1.py"
-      - "scripts/yaml12_loader.py"
-      - "tests/oracle/**"
-      - "tests/platform/**"
-      - ".github/workflows/h01-h02-next-foundation.yml"
   push:
     branches: ["codex/h01-h02-next-foundation"]
   workflow_dispatch:

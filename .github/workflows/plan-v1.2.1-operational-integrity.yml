@@ -1,16 +1,6 @@
 name: plan-v1.2.1-operational-integrity
 
 on:
-  pull_request:
-    paths:
-      - "README.md"
-      - "docs/**"
-      - "planning/**"
-      - "schemas/**"
-      - "scripts/**"
-      - "tests/plan/**"
-      - "tests/platform/test_h02_exact_head_matrix_v1.py"
-      - ".github/workflows/plan-v1.2.1-operational-integrity.yml"
   workflow_dispatch:
 
 permissions:

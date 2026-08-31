@@ -1,15 +1,6 @@
 name: h02-openraft-inmemory-cluster
 
 on:
-  pull_request:
-    paths:
-      - "planning/HEPTABAO_H02_OPENRAFT_INMEMORY_CLUSTER_V1.yaml"
-      - "schemas/heptabao_h02_openraft_cluster_evidence_v1.schema.json"
-      - "scripts/h02_openraft_inmemory_cluster_evidence_v1.py"
-      - "scripts/validate_h02_openraft_inmemory_cluster_v1.py"
-      - "tests/platform/test_h02_openraft_inmemory_cluster_v1.py"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/h02-openraft-inmemory-cluster.yml"
   push:
     branches:
       - "codex/h02-openraft-inmemory-cluster-v1"

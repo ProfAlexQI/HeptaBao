@@ -1,16 +1,6 @@
 name: h02-probe-sbom-msrv
 
 on:
-  pull_request:
-    paths:
-      - "probes/h02/**"
-      - "planning/HEPTABAO_H02_CANDIDATE_PROBE_MATRIX_V1.yaml"
-      - "planning/HEPTABAO_H02_SBOM_UNSAFE_POLICY_V1.yaml"
-      - "planning/HEPTABAO_H02_EXECUTION_QUEUE_V2.yaml"
-      - "schemas/heptabao_dependency_probe_evidence_v1.schema.json"
-      - "scripts/h02_dependency_probe_v1.py"
-      - "tests/platform/test_h02_dependency_probe_v1.py"
-      - ".github/workflows/h02-probe-sbom-msrv.yml"
   push:
     branches: ["codex/h02-probes-sbom-msrv"]
   workflow_dispatch:

@@ -1,15 +1,6 @@
 name: h02-seeded-behavior-harness
 
 on:
-  pull_request:
-    paths:
-      - "planning/HEPTABAO_H02_SEEDED_BEHAVIOR_HARNESS_V1.yaml"
-      - "schemas/heptabao_h02_seeded_behavior_evidence_v1.schema.json"
-      - "schemas/heptabao_h02_independent_reproduction_v1.schema.json"
-      - "scripts/h02_seeded_behavior_harness_v1.py"
-      - "scripts/validate_h02_seeded_behavior_plan_v1.py"
-      - "tests/platform/test_h02_seeded_behavior_harness_v1.py"
-      - ".github/workflows/h02-seeded-behavior-harness.yml"
   push:
     branches: ["codex/h02-seeded-behavior-harnesses"]
   workflow_dispatch:

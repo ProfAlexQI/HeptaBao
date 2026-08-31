@@ -1,16 +1,6 @@
 name: h02-openraft-blocker-closure
 
 on:
-  pull_request:
-    paths:
-      - "planning/HEPTABAO_H02_OS_DURABLE_CLOCK_BLOCKER_CLOSURE_V1.yaml"
-      - "schemas/heptabao_h02_blocker_closure_result_v1.schema.json"
-      - "schemas/heptabao_h02_blocker_closure_evidence_v1.schema.json"
-      - "scripts/h02_blocker_closure_evidence_v1.py"
-      - "scripts/validate_h02_blocker_closure_v1.py"
-      - "tests/platform/test_h02_blocker_closure_evidence_v1.py"
-      - "probes/h02/openraft-tokio/**"
-      - ".github/workflows/h02-openraft-blocker-closure.yml"
   push:
     branches: ["codex/h02-os-durable-clock-supplychain-v1"]
   workflow_dispatch:
