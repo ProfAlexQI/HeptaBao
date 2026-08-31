@@ -1,0 +1,199 @@
+name: v1.3.1-slim-full-lane-probe
+
+on:
+  push:
+    branches:
+      - "codex/v1.3.1-slim-full-lane-probe-v1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1.3.1-slim-full-lane-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: 3c70c7735bfac5f3ef8a4f36a530da80bf8b03d7
+  SOURCE_TREE: 2fde8767472555a1ecf66182cb6215f77985e10b
+  HEPTABAO_P0_BIND: 127.0.0.1:0
+  HEPTABAO_P0_DEV_TOKEN: v1-3-1-slim-full-root-token-000001
+  HEPTABAO_P0_DEV_UNSEAL_KEY: v1-3-1-slim-full-unseal-key-00001
+
+jobs:
+  full-head:
+    name: complete exact-head slim probe
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind source and initialize evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          mkdir -p "$RUNNER_TEMP/full/root" "$RUNNER_TEMP/full/p0" "$RUNNER_TEMP/full/h02/matrix"
+          printf 'repository=%s\ncommit=%s\ntree=%s\nrun_id=%s\nrun_attempt=%s\nrunner=%s\n' \
+            "$GITHUB_REPOSITORY" "$SOURCE_SHA" "$SOURCE_TREE" "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" "$RUNNER_NAME" >"$RUNNER_TEMP/full/source-binding.txt"
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install plan dependencies
+        shell: bash
+        run: python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Execute Gate A
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/full/root"
+          validators=(
+            scripts/validate_plan_v2.py
+            scripts/validate_plan_v2_extensions.py
+            scripts/validate_plan_v1_2.py
+            scripts/validate_plan_v1_2_1.py
+            scripts/validate_plan_v1_2_2.py
+            scripts/validate_plan_v1_3.py
+            scripts/validate_plan_v1_3_1.py
+            scripts/validate_v1_3_1_final_closure_v1.py
+            scripts/validate_provenance_v1.py
+            scripts/validate_evidence_objects_v1.py
+            scripts/validate_oracle_foundation_v1.py
+            scripts/validate_repository_identity_v1.py
+            scripts/validate_dependency_bakeoff_v1.py
+            scripts/validate_dependency_execution_profiles_v1.py
+            scripts/validate_dependency_registry_evidence_v1.py
+            scripts/validate_dependency_research_captures_v1.py
+            scripts/validate_h01_h02_next_v1.py
+            scripts/validate_h02_seeded_behavior_plan_v1.py
+            scripts/validate_h02_candidate_adapters_v1.py
+            scripts/validate_h02_openraft_inmemory_cluster_v1.py
+            scripts/validate_h02_openraft_fault_lab_v1.py
+            scripts/validate_h02_blocker_closure_v1.py
+            scripts/validate_h02_exact_head_matrix_contract_v1.py
+            scripts/validate_h02_pr40_reconciliation_v1.py
+          )
+          : >"$evidence/validators.log"
+          for script in "${validators[@]}"; do python3 "$script" >>"$evidence/validators.log" 2>&1; done
+          python3 scripts/validate_rust_source_surface_v1.py \
+            crates/heptabao-protocol/src/lib.rs \
+            crates/heptabao-authbus-contracts/src/lib.rs \
+            crates/heptabao-p0-server/src/lib.rs \
+            crates/heptabao-p0-server/src/main.rs \
+            --output "$evidence/rust-source-surface.json" >>"$evidence/validators.log" 2>&1
+          for suite in oracle platform plan; do
+            python3 -m unittest discover -s "tests/$suite" -p 'test_*.py' -v \
+              >"$evidence/tests-$suite.log" 2>&1
+          done
+          python3 -m compileall -q scripts tests
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install exact Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+              -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          for toolchain in 1.88.0 1.98.0; do
+            rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          done
+
+      - name: Execute root Rust gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/full/root"
+          cargo +1.98.0 fmt --all -- --check >"$evidence/rust-fmt.log" 2>&1
+          cargo +1.98.0 test --locked --workspace --all-targets >"$evidence/rust-test.log" 2>&1
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings >"$evidence/rust-clippy.log" 2>&1
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Execute classified P0 transport
+        shell: bash
+        env:
+          HEPTABAO_P0_AUDIT_PATH: ${{ runner.temp }}/full/p0/audit-source.log
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/full/p0"
+          stderr="$evidence/server.stderr"
+          cargo +1.98.0 run --quiet --locked -p heptabao-p0-server \
+            >"$evidence/server.stdout" 2>"$stderr" &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          python3 scripts/p0_transport_exact_v1.py \
+            --stderr "$stderr" --audit "$HEPTABAO_P0_AUDIT_PATH" \
+            --repository "$GITHUB_REPOSITORY" --commit "$SOURCE_SHA" --tree "$SOURCE_TREE" \
+            >"$evidence/raw-result.json" 2>"$evidence/runner.stderr"
+          python3 scripts/classify_p0_transport_evidence_v1.py \
+            --input "$evidence/raw-result.json" --output "$evidence/classified-result.json" \
+            >"$evidence/classification.log" 2>&1
+          python3 scripts/validate_p0_transport_evidence_v2.py \
+            --input "$evidence/classified-result.json" \
+            --expected-commit "$SOURCE_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-repository "$GITHUB_REPOSITORY" >"$evidence/validation.log" 2>&1
+          test -s "$HEPTABAO_P0_AUDIT_PATH"
+          cp "$HEPTABAO_P0_AUDIT_PATH" "$evidence/audit.log"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Execute complete H02 matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/full/h02"
+          manifest=probes/h02/openraft-tokio/Cargo.toml
+          cargo +1.88.0 metadata --locked --format-version 1 --manifest-path "$manifest" \
+            >"$evidence/metadata.json" 2>"$evidence/metadata.stderr"
+          cargo +1.98.0 fmt --manifest-path "$manifest" --all -- --check >"$evidence/fmt.log" 2>&1
+          for toolchain in 1.88.0 1.98.0; do
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/full-h02-compile-$toolchain"
+            cargo +"$toolchain" test --locked --all-targets --manifest-path "$manifest" \
+              >"$evidence/test-$toolchain.log" 2>&1
+            cargo +"$toolchain" clippy --locked --all-targets --manifest-path "$manifest" -- -D warnings \
+              >"$evidence/clippy-$toolchain.log" 2>&1
+            rm -rf "$CARGO_TARGET_DIR"
+          done
+          python3 scripts/h02_exact_head_matrix_v1.py \
+            --repository "$GITHUB_REPOSITORY" --ref slim-full-head \
+            --commit "$SOURCE_SHA" --tree "$SOURCE_TREE" --manifest "$manifest" \
+            --output-dir "$evidence/matrix" --cargo-target-root "$RUNNER_TEMP/full-h02-matrix-target" \
+            --entry-timeout-seconds 120 >"$evidence/matrix-runner.log" 2>&1
+          python3 - "$evidence/matrix/matrix-summary.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert value["result"] == "PASS", value
+          assert value["counts"] == {"pass": 24, "fail": 0, "blocked": 0, "unknown": 0, "unexecuted": 0}, value
+          assert value["matrix"]["executed_entry_count"] == 24, value
+          PY
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Upload complete diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1.3.1-slim-full-head-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full/
+          if-no-files-found: error
+          retention-days: 7
