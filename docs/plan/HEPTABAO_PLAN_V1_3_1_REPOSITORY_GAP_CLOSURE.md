@@ -23,8 +23,8 @@ The patch must provide all of the following on one exact remote commit and tree:
 6. HTTP 204 wire responses with zero body bytes and `Content-Length: 0`;
 7. durable-store writes that never recreate an opened storage root after deletion or replacement;
 8. legacy adoption that rejects unresolved authoritative-data temporary artifacts;
-9. one read-only exact-head workflow covering every workspace crate, plans, tests and H02 probes;
-10. machine-checked current status, transport test vectors, Authbus request-ID lifecycle and audit-outcome documentation;
+9. one read-only exact-head workflow covering every workspace crate, plans, tests and H02 probes, with fail-closed discovery of both `.yml` and `.yaml` workflow files, strict duplicate-key rejection, glob-aware active-branch admission checks, mandatory canonical workflow presence, read-only permissions and non-persisted checkout credentials;
+10. machine-checked current status, transport test vectors, Authbus request-ID lifecycle and audit-outcome documentation, including every dynamically loaded validator dependency in the active manifest;
 11. every transport rejection response must configure a bounded write deadline before any response bytes are written, including accept-loop capacity rejection;
 12. every response must share one absolute response-write deadline; partial write progress and the final flush consume the same deadline rather than restarting a per-call timeout;
 13. per-connection worker creation must use a fallible API; allocation failure releases the admission count, records `connection-worker-spawn-failed`, closes the connection and cannot panic the listener process;
@@ -44,6 +44,7 @@ These are process-level best-effort controls. They do not claim compiler-proof z
 - `scripts/validate_plan_v1_3_1.py` passes;
 - all Python regression suites pass;
 - active workflows remain read-only and checkout credentials are not persisted;
+- missing canonical workflows, duplicate trigger keys, `.yaml` side lanes, branch-glob side lanes and unmanifested validator dependencies fail closed;
 - no repository-controlled state is promoted from source presence alone.
 
 ### Gate B — root Rust

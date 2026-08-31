@@ -87,6 +87,7 @@ workflow_coverage:
   - schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json
   - tests/platform/test_h02_exact_head_matrix_v1.py
   - scripts/validate_v1_3_1_final_closure_v1.py
+  - scripts/validate_plan_v1_3_1_legacy.py
   - tests/plan/test_p0_transport_evidence_classification_v2.py
   - tests/plan/test_v1_3_1_final_closure.py
   - .github/workflows/plan-v1.3.1-head-and-merge-closure.yml
