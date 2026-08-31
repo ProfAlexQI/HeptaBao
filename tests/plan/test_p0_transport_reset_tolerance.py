@@ -7,6 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
@@ -73,6 +75,42 @@ class P0TransportResetToleranceTests(unittest.TestCase):
     def test_non_reset_socket_error_is_not_relabelled(self) -> None:
         with self.assertRaises(PermissionError):
             self.read([PermissionError(errno.EACCES, "denied")])
+
+    def test_delegated_runner_bytes_and_regression_are_manifest_bound(self) -> None:
+        manifest = yaml.safe_load(
+            (
+                ROOT
+                / "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_3_1.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        final_input = yaml.safe_load(
+            (ROOT / "planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        documents = {
+            entry["path"]: entry
+            for entry in manifest["documents"]
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+        }
+        required_paths = set(
+            final_input["workflow_coverage"]["required_manifest_paths"]
+        )
+        expected = {
+            "scripts/p0_transport_exact_v1.py",
+            "scripts/p0_transport_exact_core_v1.py",
+            "tests/plan/test_p0_transport_reset_tolerance.py",
+        }
+        self.assertTrue(expected <= set(documents))
+        self.assertTrue(expected <= required_paths)
+        for path in expected:
+            self.assertEqual(documents[path]["kind"], "NORMATIVE")
+            self.assertEqual(documents[path]["authority_effect"], "NONE")
+
+        wrapper = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("import p0_transport_exact_core_v1 as core", wrapper)
+        self.assertIn("core.exchange = exchange", wrapper)
+        self.assertIn("core.trickle_request = trickle_request", wrapper)
 
 
 if __name__ == "__main__":

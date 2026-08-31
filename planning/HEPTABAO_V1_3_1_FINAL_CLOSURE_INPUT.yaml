@@ -79,6 +79,8 @@ workflow_coverage:
   - docs/execution/HEPTABAO_V1_3_1_FINAL_CLOSURE_PROTOCOL.md
   - planning/HEPTABAO_P0_TRANSPORT_TEST_MATRIX_V2.yaml
   - scripts/p0_transport_exact_v1.py
+  - scripts/p0_transport_exact_core_v1.py
+  - tests/plan/test_p0_transport_reset_tolerance.py
   - scripts/classify_p0_transport_evidence_v1.py
   - scripts/validate_p0_transport_evidence_v2.py
   - scripts/h02_exact_head_matrix_v1.py
