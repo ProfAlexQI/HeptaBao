@@ -1,0 +1,94 @@
+name: v1.3.1-materialize-verified-tree
+
+on:
+  push:
+    branches:
+      - "exec/v1.3.1-trigger-admission-stage"
+    paths:
+      - ".github/workflows/v1.3.1-materialize-verified-tree.yml"
+      - "tools/v1.3.1/chunks/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.3.1-materialize-verified-tree
+  cancel-in-progress: true
+
+env:
+  BASE_COMMIT: 7d1642495972e5481ddfa15ace0ee8573ad84b99
+  BASE_TREE: e9de605d1619f22b5e85a82477ebe9e124fb7921
+  TARGET_TREE: 51193191a82656cf860cea0e459ac354ecbf877a
+  PAYLOAD_TEXT_SHA256: 53662d71ee557c6b85e171bba9cface3fa09708fb35e745ade01a6f5ca8bf55e
+  PAYLOAD_GZIP_SHA256: 0c38899dd109a72a7ed092b66d90ad45656bbd6d18db1aad658d2cc76668d92e
+  PAYLOAD_PATCH_SHA256: 4b87dd5c04a7e2c3dd892615e2aac5d0d06eb3080c770b8699918412e2da675d
+
+jobs:
+  materialize:
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact staging source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind staging source and transport surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/exec/v1.3.1-trigger-admission-stage"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "$BASE_COMMIT^{tree}")" = "$BASE_TREE"
+          git merge-base --is-ancestor "$BASE_COMMIT" HEAD
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cat > "$RUNNER_TEMP/expected-staging-paths.txt" <<'EOF'
+          .github/workflows/v1.3.1-materialize-verified-tree.yml
+          tools/v1.3.1/chunks/part-00
+          tools/v1.3.1/chunks/part-01
+          tools/v1.3.1/chunks/part-02
+          tools/v1.3.1/chunks/part-03
+          tools/v1.3.1/chunks/part-04
+          tools/v1.3.1/chunks/part-05
+          tools/v1.3.1/chunks/part-06
+          tools/v1.3.1/chunks/part-07
+          tools/v1.3.1/chunks/part-08
+          tools/v1.3.1/chunks/part-09
+          EOF
+          git diff --name-only "$BASE_COMMIT"..HEAD | LC_ALL=C sort > "$RUNNER_TEMP/actual-staging-paths.txt"
+          diff -u "$RUNNER_TEMP/expected-staging-paths.txt" "$RUNNER_TEMP/actual-staging-paths.txt"
+
+      - name: Verify, apply and self-remove transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat tools/v1.3.1/chunks/part-* > "$RUNNER_TEMP/closure.patch.gz.b64"
+          printf '%s  %s\n' "$PAYLOAD_TEXT_SHA256" "$RUNNER_TEMP/closure.patch.gz.b64" | sha256sum --check --strict
+          base64 --decode "$RUNNER_TEMP/closure.patch.gz.b64" > "$RUNNER_TEMP/closure.patch.gz"
+          printf '%s  %s\n' "$PAYLOAD_GZIP_SHA256" "$RUNNER_TEMP/closure.patch.gz" | sha256sum --check --strict
+          gzip --decompress --stdout "$RUNNER_TEMP/closure.patch.gz" > "$RUNNER_TEMP/closure.patch"
+          printf '%s  %s\n' "$PAYLOAD_PATCH_SHA256" "$RUNNER_TEMP/closure.patch" | sha256sum --check --strict
+          git apply --check --index "$RUNNER_TEMP/closure.patch"
+          git apply --index "$RUNNER_TEMP/closure.patch"
+          git rm -- .github/workflows/v1.3.1-materialize-verified-tree.yml
+          git rm -r -- tools/v1.3.1/chunks
+          git diff --cached --check
+          test "$(git write-tree)" = "$TARGET_TREE"
+          python3 -m compileall -q scripts tests
+          test "$(git write-tree)" = "$TARGET_TREE"
+
+      - name: Commit and push exact verified tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "stage(v1.3.1): materialize verified trigger-admission tree" \
+            -m "qualification=false" \
+            -m "compatibility_claim=false" \
+            -m "selection_effect=NONE" \
+            -m "authority_effect=NONE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$TARGET_TREE"
+          git push origin "HEAD:$GITHUB_REF"
