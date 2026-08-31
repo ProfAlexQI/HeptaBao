@@ -55,6 +55,7 @@ CANONICAL_REQUIRED_STEP_NAMES = (
 )
 
 STEP_STATUSES = {"queued", "in_progress", "completed"}
+PROVIDER_STEP_STATUSES = STEP_STATUSES | {"pending"}
 STEP_CONCLUSIONS = {
     "success",
     "failure",
@@ -170,8 +171,16 @@ def normalize_step(value: Mapping[str, Any], index: int) -> dict[str, Any]:
     number = value.get("number")
     require(type(number) is int and number >= 1, f"job step {index} number is malformed")
     name = check_non_empty(value.get("name"), f"job step {index} name")
-    status = value.get("status")
-    require(status in STEP_STATUSES, f"job step {name} status is malformed")
+    provider_status = value.get("status")
+    require(
+        provider_status in PROVIDER_STEP_STATUSES,
+        f"job step {name} status is malformed",
+    )
+    # The live Actions jobs API exposes not-yet-started steps as ``pending``.
+    # The HeptaBao receipt schema intentionally has one canonical pre-execution
+    # state, ``queued``. Preserve the exact provider response through
+    # ``api_response_digest`` and normalize only the receipt-facing status.
+    status = "queued" if provider_status == "pending" else provider_status
     conclusion = value.get("conclusion")
     require(
         conclusion is None or conclusion in STEP_CONCLUSIONS,
@@ -185,11 +194,14 @@ def normalize_step(value: Mapping[str, Any], index: int) -> dict[str, Any]:
         start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
         require(end_dt >= start_dt, f"completed job step {name} ends before it starts")
+    elif status == "in_progress":
+        require(conclusion is None, f"in-progress job step {name} has a conclusion")
+        require(started_at is not None, f"in-progress job step {name} has no start timestamp")
+        require(completed_at is None, f"in-progress job step {name} has a completion timestamp")
     else:
-        # GitHub may expose a queued/in-progress step with a null completion
-        # timestamp; a completed timestamp on a non-completed status is stale
-        # or ambiguous and must not be used as evidence.
-        require(completed_at is None, f"non-completed job step {name} has a completion timestamp")
+        require(conclusion is None, f"queued job step {name} has a conclusion")
+        require(started_at is None, f"queued job step {name} has a start timestamp")
+        require(completed_at is None, f"queued job step {name} has a completion timestamp")
 
     if status == "completed" and conclusion == "success":
         outcome = "PASS"
