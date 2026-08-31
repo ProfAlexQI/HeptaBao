@@ -17,8 +17,14 @@ from __future__ import annotations
 
 import errno
 import socket
+import sys
 import time
+from pathlib import Path
 from typing import Protocol
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 import p0_transport_exact_core_v1 as core
 from p0_transport_exact_core_v1 import *  # noqa: F403 - preserve the v1 public test surface
@@ -244,6 +250,17 @@ def force_delivery_failure_detail(
 core.exchange = exchange
 core.trickle_request = trickle_request
 core.force_delivery_failure_detail = force_delivery_failure_detail
+
+# Preserve the historical white-box test seam. A wildcard import intentionally
+# omits underscore-prefixed names, and assignment to this wrapper module does
+# not mutate the delegated core module. Synchronize the one mutable probe-state
+# hook immediately before delegating failure classification.
+_ACTIVE_RESULTS = core._ACTIVE_RESULTS
+
+
+def failure_cases(error: BaseException) -> list[dict[str, object]]:
+    core._ACTIVE_RESULTS = _ACTIVE_RESULTS
+    return core.failure_cases(error)
 
 
 if __name__ == "__main__":

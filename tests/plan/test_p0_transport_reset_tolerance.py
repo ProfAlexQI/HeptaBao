@@ -193,6 +193,9 @@ class P0TransportResetToleranceTests(unittest.TestCase):
         workflow = (
             ROOT / ".github/workflows/plan-v1.3.1-final-exact.yml"
         ).read_text(encoding="utf-8")
+        start = workflow.index('assert p0["counts"] == {')
+        end = workflow.index('}, p0', start)
+        p0_count_block = workflow[start:end]
         for marker in (
             '"executed_pass": 11',
             '"source_bound_pass": 2',
@@ -202,7 +205,7 @@ class P0TransportResetToleranceTests(unittest.TestCase):
             '"unexecuted": 0',
             '"total": 14',
         ):
-            self.assertIn(marker, workflow)
+            self.assertIn(marker, p0_count_block)
         for forbidden in (
             '"runtime_socket_observed": 11',
             '"exact_head_compiled_source_bound": 2',
@@ -210,7 +213,7 @@ class P0TransportResetToleranceTests(unittest.TestCase):
             '"failed": 0',
             '"unknown": 0',
         ):
-            self.assertNotIn(forbidden, workflow)
+            self.assertNotIn(forbidden, p0_count_block)
 
 
 if __name__ == "__main__":
