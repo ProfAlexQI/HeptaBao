@@ -1,0 +1,26 @@
+name: v1.3.1-runner-admission-ubuntu22
+
+on:
+  push:
+    branches:
+      - "exec/v1-3-1-runner-admission-ubuntu22-20260831"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1.3.1-runner-admission-ubuntu22-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Record provider runner admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'repository=%s\nsha=%s\nrun_id=%s\nrun_attempt=%s\nrunner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
