@@ -10,6 +10,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "heptabao-barrier-api"
+version = "0.1.0"
+dependencies = [
+ "heptabao-storage-api",
+]
+
+[[package]]
+name = "heptabao-durable-core"
+version = "0.1.0"
+dependencies = [
+ "heptabao-barrier-api",
+ "heptabao-storage-api",
+]
+
+[[package]]
 name = "heptabao-governance"
 version = "0.1.0"
 
@@ -34,4 +49,15 @@ version = "0.1.0"
 
 [[package]]
 name = "heptabao-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "heptabao-single-node-store"
+version = "0.1.0"
+dependencies = [
+ "heptabao-storage-api",
+]
+
+[[package]]
+name = "heptabao-storage-api"
 version = "0.1.0"
