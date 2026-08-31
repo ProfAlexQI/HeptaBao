@@ -1,0 +1,136 @@
+name: exec-v1.3.1-repository-transfer-slim
+
+on:
+  push:
+    branches:
+      - "exec/v1.3.1-repository-transfer-gap-closure-20260831"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1.3.1-repository-transfer-slim
+  cancel-in-progress: false
+
+jobs:
+  publish-verified-tree:
+    if: ${{ github.repository == 'TrillionniumFoundation/HeptaBao' && github.actor == 'ProfHepta' }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: codex/plan-v1.3-gap-closure-v2
+      EXPECTED_PARENT: 866ceaec435b3da9f759d8dcb582252f0c48e5c4
+      EXPECTED_TREE: d91d1aaa141490deadec3a2bb45a67514b212ed1
+      PATCH_B64_BYTES: "21440"
+      PATCH_GZIP_SHA256: 4ab1f58f6078401a3de169419ce6b1db6318df724b9ca80001e120144ba8993d
+      PATCH_SHA256: 41b794a4dcca27cd58538a81120666c54edbd84bfc79f4bd4c99f92a431abc37
+    steps:
+      - name: Checkout immutable execution payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: exec-source
+
+      - name: Checkout exact target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: target
+
+      - name: Authenticate payload, materialize exact tree and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-transfer-slim"
+          mkdir -p "$evidence"
+          cat "$GITHUB_WORKSPACE"/exec-source/.heptabao-exec/patch.part-* > "$evidence/patch.gz.b64"
+          test "$(wc -c < "$evidence/patch.gz.b64")" = "$PATCH_B64_BYTES"
+          base64 --decode "$evidence/patch.gz.b64" > "$evidence/patch.gz"
+          printf '%s  %s\n' "$PATCH_GZIP_SHA256" "$evidence/patch.gz" | sha256sum --check
+          gzip --decompress --stdout "$evidence/patch.gz" > "$evidence/patch"
+          printf '%s  %s\n' "$PATCH_SHA256" "$evidence/patch" | sha256sum --check
+
+          cd "$GITHUB_WORKSPACE/target"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PARENT"
+          test "$(git rev-parse origin/$TARGET_BRANCH)" = "$EXPECTED_PARENT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git apply --check "$evidence/patch"
+          git apply --index "$evidence/patch"
+          git diff --cached --check
+
+          cat > "$evidence/expected-paths.txt" <<'PATHS'
+          .github/workflows/plan-v1.3.1-head-and-merge-closure.yml
+          docs/execution/HEPTABAO_V1_3_1_FINAL_CLOSURE_PROTOCOL.md
+          docs/plan/HEPTABAO_PLAN_V1_3_1_REPOSITORY_GAP_CLOSURE.md
+          planning/HEPTABAO_V1_3_1_FINAL_CLOSURE_INPUT.yaml
+          planning/HEPTABAO_V1_3_1_GAP_CLOSURE_STATUS.yaml
+          probes/h02/openraft-tokio/src/bin/inmemory_cluster.rs
+          schemas/heptabao_h02_exact_head_matrix_summary_v1.schema.json
+          schemas/heptabao_v1_3_1_lane_arbitration_v1.schema.json
+          schemas/heptabao_v1_3_1_technical_completion_receipt_v1.schema.json
+          scripts/arbitrate_v1_3_1_lanes_v1.py
+          scripts/classify_p0_transport_evidence_v1.py
+          scripts/collect_github_job_identity_v1.py
+          scripts/h02_exact_head_matrix_v1.py
+          scripts/p0_transport_exact_core_v1.py
+          scripts/render_canonical_project_state_v1.py
+          scripts/validate_p0_transport_evidence_v2.py
+          scripts/validate_plan_v1_3_1_legacy.py
+          scripts/validate_v1_3_1_final_closure_v1.py
+          scripts/validate_v1_3_1_technical_completion_receipt_v1.py
+          tests/plan/test_p0_transport_evidence_classification_v2.py
+          tests/plan/test_plan_v1_2.py
+          tests/plan/test_v1_3_1_final_closure.py
+          tests/plan/test_v1_3_1_technical_completion_receipt.py
+          tests/platform/test_h02_exact_head_matrix_v1.py
+          PATHS
+          git diff --cached --name-only | LC_ALL=C sort > "$evidence/actual-paths.txt"
+          LC_ALL=C sort -o "$evidence/expected-paths.txt" "$evidence/expected-paths.txt"
+          diff -u "$evidence/expected-paths.txt" "$evidence/actual-paths.txt"
+          tree="$(git write-tree)"
+          test "$tree" = "$EXPECTED_TREE"
+
+          remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_PARENT"
+          git config user.name "Qian QI"
+          git config user.email "102159240+ProfHepta@users.noreply.github.com"
+          git commit -m "fix(v1.3.1): bind repository transfer and exact gate identity" \
+            -m "Separate stable repository identity and organization ownership from the designated ratifier; update exact P0/H02/receipt contracts; repair Gate-A YAML merge parsing; fix H02 rustfmt; add transfer regressions." \
+            -m "qualification=false" \
+            -m "compatibility_claim=false" \
+            -m "selection_effect=NONE" \
+            -m "authority_effect=NONE"
+          commit="$(git rev-parse HEAD)"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_PARENT" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+          printf 'repository=%s\nbranch=%s\nparent=%s\ncommit=%s\ntree=%s\npatch_sha256=%s\nqualification=false\nauthority_effect=NONE\n' \
+            "$GITHUB_REPOSITORY" "$TARGET_BRANCH" "$EXPECTED_PARENT" "$commit" "$tree" "$PATCH_SHA256" \
+            | tee "$evidence/execution-receipt.txt"
+          touch "$evidence/target-pushed"
+
+      - name: Upload transport receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          name: v1.3.1-repository-transfer-slim-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v1.3.1-transfer-slim
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Delete one-time execution branch after successful target push
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/v1.3.1-transfer-slim"
+          if [[ -f "$evidence/target-pushed" ]]; then
+            cd "$GITHUB_WORKSPACE/target"
+            git push origin --delete "$GITHUB_REF_NAME" || true
+          fi
