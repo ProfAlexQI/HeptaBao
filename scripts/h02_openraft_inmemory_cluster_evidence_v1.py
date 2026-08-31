@@ -15,9 +15,10 @@ REVISION = "1.1"
 PROFILE_ID = "HB-H02-BEHAVIOR-RAFT-OPENRAFT-INMEMORY-0_10_0_ALPHA_33"
 CANDIDATE_ID = "HB-DEP-RAFT-OPENRAFT"
 EFFECTIVE_TOOLCHAINS = ("1.88.0", "1.98.0")
+SNAPSHOT_CASE_ID = "raft-committed-snapshot-conflict-rejected"
 CASES = [
     "raft-deterministic-apply-and-restart",
-    "raft-committed-snapshot-conflict-rejected",
+    SNAPSHOT_CASE_ID,
     "raft-joint-membership-single-writer",
     "raft-process-pause-plus-partition",
     "raft-quorum-loss-fail-closed",
@@ -25,14 +26,16 @@ CASES = [
 ]
 LIMITATIONS = [
     "openraft-memstore is test-only in-memory storage and creates no production durability claim",
-    "hostile conflicting-snapshot injection is not executed against the candidate core",
-    "operating-system process suspension, disk stall and clock fault are not executed",
-    "no external linearizability checker history or second independent attested environment exists",
+    "the named snapshot case executes an in-process stale committed-snapshot injection; the isolated hostile child remains the process-fatal availability boundary",
+    "operating-system process suspension, durable disk faults and clock faults are evaluated by separate blocker probes",
+    "no second independent attested environment or independent specialist review exists",
 ]
 
 
 def canonical(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -43,13 +46,21 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
-def parse_jsonl(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+def parse_jsonl(
+    path: Path,
+) -> tuple[
+    dict[str, Any] | None,
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     if not path.is_file():
         return None, [], []
     meta = None
     cases: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, raw in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if not raw.strip():
             continue
         try:
@@ -79,6 +90,33 @@ def case_map(cases: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def snapshot_semantics(detail: Any) -> tuple[bool, list[str]]:
+    if not isinstance(detail, dict):
+        return False, ["snapshot-detail-not-object"]
+    failures: list[str] = []
+    if detail.get("full_snapshot_rpc_seen") is not True:
+        failures.append("full-snapshot-rpc-not-observed")
+    if detail.get("committed_index_monotonic") is not True:
+        failures.append("committed-index-not-monotonic")
+    if detail.get("lagging_node_converged") is not True:
+        failures.append("lagging-node-not-converged")
+    if detail.get("hostile_snapshot_conflict_injection") != "EXECUTED_REJECTED":
+        failures.append("hostile-snapshot-not-executed-and-rejected")
+    if detail.get("hostile_snapshot_phase_reached") is not True:
+        failures.append("hostile-snapshot-phase-not-reached")
+    if detail.get("hostile_guarded_state_unchanged") is not True:
+        failures.append("hostile-snapshot-guarded-state-changed")
+    observation = detail.get("hostile_snapshot_observation")
+    if not isinstance(observation, dict):
+        failures.append("hostile-snapshot-observation-missing")
+    else:
+        if observation.get("outcome") != "REJECTED":
+            failures.append("hostile-snapshot-outcome-not-rejected")
+        if observation.get("guarded_state_unchanged") is not True:
+            failures.append("hostile-snapshot-observation-state-changed")
+    return not failures, failures
+
+
 def collect(args: argparse.Namespace) -> dict[str, Any]:
     output_path = Path(args.adapter_output)
     replay_path = Path(args.replay_output)
@@ -102,7 +140,13 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     else:
         for key, expected in expected_meta.items():
             if meta.get(key) != expected:
-                errors.append({"error": f"meta-mismatch:{key}", "got": meta.get(key), "expected": expected})
+                errors.append(
+                    {
+                        "error": f"meta-mismatch:{key}",
+                        "got": meta.get(key),
+                        "expected": expected,
+                    }
+                )
 
     replay_match = False
     if output_path.is_file() and replay_path.is_file():
@@ -119,15 +163,28 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         if raw_case is None:
             status = "BLOCKED"
             assertions = 1
-            details = {"reason": "missing-required-case"}
+            details: Any = {"reason": "missing-required-case"}
         else:
             raw_status = raw_case.get("status")
-            status = raw_status if raw_status in {"PASS", "FAIL", "BLOCKED", "UNEXECUTED", "UNKNOWN"} else "UNKNOWN"
+            status = (
+                raw_status
+                if raw_status
+                in {"PASS", "FAIL", "BLOCKED", "UNEXECUTED", "UNKNOWN"}
+                else "UNKNOWN"
+            )
             assertions = raw_case.get("assertion_count")
             if not isinstance(assertions, int) or assertions < 1:
                 assertions = 1
                 status = "UNKNOWN"
             details = raw_case.get("detail", {})
+            if case_id == SNAPSHOT_CASE_ID and status == "PASS":
+                semantic_pass, semantic_failures = snapshot_semantics(details)
+                if not semantic_pass:
+                    status = "FAIL"
+                    details = {
+                        "reported_detail": details,
+                        "semantic_failures": semantic_failures,
+                    }
         evidence_cases.append(
             {
                 "case_id": case_id,
@@ -163,9 +220,15 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     else:
         status = "UNKNOWN"
 
-    snapshot_case = by_id.get("raft-committed-snapshot-conflict-rejected", {})
-    snapshot_detail = snapshot_case.get("detail", {}) if isinstance(snapshot_case, dict) else {}
-    full_snapshot_rpc = bool(snapshot_detail.get("full_snapshot_rpc_seen"))
+    snapshot_case = by_id.get(SNAPSHOT_CASE_ID, {})
+    snapshot_detail = (
+        snapshot_case.get("detail", {}) if isinstance(snapshot_case, dict) else {}
+    )
+    snapshot_ok, _ = snapshot_semantics(snapshot_detail)
+    full_snapshot_rpc = bool(
+        isinstance(snapshot_detail, dict)
+        and snapshot_detail.get("full_snapshot_rpc_seen")
+    )
 
     seed_value = int(args.seed, 16)
     manifest = Path(args.manifest)
@@ -205,8 +268,12 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "openraft": "0.10.0-alpha.33",
             "openraft_memstore": "0.10.0-alpha.33",
             "tokio": "1.53.1",
-            "cargo_lock_sha256": sha256_file(lockfile) if lockfile.is_file() else "0" * 64,
-            "manifest_sha256": sha256_file(manifest) if manifest.is_file() else "0" * 64,
+            "cargo_lock_sha256": (
+                sha256_file(lockfile) if lockfile.is_file() else "0" * 64
+            ),
+            "manifest_sha256": (
+                sha256_file(manifest) if manifest.is_file() else "0" * 64
+            ),
         },
         "scope": {
             "real_raft_nodes": 3,
@@ -216,7 +283,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "real_membership_change": True,
             "real_client_write": True,
             "real_read_index": True,
-            "real_full_snapshot_rpc": full_snapshot_rpc,
+            "real_full_snapshot_rpc": full_snapshot_rpc and snapshot_ok,
             "durability_class": "TEST_ONLY_IN_MEMORY_NO_PRODUCTION_CLAIM",
         },
         "cases": evidence_cases,
@@ -249,7 +316,12 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--environment-id", required=True)
     command.add_argument(
         "--executor-kind",
-        choices=["local-container", "github-hosted", "self-hosted", "offline-lab"],
+        choices=[
+            "local-container",
+            "github-hosted",
+            "self-hosted",
+            "offline-lab",
+        ],
         required=True,
     )
     command.add_argument("--runner-id")
@@ -261,7 +333,10 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     evidence = collect(args)
-    Path(args.output).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    Path(args.output).write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(evidence["status"])
     return 0
 

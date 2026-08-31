@@ -59,8 +59,8 @@ class P0TransportResetToleranceTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.body, b"{}")
 
-    def test_reset_before_response_bytes_fails_closed(self) -> None:
-        with self.assertRaisesRegex(MODULE.MatrixFailure, "test reset before bytes"):
+    def test_reset_before_response_bytes_remains_explicit_socket_failure(self) -> None:
+        with self.assertRaisesRegex(ConnectionResetError, "test reset before bytes"):
             self.read([ConnectionResetError(errno.ECONNRESET, "reset")])
 
     def test_partial_response_followed_by_reset_still_fails_closed(self) -> None:
@@ -75,6 +75,78 @@ class P0TransportResetToleranceTests(unittest.TestCase):
     def test_non_reset_socket_error_is_not_relabelled(self) -> None:
         with self.assertRaises(PermissionError):
             self.read([PermissionError(errno.EACCES, "denied")])
+
+    def test_delivery_failure_requires_one_request_bound_audit_graph(self) -> None:
+        request_id = "p0-startup-0001"
+        lines = [
+            (
+                f"request_id={request_id} operation=KvWrite "
+                "phase=RequestAccepted commit=NotAttempted status=0 "
+                "detail=dispatch-authorized"
+            ),
+            (
+                f"request_id={request_id} operation=KvWrite "
+                "phase=ResponseCommitted commit=Committed status=204 "
+                "detail=response-committed"
+            ),
+            (
+                f"request_id={request_id} operation=NONE "
+                "phase=ResponseCommitted commit=Committed status=503 "
+                "detail=response-delivery-failed-after-commit"
+            ),
+        ]
+        self.assertTrue(
+            MODULE._delivery_attempt_matches(
+                lines, "response-delivery-failed-after-commit"
+            )
+        )
+
+    def test_delivery_failure_rejects_cross_request_line_matching(self) -> None:
+        lines = [
+            (
+                "request_id=p0-a operation=KvRead phase=RequestAccepted "
+                "commit=NotAttempted status=0 detail=dispatch-authorized"
+            ),
+            (
+                "request_id=p0-a operation=KvRead phase=ResponsePrepared "
+                "commit=NotCommitted status=200 detail=response-prepared"
+            ),
+            (
+                "request_id=p0-b operation=NONE phase=ResponsePrepared "
+                "commit=NotCommitted status=503 "
+                "detail=response-delivery-failed-before-commit"
+            ),
+        ]
+        self.assertFalse(
+            MODULE._delivery_attempt_matches(
+                lines, "response-delivery-failed-before-commit"
+            )
+        )
+
+    def test_delivery_failure_rejects_wrong_commit_disposition(self) -> None:
+        request_id = "p0-startup-0002"
+        lines = [
+            (
+                f"request_id={request_id} operation=KvWrite "
+                "phase=RequestAccepted commit=NotAttempted status=0 "
+                "detail=dispatch-authorized"
+            ),
+            (
+                f"request_id={request_id} operation=KvWrite "
+                "phase=ResponseCommitted commit=Committed status=204 "
+                "detail=response-committed"
+            ),
+            (
+                f"request_id={request_id} operation=NONE "
+                "phase=ResponseCommitted commit=NotCommitted status=503 "
+                "detail=response-delivery-failed-after-commit"
+            ),
+        ]
+        self.assertFalse(
+            MODULE._delivery_attempt_matches(
+                lines, "response-delivery-failed-after-commit"
+            )
+        )
 
     def test_delegated_runner_bytes_and_regression_are_manifest_bound(self) -> None:
         manifest = yaml.safe_load(
@@ -111,6 +183,11 @@ class P0TransportResetToleranceTests(unittest.TestCase):
         self.assertIn("import p0_transport_exact_core_v1 as core", wrapper)
         self.assertIn("core.exchange = exchange", wrapper)
         self.assertIn("core.trickle_request = trickle_request", wrapper)
+        self.assertIn(
+            "core.force_delivery_failure_detail = force_delivery_failure_detail",
+            wrapper,
+        )
+        self.assertIn("_delivery_attempt_matches", wrapper)
 
     def test_serial_closure_uses_canonical_p0_v2_count_shape(self) -> None:
         workflow = (
