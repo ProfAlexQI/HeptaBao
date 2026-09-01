@@ -1,0 +1,296 @@
+name: v1.4.3-finalize-publish
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.4.2-recovery-foundation-v1
+    paths:
+      - .github/workflows/v1.4.3-finalize-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.3-finalize-publish-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  construct-verify-publish:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      candidate_sha: ${{ steps.candidate.outputs.sha }}
+      candidate_tree: ${{ steps.candidate.outputs.tree }}
+    steps:
+      - name: Checkout exact staged head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact staged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test "${{ github.event.pull_request.head.ref }}" = "codex/plan-v1.4.3-descriptor-fencing-v1"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf '%s\n' "$expected" >"$RUNNER_TEMP/source-head.txt"
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install exact toolchains and locate audited materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          wrapper = Path('.github/workflows/v1.4.3-finalize-publish.yml')
+          matches = []
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              if path == wrapper:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              if '.bootstrap/v1.4.3' not in text:
+                  continue
+              workflow = yaml.safe_load(text)
+              if not isinstance(workflow, dict):
+                  continue
+              for job in (workflow.get('jobs') or {}).values():
+                  if not isinstance(job, dict):
+                      continue
+                  for step in job.get('steps') or []:
+                      if not isinstance(step, dict):
+                          continue
+                      run = step.get('run')
+                      if not isinstance(run, str):
+                          continue
+                      lowered = str(step.get('name', '')).lower()
+                      if '.bootstrap/v1.4.3' in run and 'base64' in run and any(
+                          token in lowered
+                          for token in ('materialize', 'reconstruct', 'candidate', 'extract')
+                      ):
+                          matches.append((len(run), path, step.get('name'), run))
+          if not matches:
+              raise SystemExit('no audited V1.4.3 candidate materializer found')
+          matches.sort(reverse=True, key=lambda item: item[0])
+          if len(matches) > 1 and matches[0][0] == matches[1][0]:
+              raise SystemExit('ambiguous audited V1.4.3 materializer')
+          _, path, name, run = matches[0]
+          target = Path(os.environ['RUNNER_TEMP'], 'v143-materialize.sh')
+          target.write_text(run, encoding='utf-8')
+          print(f'audited_materializer={path}:{name}')
+          PY
+
+      - name: Materialize and remove all temporary transport inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/v143-materialize.sh"
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow_root = Path('.github/workflows')
+          for path in sorted(workflow_root.glob('*.yml')):
+              text = path.read_text(encoding='utf-8')
+              if path.name == 'v1.4.3-finalize-publish.yml' or '.bootstrap/v1.4.3' in text:
+                  path.unlink()
+          root = Path('.bootstrap/v1.4.3')
+          if root.exists():
+              for path in sorted(root.rglob('*'), reverse=True):
+                  if path.is_file() or path.is_symlink():
+                      path.unlink()
+                  elif path.is_dir():
+                      path.rmdir()
+              root.rmdir()
+          PY
+          test ! -e .bootstrap/v1.4.3
+          ! grep -R -n --fixed-strings '.bootstrap/v1.4.3' .github/workflows
+
+      - name: Format and freeze exact clean candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "feat(v1.4.3): add descriptor-relative storage and writer fencing"
+          fi
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'sha=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+
+      - name: Validate current V1.4.3 source and hostile regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Replay frozen V1.4.2 Python and Rust gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="34e8dc0caceb84288d4ef61f79cd7ca062718b63"
+          historical_root="$RUNNER_TEMP/v1.4.2-baseline"
+          cleanup() {
+            git worktree remove --force "$historical_root" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$historical_root" "$baseline"
+          (
+            cd "$historical_root"
+            python scripts/validate_plan_v1_4_2.py
+            python scripts/validate_v1_4_2_inherited_surface.py
+            python -m unittest discover -s tests/plan -p 'test_plan_v1_4_2.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+            cargo +1.98.0 fmt --all -- --check
+            cargo +1.98.0 test --locked --workspace --all-targets
+            cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          )
+          cleanup
+          trap - EXIT
+
+      - name: Format test and strictly lint current V1.4.3 workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.3-cargo-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Confirm non-authority and exact inherited delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          matches = sorted(Path('planning').glob('*V1_4_3*STATUS*.yaml'))
+          if len(matches) != 1:
+              raise SystemExit(f'expected one V1.4.3 status document, got {matches!r}')
+          status = yaml.safe_load(matches[0].read_text(encoding='utf-8'))
+          expected = {
+              'qualification': False,
+              'compatibility_claim': False,
+              'selected_candidates': [],
+              'selection_effect': 'NONE',
+              'production_authority': False,
+              'migration_authority': False,
+              'release_authority': False,
+              'authority_effect': 'NONE',
+          }
+          if status.get('claims') != expected:
+              raise SystemExit('V1.4.3 authority boundary drifted')
+          PY
+          git diff --check "34e8dc0caceb84288d4ef61f79cd7ca062718b63" HEAD
+
+      - name: Fast-forward publish exact clean head
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_head="$(cat "$RUNNER_TEMP/source-head.txt")"
+          remote_head="$(git ls-remote origin refs/heads/codex/plan-v1.4.3-descriptor-fencing-v1 | cut -f1)"
+          test "$remote_head" = "$source_head"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin "HEAD:refs/heads/codex/plan-v1.4.3-descriptor-fencing-v1"
+
+      - name: Emit construction receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## V1.4.3 clean candidate published'
+            echo
+            echo "- commit: `${{ steps.candidate.outputs.sha }}`"
+            echo "- tree: `${{ steps.candidate.outputs.tree }}`"
+            echo '- current and frozen Python/Rust 1.98 gates: PASS'
+            echo '- bootstrap inputs and write workflows: absent'
+            echo '- authority effect: NONE'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  exact-published-head:
+    needs: construct-verify-publish
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact published clean head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.construct-verify-publish.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind published branch commit and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="${{ needs.construct-verify-publish.outputs.candidate_sha }}"
+          test "$(git rev-parse HEAD)" = "$candidate"
+          remote="$(git ls-remote origin refs/heads/codex/plan-v1.4.3-descriptor-fencing-v1 | cut -f1)"
+          test "$remote" = "$candidate"
+          test "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.construct-verify-publish.outputs.candidate_tree }}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test ! -e .bootstrap/v1.4.3
+          ! grep -R -n --fixed-strings '.bootstrap/v1.4.3' .github/workflows
+
+      - name: Install exact Python and Rust dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Revalidate exact published V1.4.3 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Emit exact-head receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## V1.4.3 exact published head: PASS'
+            echo
+            echo "- commit: `${{ needs.construct-verify-publish.outputs.candidate_sha }}`"
+            echo "- tree: `${{ needs.construct-verify-publish.outputs.candidate_tree }}`"
+            echo '- exact-head checkout and remote binding: PASS'
+            echo '- current Python/Rust 1.98 gates: PASS'
+            echo '- authority effect: NONE'
+          } >>"$GITHUB_STEP_SUMMARY"
