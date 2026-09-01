@@ -1,0 +1,100 @@
+name: materialize-v1.4.5-review-blockers
+
+on:
+  push:
+    branches:
+      - exec/v1.4.5-review-blocker-closure-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-v1.4.5-review-blockers
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout immutable materializer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: materializer
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact V1.4.5 candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TrillionniumFoundation/HeptaBao
+          ref: codex/plan-v1.4.5-security-invariant-closure-v1
+          path: repo
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply review-blocker closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C repo rev-parse HEAD)" = "936cb5599d206cea895de2ae04a1289a0b3a0326"
+          base64 --decode materializer/tools/materialize_v145_review_blockers.py.gz.b64 \
+            | gzip --decompress >"$RUNNER_TEMP/materialize_v145_review_blockers.py"
+          test "$(sha256sum "$RUNNER_TEMP/materialize_v145_review_blockers.py" | awk '{print $1}')" = \
+            "66e4e2eefdd3b1d69a8a4768b08bec96861c93c53eb281da399c0a018a440f6f"
+          python "$RUNNER_TEMP/materialize_v145_review_blockers.py" repo
+          test -n "$(git -C repo status --porcelain=v1 --untracked-files=all)"
+          git -C repo diff --check
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: repo/requirements-plan.txt
+
+      - name: Install exact Rust 1.98 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Format and validate amended V1.4.5 source
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          cargo +1.98.0 fmt --all
+          git diff --check
+          python scripts/validate_plan_v1_4_5.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_5.py' -v
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Publish tested commit to staging ref
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "heptabao-review-blocker-materializer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v1.4.5): fence recovery publication and disambiguate CI"
+          git push --force origin HEAD:refs/heads/exec/materialized-v1.4.5-review-blockers-v1
+          printf 'materialized_sha=%s\nmaterialized_tree=%s\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" | tee "$RUNNER_TEMP/materialized.txt"
+          {
+            echo '## Tested V1.4.5 review-blocker closure'
+            echo
+            echo "- commit: \`$(git rev-parse HEAD)\`"
+            echo "- tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo '- validator, hostile tests, workspace tests and strict Clippy: PASS'
+            echo '- published only to staging ref; PR ref requires explicit connector promotion'
+          } >>"$GITHUB_STEP_SUMMARY"
