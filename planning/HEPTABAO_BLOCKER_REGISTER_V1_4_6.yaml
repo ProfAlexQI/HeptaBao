@@ -106,6 +106,22 @@ added_blockers:
   - docs/modules
   - tests/plan/test_plan_v1_4_6.py
   closure_receipt_required: true
+- id: HB-BLK-REPO-056
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: parallel filesystem-guard tests could retain unrelated writer locks across fork before exec
+  state: IMPLEMENTED_SOURCE_REVIEW_REQUIRED
+  closure_criteria:
+  - all crate-local writer-fence tests acquire one process-local serialization guard
+  - cross-process fencing test still proves busy-before-release and available-after-release
+  - semantic and hostile validators reject removal of the isolation guard
+  - exact-head and prospective-merge full-workspace runs both pass
+  evidence:
+  - crates/heptabao-filesystem-guard/src/lib.rs
+  - docs/modules/heptabao-filesystem-guard.md
+  - scripts/validate_plan_v1_4_6.py
+  - tests/plan/test_plan_v1_4_6.py
+  closure_receipt_required: true
 external_and_control_blockers_carried_forward:
 - HB-BLK-CTRL-001
 - HB-BLK-EXT-001
