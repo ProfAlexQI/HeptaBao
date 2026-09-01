@@ -1,0 +1,3 @@
+crates/heptabao-journaled-core/src/lib.rs: expected 1 matches, found 2: '            if expected_current != self.current {\n                return Err(MemoryStoreError::Conflict);\n            }\n            let committed = match self.c'
+
+exit_status=1
