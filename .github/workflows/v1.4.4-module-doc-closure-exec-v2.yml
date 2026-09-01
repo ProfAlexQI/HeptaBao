@@ -57,22 +57,33 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
-          import yaml
 
-          workflow = yaml.safe_load(Path(os.environ['RUNNER_TEMP'], 'generator.yml').read_text(encoding='utf-8'))
-          steps = workflow['jobs']['generate-validate-publish']['steps']
-          matches = [step['run'] for step in steps if step.get('name') == 'Generate complete module documentation closure']
-          if len(matches) != 1:
-              raise SystemExit(f'expected one audited generator step, found {len(matches)}')
-          script = matches[0]
+          source = Path(os.environ['RUNNER_TEMP'], 'generator.yml').read_text(encoding='utf-8')
+          start = "      - name: Generate complete module documentation closure\n        run: |\n"
+          end = "\n      - name: Upload documentation closure receipt\n"
+          if source.count(start) != 1 or source.count(end) != 1:
+              raise SystemExit('audited generator step boundaries are missing or ambiguous')
+          body = source.split(start, 1)[1].split(end, 1)[0]
           filtered = []
-          for line in script.splitlines():
+          for raw in body.splitlines():
+              line = raw[10:] if raw.startswith('          ') else raw
               if "find . -path './.git'" in line and 'TODO|TBD|PLACEHOLDER' in line:
                   filtered.append(': # historical documents are outside the V1.4.4 generated-surface scan')
               else:
                   filtered.append(line)
+          script = '\n'.join(filtered) + '\n'
+          required = [
+              "git worktree add --detach \"$work\" \"$source_sha\"",
+              "python scripts/validate_module_documentation_v1_4_4.py",
+              "cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings",
+              "git commit -m 'docs(v1.4.4): close current workspace module documentation gaps'",
+              "git push origin \"+HEAD:refs/heads/$TARGET_BRANCH\"",
+          ]
+          missing = [item for item in required if item not in script]
+          if missing:
+              raise SystemExit(f'audited generator contract drifted: {missing!r}')
           target = Path(os.environ['RUNNER_TEMP'], 'run-v1.4.4-module-doc-generator.sh')
-          target.write_text('\n'.join(filtered) + '\n', encoding='utf-8')
+          target.write_text(script, encoding='utf-8')
           target.chmod(0o700)
           PY
           bash "$RUNNER_TEMP/run-v1.4.4-module-doc-generator.sh"
