@@ -21,6 +21,8 @@ use heptabao_operation_ledger::{
 };
 use heptabao_storage_api::{CommitReceipt, DurableGenerationStore, Generation};
 
+pub type JournaledCoreResult<T, S, B, J> = Result<T, JournaledCoreError<S, B, J>>;
+
 pub struct JournaledDurableCore<S, B, J>
 where
     J: DurableJournal,
@@ -78,7 +80,7 @@ where
         expected_current: Option<Generation>,
         plaintext: SecretState,
         caller_associated_data: Vec<u8>,
-    ) -> Result<JournaledCommitReceipt, JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<JournaledCommitReceipt, S::Error, B::Error, J::Error> {
         if let Some(existing) = self.ledger.current(&operation_id) {
             return Err(JournaledCoreError::ExistingOperation {
                 phase: existing.phase(),
@@ -89,11 +91,15 @@ where
             });
         }
 
+        if let Some(phase) = self.ledger.blocking_phase() {
+            return Err(JournaledCoreError::UnresolvedOperationBlocksMutation { phase });
+        }
+
         let accepted = OperationEvent::accepted(
             operation_id.clone(),
             request_digest,
             OperationClass::DurableMutation,
-            detail_code("request-accepted")?,
+            detail_code("request-accepted").map_err(JournaledCoreError::OperationContract)?,
         )
         .map_err(JournaledCoreError::OperationContract)?;
         self.ledger
@@ -106,7 +112,8 @@ where
                 None,
                 None,
                 None,
-                detail_code("mutation-intent-committed")?,
+                detail_code("mutation-intent-committed")
+                    .map_err(JournaledCoreError::OperationContract)?,
             )
             .map_err(JournaledCoreError::OperationContract)?;
         self.ledger
@@ -123,7 +130,7 @@ where
                 Some((commit.committed, commit.digest)),
                 None,
                 None,
-                detail_code("state-committed")?,
+                detail_code("state-committed").map_err(JournaledCoreError::OperationContract)?,
             )
             .map_err(JournaledCoreError::OperationContract)?;
         if let Err(ledger_error) = self.ledger.record(committed) {
@@ -138,11 +145,77 @@ where
         })
     }
 
+    pub fn record_rejected_before_dispatch(
+        &mut self,
+        operation_id: &OperationId,
+        detail: StableDetailCode,
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
+        let current = self
+            .ledger
+            .current(operation_id)
+            .cloned()
+            .ok_or(JournaledCoreError::OperationMissing)?;
+        let rejected = current
+            .next(
+                OperationPhase::RejectedBeforeDispatch,
+                None,
+                None,
+                None,
+                detail,
+            )
+            .map_err(JournaledCoreError::OperationContract)?;
+        self.ledger
+            .record(rejected)
+            .map_err(JournaledCoreError::Ledger)?;
+        Ok(())
+    }
+
+    pub fn reconcile_committed_state(
+        &mut self,
+        operation_id: &OperationId,
+        commit: CommitReceipt,
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
+        let current = self
+            .ledger
+            .current(operation_id)
+            .cloned()
+            .ok_or(JournaledCoreError::OperationMissing)?;
+        if current.phase() != OperationPhase::IntentCommitted {
+            return Err(JournaledCoreError::OperationContract(
+                OperationContractError::InvalidTransition,
+            ));
+        }
+        let snapshot =
+            self.state.store().load_current().map_err(|error| {
+                JournaledCoreError::DurableState(DurableCoreError::Storage(error))
+            })?;
+        let observed = snapshot.map(|value| (value.generation, value.digest));
+        if observed != Some((commit.committed, commit.digest)) {
+            return Err(JournaledCoreError::DurableState(
+                DurableCoreError::CommitReceiptMismatch,
+            ));
+        }
+        let committed = current
+            .next(
+                OperationPhase::StateCommitted,
+                Some((commit.committed, commit.digest)),
+                None,
+                None,
+                detail_code("state-commit-reconciled")
+                    .map_err(JournaledCoreError::OperationContract)?,
+            )
+            .map_err(JournaledCoreError::OperationContract)?;
+        self.ledger
+            .record(committed)
+            .map_err(JournaledCoreError::Ledger)?;
+        Ok(())
+    }
+
     pub fn record_response_audited(
         &mut self,
         operation_id: &OperationId,
         response_digest: OperationDigest,
-    ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
         self.record_response_phase(
             operation_id,
             OperationPhase::ResponseAudited,
@@ -155,7 +228,7 @@ where
         &mut self,
         operation_id: &OperationId,
         response_digest: OperationDigest,
-    ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
         self.record_response_phase(
             operation_id,
             OperationPhase::ResponseAuditFailedAfterCommit,
@@ -168,17 +241,18 @@ where
         &mut self,
         operation_id: &OperationId,
         delivered: bool,
-    ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
         let current = self
             .ledger
             .current(operation_id)
             .cloned()
             .ok_or(JournaledCoreError::OperationMissing)?;
-        let response_digest = current
-            .response_digest()
-            .ok_or(JournaledCoreError::OperationContract(
-                OperationContractError::InvalidEventShape,
-            ))?;
+        let response_digest =
+            current
+                .response_digest()
+                .ok_or(JournaledCoreError::OperationContract(
+                    OperationContractError::InvalidEventShape,
+                ))?;
         let (phase, detail) = if delivered {
             (OperationPhase::Delivered, "response-delivered")
         } else {
@@ -193,7 +267,7 @@ where
                 current.state(),
                 current.effect_key_digest(),
                 Some(response_digest),
-                detail_code(detail)?,
+                detail_code(detail).map_err(JournaledCoreError::OperationContract)?,
             )
             .map_err(JournaledCoreError::OperationContract)?;
         self.ledger
@@ -206,7 +280,7 @@ where
         &mut self,
         operation_id: &OperationId,
         detail: StableDetailCode,
-    ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
         let current = self
             .ledger
             .current(operation_id)
@@ -233,7 +307,7 @@ where
         phase: OperationPhase,
         response_digest: OperationDigest,
         detail: &str,
-    ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
         let current = self
             .ledger
             .current(operation_id)
@@ -245,7 +319,7 @@ where
                 current.state(),
                 current.effect_key_digest(),
                 Some(response_digest),
-                detail_code(detail)?,
+                detail_code(detail).map_err(JournaledCoreError::OperationContract)?,
             )
             .map_err(JournaledCoreError::OperationContract)?;
         self.ledger
@@ -255,15 +329,8 @@ where
     }
 }
 
-fn detail_code<S, B, J>(
-    value: &str,
-) -> Result<StableDetailCode, JournaledCoreError<S, B, J>>
-where
-    S: Error + Send + Sync + 'static,
-    B: Error + Send + Sync + 'static,
-    J: Error + Send + Sync + 'static,
-{
-    StableDetailCode::new(value.to_owned()).map_err(JournaledCoreError::OperationContract)
+fn detail_code(value: &str) -> Result<StableDetailCode, OperationContractError> {
+    StableDetailCode::new(value.to_owned())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -286,6 +353,9 @@ where
         phase: OperationPhase,
         directive: RetryDirective,
     },
+    UnresolvedOperationBlocksMutation {
+        phase: OperationPhase,
+    },
     OperationMissing,
     StateCommittedLedgerIncomplete {
         commit: CommitReceipt,
@@ -301,15 +371,24 @@ where
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::OperationContract(error) => write!(formatter, "operation contract failure: {error}"),
+            Self::OperationContract(error) => {
+                write!(formatter, "operation contract failure: {error}")
+            }
             Self::Ledger(error) => write!(formatter, "operation ledger failure: {error}"),
             Self::DurableState(error) => write!(formatter, "durable state failure: {error}"),
             Self::ExistingOperation { phase, directive } => write!(
                 formatter,
                 "operation already exists at phase {phase:?}; retry directive is {directive:?}"
             ),
+            Self::UnresolvedOperationBlocksMutation { phase } => write!(
+                formatter,
+                "unresolved operation at phase {phase:?} fences every new mutation"
+            ),
             Self::OperationMissing => formatter.write_str("operation is missing from the ledger"),
-            Self::StateCommittedLedgerIncomplete { commit, ledger_error } => write!(
+            Self::StateCommittedLedgerIncomplete {
+                commit,
+                ledger_error,
+            } => write!(
                 formatter,
                 "state generation {} committed but ledger transition failed: {ledger_error}",
                 commit.committed.get()
@@ -329,9 +408,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use heptabao_barrier_api::{
-        BarrierContext, BarrierContractError, KeyEpoch, SealedEnvelope,
-    };
+    use heptabao_barrier_api::{BarrierContext, BarrierContractError, KeyEpoch, SealedEnvelope};
     use heptabao_journal_api::{
         AppendReceipt, JournalContractError, JournalDomain, JournalOpenMode, JournalPayload,
         JournalRecord, JournalSequence, JournalTag, JournalTail,
@@ -402,8 +479,7 @@ mod tests {
             let (Some(generation), Some(digest)) = (self.current, self.digest) else {
                 return Ok(None);
             };
-            let state =
-                OpaqueState::new(self.bytes.clone()).map_err(MemoryStoreError::Contract)?;
+            let state = OpaqueState::new(self.bytes.clone()).map_err(MemoryStoreError::Contract)?;
             Ok(Some(GenerationSnapshot {
                 generation,
                 digest,
@@ -438,10 +514,7 @@ mod tests {
         }
     }
 
-    fn state_digest(
-        generation: Generation,
-        bytes: &[u8],
-    ) -> Result<StateDigest, MemoryStoreError> {
+    fn state_digest(generation: Generation, bytes: &[u8]) -> Result<StateDigest, MemoryStoreError> {
         let mut output = [0_u8; 32];
         for (index, byte) in generation
             .get()
@@ -656,8 +729,8 @@ mod tests {
             if expected_tail != previous_tail.map(|tail| tail.sequence) {
                 return Err(MemoryJournalError::Injected);
             }
-            let value = u64::try_from(self.payloads.len() + 1)
-                .map_err(|_| MemoryJournalError::Injected)?;
+            let value =
+                u64::try_from(self.payloads.len() + 1).map_err(|_| MemoryJournalError::Injected)?;
             let sequence = JournalSequence::new(value).map_err(MemoryJournalError::Contract)?;
             let appended = JournalTail {
                 sequence,
@@ -687,10 +760,7 @@ mod tests {
 
     fn build_core(
         fail_on_append: Option<usize>,
-    ) -> Result<
-        JournaledDurableCore<MemoryStore, MockBarrier, MemoryJournal>,
-        BuildError,
-    > {
+    ) -> Result<JournaledDurableCore<MemoryStore, MockBarrier, MemoryJournal>, BuildError> {
         let state = DurableStateEngine::new(
             MemoryStore::new().map_err(BuildError::Storage)?,
             MockBarrier,
@@ -742,7 +812,9 @@ mod tests {
                 );
                 assert!(result.is_ok());
                 assert_eq!(
-                    core.ledger().current(&operation_id).map(OperationEvent::phase),
+                    core.ledger()
+                        .current(&operation_id)
+                        .map(OperationEvent::phase),
                     Some(OperationPhase::StateCommitted)
                 );
                 assert_eq!(
@@ -793,16 +865,16 @@ mod tests {
                     secret,
                     Vec::new(),
                 );
-                assert!(matches!(
-                    result,
-                    Err(JournaledCoreError::StateCommittedLedgerIncomplete {
-                        commit: CommitReceipt {
-                            committed: Generation::INITIAL,
-                            ..
-                        },
-                        ..
-                    })
-                ));
+                let commit = match result {
+                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { commit, .. }) => {
+                        Some(commit)
+                    }
+                    _ => None,
+                };
+                assert_eq!(
+                    commit.map(|receipt| receipt.committed),
+                    Some(Generation::INITIAL)
+                );
                 assert_eq!(
                     core.state().store().current_generation(),
                     Some(Generation::INITIAL)
@@ -811,6 +883,16 @@ mod tests {
                     core.ledger().retry_directive(&operation_id),
                     Some(RetryDirective::ReconcileOnly)
                 );
+                if let Some(commit) = commit {
+                    assert!(
+                        core.reconcile_committed_state(&operation_id, commit)
+                            .is_ok()
+                    );
+                    assert_eq!(
+                        core.ledger().retry_directive(&operation_id),
+                        Some(RetryDirective::LookupOnly)
+                    );
+                }
             }
         }
     }
@@ -848,6 +930,112 @@ mod tests {
                         core.ledger().retry_directive(&operation_id),
                         Some(RetryDirective::ReconcileOnly)
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unresolved_operation_fences_new_generation_until_reconciled() {
+        let core = build_core(Some(3));
+        assert!(core.is_ok());
+        if let Ok(mut core) = core {
+            let first_id = operation_id();
+            let first_digest = request_digest();
+            let first_secret = SecretState::new(b"first-committed-state".to_vec());
+            if let (Ok(first_id), Ok(first_digest), Ok(first_secret)) =
+                (first_id, first_digest, first_secret)
+            {
+                let first = core.persist_mutation(
+                    first_id.clone(),
+                    first_digest,
+                    None,
+                    first_secret,
+                    Vec::new(),
+                );
+                let commit = match first {
+                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { commit, .. }) => {
+                        Some(commit)
+                    }
+                    _ => None,
+                };
+                let second_id = OperationId::new("journaled-operation-0002".to_owned());
+                let second_digest = OperationDigest::new([0x22; 32]);
+                let second_secret = SecretState::new(b"must-not-advance".to_vec());
+                if let (Ok(second_id), Ok(second_digest), Ok(second_secret)) =
+                    (second_id, second_digest, second_secret)
+                {
+                    assert!(matches!(
+                        core.persist_mutation(
+                            second_id.clone(),
+                            second_digest,
+                            Some(Generation::INITIAL),
+                            second_secret,
+                            Vec::new(),
+                        ),
+                        Err(JournaledCoreError::UnresolvedOperationBlocksMutation {
+                            phase: OperationPhase::IntentCommitted
+                        })
+                    ));
+                    assert_eq!(
+                        core.state().store().current_generation(),
+                        Some(Generation::INITIAL)
+                    );
+                    if let Some(commit) = commit {
+                        assert!(core.reconcile_committed_state(&first_id, commit).is_ok());
+                        let second_secret = SecretState::new(b"second-committed-state".to_vec());
+                        assert!(second_secret.is_ok());
+                        if let Ok(second_secret) = second_secret {
+                            assert!(
+                                core.persist_mutation(
+                                    second_id,
+                                    second_digest,
+                                    Some(Generation::INITIAL),
+                                    second_secret,
+                                    Vec::new(),
+                                )
+                                .is_ok()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn accepted_pre_dispatch_failure_can_be_durably_rejected() {
+        let core = build_core(Some(2));
+        assert!(core.is_ok());
+        if let Ok(mut core) = core {
+            let first_id = operation_id();
+            let first_digest = request_digest();
+            let first_secret = SecretState::new(b"never-dispatched".to_vec());
+            if let (Ok(first_id), Ok(first_digest), Ok(first_secret)) =
+                (first_id, first_digest, first_secret)
+            {
+                assert!(matches!(
+                    core.persist_mutation(
+                        first_id.clone(),
+                        first_digest,
+                        None,
+                        first_secret,
+                        Vec::new(),
+                    ),
+                    Err(JournaledCoreError::Ledger(_))
+                ));
+                assert_eq!(
+                    core.ledger().blocking_phase(),
+                    Some(OperationPhase::Accepted)
+                );
+                let detail = StableDetailCode::new("intent-not-published".to_owned());
+                assert!(detail.is_ok());
+                if let Ok(detail) = detail {
+                    assert!(
+                        core.record_rejected_before_dispatch(&first_id, detail)
+                            .is_ok()
+                    );
+                    assert_eq!(core.ledger().blocking_phase(), None);
                 }
             }
         }

@@ -82,6 +82,12 @@ FORBIDDEN_TEMP_WORKFLOWS = {
     ".github/workflows/v1.4.1-rust-materializer.yml",
     ".github/workflows/v1.4.1-rust-materializer-v2.yml",
     ".github/workflows/v1.4.1-final-source-materializer.yml",
+    ".github/workflows/v1.4.1-finalize-source.yml",
+    ".github/workflows/v1.4.1-postcommit-reconcile-fix.yml",
+    ".github/workflows/v1.4.1-final-reconcile-v2.yml",
+    ".github/workflows/v1.4.1-unresolved-operation-fence.yml",
+    ".github/workflows/v1.4.1-secure-journal-permissions.yml",
+    ".github/workflows/v1.4.1-converge-final-source.yml",
 }
 
 
@@ -215,6 +221,7 @@ def validate_status_and_blockers(root: Path) -> None:
         status.get("profile")
         == {
             "id": "HB-P1-DEV-JOURNALED-SINGLE-PROCESS",
+            "operating_system": "linux",
             "production_supported": False,
             "replicated": False,
             "multi_process_supported": False,
@@ -315,6 +322,7 @@ def validate_rust_sources(root: Path) -> None:
     )
 
     journal = read_text(root, "crates/heptabao-single-node-journal/src/lib.rs")
+    require("entry.metadata()" not in journal, "journal directory enumeration follows symlinks")
     require_tokens(
         journal,
         [
@@ -328,10 +336,10 @@ def validate_rust_sources(root: Path) -> None:
             "PendingOrphan",
             "AuthenticationFailed",
             "fs::symlink_metadata(entry.path())",
+            "secure_create_new",
         ],
         "single-node journal",
     )
-    require("entry.metadata()" not in journal, "journal directory enumeration follows symlinks")
     require(
         "fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, DecodeError>"
         in journal,
@@ -364,6 +372,10 @@ def validate_rust_sources(root: Path) -> None:
             "OperationPhase::IntentCommitted",
             "StateCommittedLedgerIncomplete",
             "record_response_audit_failure_after_commit",
+            "reconcile_committed_state",
+            "blocking_phase",
+            "record_rejected_before_dispatch",
+            "UnresolvedOperationBlocksMutation",
             "record_delivery",
             "ExistingOperation",
         ],

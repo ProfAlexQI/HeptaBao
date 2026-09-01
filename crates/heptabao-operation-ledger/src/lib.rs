@@ -434,8 +434,7 @@ impl<J: DurableJournal> OperationLedger<J> {
         for record in records {
             let event = OperationEvent::decode(record.payload.as_bytes())
                 .map_err(OperationLedgerError::Contract)?;
-            apply_replayed_event(&mut operations, event)
-                .map_err(OperationLedgerError::Contract)?;
+            apply_replayed_event(&mut operations, event).map_err(OperationLedgerError::Contract)?;
         }
         Ok(Self {
             journal,
@@ -449,6 +448,13 @@ impl<J: DurableJournal> OperationLedger<J> {
 
     pub fn operation_count(&self) -> usize {
         self.operations.len()
+    }
+
+    pub fn blocking_phase(&self) -> Option<OperationPhase> {
+        self.operations.values().find_map(|event| {
+            let phase = event.phase();
+            phase_blocks_new_mutation(phase).then_some(phase)
+        })
     }
 
     pub fn retry_directive(&self, operation_id: &OperationId) -> Option<RetryDirective> {
@@ -491,7 +497,9 @@ where
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Contract(error) => write!(formatter, "operation ledger contract failure: {error}"),
+            Self::Contract(error) => {
+                write!(formatter, "operation ledger contract failure: {error}")
+            }
             Self::Journal(error) => write!(formatter, "durable journal failure: {error}"),
         }
     }
@@ -604,59 +612,62 @@ const fn allowed_transition(
     previous: OperationPhase,
     next: OperationPhase,
 ) -> bool {
-    match (class, previous, next) {
-        (_, OperationPhase::Accepted, OperationPhase::RejectedBeforeDispatch) => true,
-        (_, OperationPhase::Accepted, OperationPhase::IntentCommitted) => true,
-        (
-            OperationClass::DurableMutation,
-            OperationPhase::IntentCommitted,
-            OperationPhase::StateCommitted,
-        ) => true,
-        (
-            OperationClass::DurableMutation,
-            OperationPhase::IntentCommitted,
-            OperationPhase::Reconciled,
-        ) => true,
-        (
-            OperationClass::ExternalEffect,
-            OperationPhase::IntentCommitted,
-            OperationPhase::EffectStarted,
-        ) => true,
-        (
-            OperationClass::ExternalEffect,
-            OperationPhase::EffectStarted,
-            OperationPhase::EffectSucceeded
-            | OperationPhase::EffectFailed
-            | OperationPhase::EffectUnknown,
-        ) => true,
-        (
-            OperationClass::ExternalEffect,
-            OperationPhase::EffectSucceeded,
-            OperationPhase::StateCommitted,
-        ) => true,
-        (
-            OperationClass::ExternalEffect,
-            OperationPhase::EffectFailed | OperationPhase::EffectUnknown,
-            OperationPhase::Reconciled,
-        ) => true,
+    matches!(
+        (class, previous, next),
         (
             _,
-            OperationPhase::StateCommitted,
-            OperationPhase::ResponseAudited | OperationPhase::ResponseAuditFailedAfterCommit,
-        ) => true,
-        (
-            _,
-            OperationPhase::ResponseAudited,
-            OperationPhase::Delivered | OperationPhase::DeliveryFailedAfterCommit,
-        ) => true,
-        (
-            _,
-            OperationPhase::ResponseAuditFailedAfterCommit
-            | OperationPhase::DeliveryFailedAfterCommit,
-            OperationPhase::Reconciled,
-        ) => true,
-        _ => false,
-    }
+            OperationPhase::Accepted,
+            OperationPhase::RejectedBeforeDispatch
+        ) | (_, OperationPhase::Accepted, OperationPhase::IntentCommitted)
+            | (
+                OperationClass::DurableMutation,
+                OperationPhase::IntentCommitted,
+                OperationPhase::StateCommitted,
+            )
+            | (
+                OperationClass::DurableMutation,
+                OperationPhase::IntentCommitted,
+                OperationPhase::Reconciled,
+            )
+            | (
+                OperationClass::ExternalEffect,
+                OperationPhase::IntentCommitted,
+                OperationPhase::EffectStarted,
+            )
+            | (
+                OperationClass::ExternalEffect,
+                OperationPhase::EffectStarted,
+                OperationPhase::EffectSucceeded
+                    | OperationPhase::EffectFailed
+                    | OperationPhase::EffectUnknown,
+            )
+            | (
+                OperationClass::ExternalEffect,
+                OperationPhase::EffectSucceeded,
+                OperationPhase::StateCommitted,
+            )
+            | (
+                OperationClass::ExternalEffect,
+                OperationPhase::EffectFailed | OperationPhase::EffectUnknown,
+                OperationPhase::Reconciled,
+            )
+            | (
+                _,
+                OperationPhase::StateCommitted,
+                OperationPhase::ResponseAudited | OperationPhase::ResponseAuditFailedAfterCommit,
+            )
+            | (
+                _,
+                OperationPhase::ResponseAudited,
+                OperationPhase::Delivered | OperationPhase::DeliveryFailedAfterCommit,
+            )
+            | (
+                _,
+                OperationPhase::ResponseAuditFailedAfterCommit
+                    | OperationPhase::DeliveryFailedAfterCommit,
+                OperationPhase::Reconciled,
+            )
+    )
 }
 
 fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractError> {
@@ -722,6 +733,17 @@ fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractE
         return Err(OperationContractError::InvalidEventShape);
     }
     Ok(())
+}
+
+const fn phase_blocks_new_mutation(phase: OperationPhase) -> bool {
+    matches!(
+        phase,
+        OperationPhase::Accepted
+            | OperationPhase::IntentCommitted
+            | OperationPhase::EffectStarted
+            | OperationPhase::EffectSucceeded
+            | OperationPhase::EffectUnknown
+    )
 }
 
 const fn retry_directive_for_event(event: &OperationEvent) -> RetryDirective {
@@ -901,8 +923,8 @@ mod tests {
             if expected_tail != actual.map(|tail| tail.sequence) {
                 return Err(MemoryJournalError::Injected);
             }
-            let value = u64::try_from(self.payloads.len() + 1)
-                .map_err(|_| MemoryJournalError::Injected)?;
+            let value =
+                u64::try_from(self.payloads.len() + 1).map_err(|_| MemoryJournalError::Injected)?;
             let sequence = JournalSequence::new(value).map_err(MemoryJournalError::Contract)?;
             let previous_tail = actual;
             let appended = JournalTail {
@@ -932,7 +954,7 @@ mod tests {
         )
     }
 
-    fn detail(value: &str) -> Result<StableDetailCode, OperationContractError> {
+    fn stable_detail(value: &str) -> Result<StableDetailCode, OperationContractError> {
         StableDetailCode::new(value.to_owned())
     }
 
@@ -948,7 +970,7 @@ mod tests {
                 assert!(accepted.is_ok());
                 if let Ok(accepted) = accepted {
                     assert!(ledger.record(accepted.clone()).is_ok());
-                    let detail = detail("intent-committed");
+                    let detail = stable_detail("intent-committed");
                     assert!(detail.is_ok());
                     if let Ok(detail) = detail {
                         let intent = accepted.next(
@@ -962,7 +984,7 @@ mod tests {
                         if let Ok(intent) = intent {
                             assert!(ledger.record(intent.clone()).is_ok());
                             let state_digest = StateDigest::new([3; 32]);
-                            let detail = detail("state-committed");
+                            let detail = stable_detail("state-committed");
                             assert!(state_digest.is_ok());
                             assert!(detail.is_ok());
                             if let (Ok(state_digest), Ok(detail)) = (state_digest, detail) {
@@ -1009,7 +1031,7 @@ mod tests {
                 Err(OperationContractError::DuplicateAcceptedOperation)
             );
             let state_digest = StateDigest::new([2; 32]);
-            let detail = detail("illegal");
+            let detail = stable_detail("illegal");
             assert!(state_digest.is_ok());
             assert!(detail.is_ok());
             if let (Ok(state_digest), Ok(detail)) = (state_digest, detail) {
@@ -1031,7 +1053,7 @@ mod tests {
         assert!(accepted.is_ok());
         if let Ok(accepted) = accepted {
             let effect_key = OperationDigest::new([9; 32]);
-            let detail = detail("intent");
+            let detail = stable_detail("intent");
             assert!(effect_key.is_ok());
             assert!(detail.is_ok());
             if let (Ok(effect_key), Ok(detail)) = (effect_key, detail) {
@@ -1044,7 +1066,7 @@ mod tests {
                 );
                 assert!(intent.is_ok());
                 if let Ok(intent) = intent {
-                    let detail = detail("effect-started");
+                    let detail = stable_detail("effect-started");
                     assert!(detail.is_ok());
                     if let Ok(detail) = detail {
                         let started = intent.next(
@@ -1056,7 +1078,7 @@ mod tests {
                         );
                         assert!(started.is_ok());
                         if let Ok(started) = started {
-                            let detail = detail("effect-unknown");
+                            let detail = stable_detail("effect-unknown");
                             assert!(detail.is_ok());
                             if let Ok(detail) = detail {
                                 let unknown = started.next(

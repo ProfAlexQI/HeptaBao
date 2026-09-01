@@ -36,6 +36,10 @@ The directory scan uses no-follow metadata. Symlinked or non-regular marker,
 tail and entry paths are corruption. Unknown entries, gaps, duplicate sequence,
 more than one future entry and unresolved `.tmp-` artifacts fail closed.
 
+Journal files are created with owner-only mode `0600` on Linux. The containing
+directory remains an operator-controlled boundary and must not be writable by
+untrusted principals.
+
 ## 3. Authentication chain
 
 For record `n` the provider receives:
@@ -132,6 +136,14 @@ A lookup service must return the current phase, state generation/digest and
 opaque recovery reference without exposing secret payloads. Retention must not
 delete records while their operation IDs can still be presented or while an
 external effect can still be reconciled.
+
+A missing post-commit transition is repaired only by rereading the authoritative
+storage snapshot and matching both generation and digest to the returned commit
+receipt before appending `StateCommitted`. Receipt text alone is insufficient.
+
+An unresolved intent is also a global writer fence. No later operation may
+advance the authoritative generation until that intent is either bound to the
+exact stored commit or durably classified as rejected before dispatch.
 
 ## 8. Crash and corruption cases
 

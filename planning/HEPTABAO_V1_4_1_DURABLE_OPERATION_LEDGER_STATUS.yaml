@@ -8,6 +8,7 @@ current_blocker_register: planning/HEPTABAO_BLOCKER_REGISTER_V1_4_1.yaml
 normative_manifest: planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_1.yaml
 profile:
   id: HB-P1-DEV-JOURNALED-SINGLE-PROCESS
+  operating_system: linux
   production_supported: false
   replicated: false
   multi_process_supported: false

@@ -21,10 +21,24 @@ commit = 33e1c14c3e417ea1c9ea181e2181751736c7bce5
 tree   = 7c49319a20ffbbe7a9b8b078e052da63dd6b636b
 ```
 
-V1.4.1 remains a single-process development profile. It does not provide a
-production audit device, multi-process writer fencing, a selected MAC/KMS/HSM
-provider, remote replication, retention policy, OpenBao compatibility,
-qualification or operational authority.
+V1.4.1 remains a single-process development profile:
+
+```text
+profile = HB-P1-DEV-JOURNALED-SINGLE-PROCESS
+production_supported = false
+replicated = false
+multi_process_supported = false
+compatibility_supported = false
+```
+
+It does not provide a production audit device, multi-process writer fencing, a
+selected MAC/KMS/HSM provider, remote replication, retention policy, OpenBao
+compatibility, qualification or operational authority.
+
+The executable filesystem profile is Linux-only. Every marker, entry and tail
+temporary file is created with owner-only mode `0600`; other operating-system
+profiles remain unsupported until they prove equivalent access and durability
+semantics.
 
 ## 2. Added implementation layers
 
@@ -127,6 +141,18 @@ publication succeeds but `StateCommitted` cannot be appended, the API returns
 not a failed mutation and does not authorize replay. The operation remains
 `ReconcileOnly` until a separately validated reconciliation transition is
 written.
+
+`reconcile_committed_state` first rereads the authoritative storage snapshot and
+requires its generation and digest to equal the supplied commit receipt. Only
+then may the ledger append the missing `StateCommitted` transition. A forged,
+stale or mismatched receipt fails closed and leaves the operation unresolved.
+
+An unresolved operation globally fences every later mutation whose state could
+advance the authoritative generation. `Accepted`, `IntentCommitted`,
+`EffectStarted`, `EffectSucceeded` and `EffectUnknown` must be durably
+resolved before a new operation ID reaches the barrier or storage. A known
+pre-dispatch failure closes through `record_rejected_before_dispatch`; a
+postcommit gap closes only through exact stored-snapshot reconciliation.
 
 ## 6. Retry and recovery semantics
 

@@ -14,6 +14,8 @@ use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -113,9 +115,7 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
         &self.root
     }
 
-    pub fn reconcile_next_orphan(
-        &mut self,
-    ) -> Result<AppendReceipt, FileJournalError<A::Error>> {
+    pub fn reconcile_next_orphan(&mut self) -> Result<AppendReceipt, FileJournalError<A::Error>> {
         self.validate_marker()?;
         let disk_tail = self.read_optional_tail()?;
         if disk_tail != self.tail {
@@ -188,22 +188,22 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
         let mut sequences = BTreeSet::new();
         for entry in fs::read_dir(&self.root).map_err(FileJournalError::Io)? {
             let entry = entry.map_err(FileJournalError::Io)?;
-            let metadata = entry.metadata().map_err(FileJournalError::Io)?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(FileJournalError::Io)?;
             let name = entry.file_name();
             let name = name.to_str().ok_or(FileJournalError::UnexpectedEntry)?;
             if name.contains(".tmp-") {
                 return Err(FileJournalError::UnresolvedTemporaryArtifact);
             }
             if name == MARKER_NAME || name == TAIL_NAME {
-                if !metadata.is_file() || fs::symlink_metadata(entry.path())?.file_type().is_symlink()
-                {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
                     return Err(FileJournalError::UnsafeFileType);
                 }
                 continue;
             }
-            let sequence = parse_entry_file_name(name)?
+            let sequence = parse_entry_file_name(name)
+                .map_err(|_| FileJournalError::CorruptJournal)?
                 .ok_or(FileJournalError::UnexpectedEntry)?;
-            if !metadata.is_file() || fs::symlink_metadata(entry.path())?.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(FileJournalError::UnsafeFileType);
             }
             if !sequences.insert(sequence) {
@@ -437,7 +437,9 @@ where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Contract(error) => write!(formatter, "journal contract failure: {error}"),
-            Self::Authenticator(error) => write!(formatter, "journal authenticator failure: {error}"),
+            Self::Authenticator(error) => {
+                write!(formatter, "journal authenticator failure: {error}")
+            }
             Self::Io(error) => write!(formatter, "journal I/O failure: {error}"),
             Self::RootMustBeAbsolute => formatter.write_str("journal root must be absolute"),
             Self::UnsafeRoot => formatter.write_str("journal root path is unsafe"),
@@ -446,27 +448,35 @@ where
             Self::MarkerMismatch => formatter.write_str("journal marker is invalid"),
             Self::TailMissing => formatter.write_str("journal tail is missing"),
             Self::UnsafeFileType => formatter.write_str("journal path is not a regular file"),
-            Self::UnexpectedEntry => formatter.write_str("journal directory has an unexpected entry"),
+            Self::UnexpectedEntry => {
+                formatter.write_str("journal directory has an unexpected entry")
+            }
             Self::UnresolvedTemporaryArtifact => {
                 formatter.write_str("journal has an unresolved temporary artifact")
             }
             Self::CorruptJournal => formatter.write_str("journal structure is corrupt"),
-            Self::ChainMismatch => formatter.write_str("journal authentication chain is discontinuous"),
-            Self::AuthenticationFailed => formatter.write_str("journal record authentication failed"),
+            Self::ChainMismatch => {
+                formatter.write_str("journal authentication chain is discontinuous")
+            }
+            Self::AuthenticationFailed => {
+                formatter.write_str("journal record authentication failed")
+            }
             Self::RecordLimitExceeded => formatter.write_str("journal record bound is exceeded"),
             Self::EntryAlreadyExists(sequence) => {
                 write!(formatter, "journal entry {} already exists", sequence.get())
             }
             Self::TailConflict { expected, actual } => {
-                write!(formatter, "journal tail conflict: expected {expected:?}, actual {actual:?}")
+                write!(
+                    formatter,
+                    "journal tail conflict: expected {expected:?}, actual {actual:?}"
+                )
             }
             Self::PendingOrphan => {
                 formatter.write_str("journal has a pending next entry that requires reconciliation")
             }
             Self::NoPendingOrphan => formatter.write_str("journal has no pending next entry"),
-            Self::InitializationOutcomeUnknown => formatter.write_str(
-                "journal initialization may have published; reopen before retrying",
-            ),
+            Self::InitializationOutcomeUnknown => formatter
+                .write_str("journal initialization may have published; reopen before retrying"),
             Self::AppendOutcomeUnknown => formatter.write_str(
                 "journal tail publication may have occurred; reopen and reconcile before retrying",
             ),
@@ -582,7 +592,9 @@ where
         .ok_or(FileJournalError::CorruptJournal)?;
     let mut limited = file.take(bound);
     let mut bytes = Vec::new();
-    limited.read_to_end(&mut bytes).map_err(FileJournalError::Io)?;
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(FileJournalError::Io)?;
     if bytes.len() > maximum {
         bytes.fill(0);
         return Err(FileJournalError::CorruptJournal);
@@ -590,11 +602,18 @@ where
     Ok(bytes)
 }
 
+fn secure_create_new(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 fn write_new_file_and_sync_parent(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let mut file = secure_create_new(path)?;
     file.write_all(bytes)?;
     file.flush()?;
     file.sync_all()?;
@@ -610,10 +629,7 @@ fn atomic_replace(root: &Path, target_name: &str, bytes: &[u8]) -> Result<(), At
     let temporary_path = root.join(temporary_name);
     let target_path = root.join(target_name);
     let write_result = (|| -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)?;
+        let mut file = secure_create_new(&temporary_path)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()
@@ -649,7 +665,7 @@ fn entry_file_name(sequence: JournalSequence) -> String {
     format!("entry-{:020}.hbj", sequence.get())
 }
 
-fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, FileJournalError<io::Error>> {
+fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, DecodeError> {
     let Some(digits) = name
         .strip_prefix("entry-")
         .and_then(|value| value.strip_suffix(".hbj"))
@@ -657,14 +673,14 @@ fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, FileJour
         return Ok(None);
     };
     if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(FileJournalError::CorruptJournal);
+        return Err(DecodeError::InvalidLength);
     }
     let value = digits
         .parse::<u64>()
-        .map_err(|_| FileJournalError::CorruptJournal)?;
-    let sequence = JournalSequence::new(value).map_err(FileJournalError::Contract)?;
+        .map_err(|_| DecodeError::InvalidSequence)?;
+    let sequence = JournalSequence::new(value).map_err(|_| DecodeError::InvalidSequence)?;
     if entry_file_name(sequence) != name {
-        return Err(FileJournalError::CorruptJournal);
+        return Err(DecodeError::InvalidSequence);
     }
     Ok(Some(sequence))
 }
@@ -727,8 +743,8 @@ fn decode_tail(bytes: &[u8]) -> Result<JournalTail, DecodeError> {
     if cursor.take(TAIL_MAGIC.len())? != TAIL_MAGIC {
         return Err(DecodeError::InvalidMagic);
     }
-    let sequence = JournalSequence::new(cursor.take_u64()?)
-        .map_err(|_| DecodeError::InvalidSequence)?;
+    let sequence =
+        JournalSequence::new(cursor.take_u64()?).map_err(|_| DecodeError::InvalidSequence)?;
     let mut tag = [0_u8; 32];
     tag.copy_from_slice(cursor.take(32)?);
     let tag = JournalTag::new(tag).map_err(|_| DecodeError::InvalidTag)?;
@@ -768,8 +784,8 @@ fn decode_entry(bytes: &[u8]) -> Result<JournalRecord, DecodeError> {
     if cursor.take(ENTRY_MAGIC.len())? != ENTRY_MAGIC {
         return Err(DecodeError::InvalidMagic);
     }
-    let sequence = JournalSequence::new(cursor.take_u64()?)
-        .map_err(|_| DecodeError::InvalidSequence)?;
+    let sequence =
+        JournalSequence::new(cursor.take_u64()?).map_err(|_| DecodeError::InvalidSequence)?;
     let previous_present = cursor.take_u8()?;
     let mut previous_bytes = [0_u8; 32];
     previous_bytes.copy_from_slice(cursor.take(32)?);
@@ -778,7 +794,8 @@ fn decode_entry(bytes: &[u8]) -> Result<JournalRecord, DecodeError> {
         1 => Some(JournalTag::new(previous_bytes).map_err(|_| DecodeError::InvalidPreviousTag)?),
         _ => return Err(DecodeError::InvalidPreviousTag),
     };
-    let payload_len = usize::try_from(cursor.take_u32()?).map_err(|_| DecodeError::InvalidLength)?;
+    let payload_len =
+        usize::try_from(cursor.take_u32()?).map_err(|_| DecodeError::InvalidLength)?;
     if payload_len == 0 || payload_len > MAX_JOURNAL_PAYLOAD_BYTES {
         return Err(DecodeError::InvalidLength);
     }
@@ -962,14 +979,9 @@ mod tests {
         let temporary = TempDirectory::new();
         let domain = domain();
         let authenticator = TestAuthenticator::new();
-        if let (Ok(temporary), Ok(domain), Ok(authenticator)) =
-            (temporary, domain, authenticator)
-        {
-            let journal = FileDurableJournal::create_new(
-                &temporary.path,
-                domain.clone(),
-                authenticator,
-            );
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal =
+                FileDurableJournal::create_new(&temporary.path, domain.clone(), authenticator);
             assert!(journal.is_ok());
             if let Ok(mut journal) = journal {
                 let first = JournalPayload::new(b"accepted".to_vec());
@@ -1002,9 +1014,7 @@ mod tests {
         let temporary = TempDirectory::new();
         let domain = domain();
         let authenticator = TestAuthenticator::new();
-        if let (Ok(temporary), Ok(domain), Ok(authenticator)) =
-            (temporary, domain, authenticator)
-        {
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
             let journal = FileDurableJournal::create_new(&temporary.path, domain, authenticator);
             if let Ok(mut journal) = journal {
                 let payload = JournalPayload::new(b"first".to_vec());
@@ -1027,21 +1037,18 @@ mod tests {
         let temporary = TempDirectory::new();
         let domain = domain();
         let authenticator = TestAuthenticator::new();
-        if let (Ok(temporary), Ok(domain), Ok(authenticator)) =
-            (temporary, domain, authenticator)
-        {
-            let journal = FileDurableJournal::create_new(
-                &temporary.path,
-                domain.clone(),
-                authenticator,
-            );
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal =
+                FileDurableJournal::create_new(&temporary.path, domain.clone(), authenticator);
             if let Ok(mut journal) = journal {
                 let payload = JournalPayload::new(b"original".to_vec());
                 if let Ok(payload) = payload {
                     assert!(journal.append(None, payload).is_ok());
                 }
             }
-            let entry = temporary.path.join(entry_file_name(JournalSequence::INITIAL));
+            let entry = temporary
+                .path
+                .join(entry_file_name(JournalSequence::INITIAL));
             let bytes = fs::read(&entry);
             assert!(bytes.is_ok());
             if let Ok(mut bytes) = bytes {
@@ -1065,14 +1072,9 @@ mod tests {
         let temporary = TempDirectory::new();
         let domain = domain();
         let authenticator = TestAuthenticator::new();
-        if let (Ok(temporary), Ok(domain), Ok(authenticator)) =
-            (temporary, domain, authenticator)
-        {
-            let journal = FileDurableJournal::create_new(
-                &temporary.path,
-                domain.clone(),
-                authenticator,
-            );
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal =
+                FileDurableJournal::create_new(&temporary.path, domain.clone(), authenticator);
             if let Ok(mut journal) = journal {
                 let payload = JournalPayload::new(b"persisted-before-tail".to_vec());
                 if let Ok(payload) = payload {
@@ -1111,6 +1113,39 @@ mod tests {
             assert!(symlink(&target.path, &link).is_ok());
             let result = FileDurableJournal::create_new(link, domain, authenticator);
             assert!(matches!(result, Err(FileJournalError::UnsafeRoot)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_files_are_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let authenticator = TestAuthenticator::new();
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal = FileDurableJournal::create_new(&temporary.path, domain, authenticator);
+            assert!(journal.is_ok());
+            if let Ok(mut journal) = journal {
+                let payload = JournalPayload::new(b"permission-check".to_vec());
+                if let Ok(payload) = payload {
+                    assert!(journal.append(None, payload).is_ok());
+                }
+            }
+            for path in [
+                temporary.path.join(MARKER_NAME),
+                temporary.path.join(TAIL_NAME),
+                temporary
+                    .path
+                    .join(entry_file_name(JournalSequence::INITIAL)),
+            ] {
+                let metadata = fs::symlink_metadata(path);
+                assert!(metadata.is_ok());
+                if let Ok(metadata) = metadata {
+                    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+                }
+            }
         }
     }
 }
