@@ -1,7 +1,8 @@
 name: materialize-v1.4.5-review-blockers
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
     branches:
       - exec/v1.4.5-review-blocker-closure-v1
 
@@ -20,7 +21,7 @@ jobs:
       - name: Checkout immutable materializer source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           path: materializer
           fetch-depth: 1
           persist-credentials: false
