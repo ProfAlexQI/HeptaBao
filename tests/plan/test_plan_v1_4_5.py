@@ -71,6 +71,18 @@ class PlanV145HostileTests(unittest.TestCase):
             ),
         )
 
+    def test_inherited_gate_must_bind_immutable_v145_checkpoint(self) -> None:
+        self.assert_rejected(
+            ".github/workflows/plan-v1.4.5-security-invariant-closure.yml",
+            lambda path: path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    'git diff --name-only "$V145_BASELINE" "$V145_HEAD"',
+                    'git diff --name-only "$V145_BASELINE" "$HEAD_SHA"',
+                ),
+                encoding="utf-8",
+            ),
+        )
+
     def test_missing_ancestor_hostile_test_is_rejected(self) -> None:
         self.assert_rejected(
             "crates/heptabao-filesystem-guard/src/lib.rs",
