@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-storage-intent-4]' }}"
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-storage-intent-5]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
