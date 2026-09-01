@@ -1,0 +1,252 @@
+name: v1.4.3-materializer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.4.2-recovery-foundation-v1
+    paths:
+      - .github/workflows/v1.4.3-materializer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.3-materializer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize-verify-export:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Checkout exact materializer head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact staging ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$source"
+          test "$(git rev-parse HEAD^)" = "e17127f8fd78e36b2f5ce1f11433698cc7b1141d"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf '%s\n' "$source" >"$RUNNER_TEMP/materializer-source-head.txt"
+
+      - name: Install exact Python and Rust dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Locate and execute audited V1.4.3 materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          excluded = {'v1.4.3-materializer.yml', 'v1.4.3-finalize-publish.yml'}
+          matches = []
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              if path.name in excluded:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              if '.bootstrap/v1.4.3' not in text:
+                  continue
+              workflow = yaml.safe_load(text)
+              for job in (workflow.get('jobs') or {}).values():
+                  if not isinstance(job, dict):
+                      continue
+                  for step in job.get('steps') or []:
+                      if not isinstance(step, dict) or not isinstance(step.get('run'), str):
+                          continue
+                      run = step['run']
+                      lowered = str(step.get('name', '')).lower()
+                      if '.bootstrap/v1.4.3' in run and 'base64' in run and any(
+                          token in lowered for token in ('materialize', 'reconstruct', 'candidate', 'extract')
+                      ):
+                          matches.append((len(run), path, step.get('name'), run))
+          if not matches:
+              raise SystemExit('no audited V1.4.3 materializer found')
+          matches.sort(reverse=True, key=lambda item: item[0])
+          if len(matches) > 1 and matches[0][0] == matches[1][0]:
+              raise SystemExit('ambiguous V1.4.3 materializer')
+          _, path, name, run = matches[0]
+          target = Path(os.environ['RUNNER_TEMP'], 'v143-audited-materialize.sh')
+          target.write_text(run, encoding='utf-8')
+          print(f'audited_materializer={path}:{name}')
+          PY
+          bash "$RUNNER_TEMP/v143-audited-materialize.sh"
+
+      - name: Freeze desired clean candidate tree
+        id: desired
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              text = path.read_text(encoding='utf-8')
+              if path.name in {'v1.4.3-materializer.yml', 'v1.4.3-finalize-publish.yml'} or '.bootstrap/v1.4.3' in text:
+                  path.unlink()
+          root = Path('.bootstrap/v1.4.3')
+          if root.exists():
+              for path in sorted(root.rglob('*'), reverse=True):
+                  if path.is_file() or path.is_symlink():
+                      path.unlink()
+                  elif path.is_dir():
+                      path.rmdir()
+              root.rmdir()
+          PY
+          cargo +1.98.0 fmt --all
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(v1.4.3): add descriptor-relative storage and writer fencing"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+
+      - name: Validate desired V1.4.3 Python contracts and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Replay frozen exact V1.4.2 gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="34e8dc0caceb84288d4ef61f79cd7ca062718b63"
+          historical_root="$RUNNER_TEMP/v1.4.2-baseline"
+          cleanup() { git worktree remove --force "$historical_root" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          git worktree add --detach "$historical_root" "$baseline"
+          (
+            cd "$historical_root"
+            python scripts/validate_plan_v1_4_2.py
+            python scripts/validate_v1_4_2_inherited_surface.py
+            python -m unittest discover -s tests/plan -p 'test_plan_v1_4_2.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+            cargo +1.98.0 fmt --all -- --check
+            cargo +1.98.0 test --locked --workspace --all-targets
+            cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          )
+          cleanup
+          trap - EXIT
+
+      - name: Test and strictly lint desired V1.4.3 workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.3-cargo-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Export exact desired tree and every changed blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          desired_commit="${{ steps.desired.outputs.commit }}"
+          desired_tree="${{ steps.desired.outputs.tree }}"
+          base="34e8dc0caceb84288d4ef61f79cd7ca062718b63"
+          mkdir -p "$RUNNER_TEMP/v143-export/blobs"
+          printf 'repository=%s\nbase_commit=%s\ndesired_commit=%s\ndesired_tree=%s\nrun_id=%s\nrun_attempt=%s\n' \
+            "$GITHUB_REPOSITORY" "$base" "$desired_commit" "$desired_tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            >"$RUNNER_TEMP/v143-export/source-binding.txt"
+          git ls-tree -r "$desired_tree" >"$RUNNER_TEMP/v143-export/final-tree.tsv"
+          git diff --name-status --no-renames "$base" "$desired_commit" >"$RUNNER_TEMP/v143-export/final-delta.tsv"
+          while IFS=$'\t' read -r status path; do
+            case "$status" in
+              A|M)
+                entry="$(git ls-tree "$desired_tree" -- "$path")"
+                mode="$(printf '%s\n' "$entry" | awk '{print $1}')"
+                type="$(printf '%s\n' "$entry" | awk '{print $2}')"
+                sha="$(printf '%s\n' "$entry" | awk '{print $3}')"
+                test "$type" = blob
+                git cat-file blob "$sha" >"$RUNNER_TEMP/v143-export/blobs/$sha"
+                printf '%s\t%s\t%s\t%s\n' "$mode" "$type" "$sha" "$path" >>"$RUNNER_TEMP/v143-export/changed-tree.tsv"
+                ;;
+              D) printf 'DELETE\t-\t-\t%s\n' "$path" >>"$RUNNER_TEMP/v143-export/changed-tree.tsv" ;;
+              *) echo "unexpected delta status: $status $path" >&2; exit 1 ;;
+            esac
+          done <"$RUNNER_TEMP/v143-export/final-delta.tsv"
+          git archive --format=tar --prefix=HeptaBao/ "$desired_commit" >"$RUNNER_TEMP/v143-export/heptabao-v1.4.3-desired-source.tar"
+          (
+            cd "$RUNNER_TEMP/v143-export"
+            sha256sum source-binding.txt final-tree.tsv final-delta.tsv changed-tree.tsv heptabao-v1.4.3-desired-source.tar blobs/* >SHA256SUMS
+          )
+
+      - name: Build server-reachable blob carrier commit
+        id: carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$(cat "$RUNNER_TEMP/materializer-source-head.txt")"
+          desired_commit="${{ steps.desired.outputs.commit }}"
+          desired_tree="${{ steps.desired.outputs.tree }}"
+          patch="$RUNNER_TEMP/v143-non-workflow.patch"
+          git diff --binary "34e8dc0caceb84288d4ef61f79cd7ca062718b63" "$desired_commit" -- . ':(exclude).github/workflows' >"$patch"
+          git reset --hard "$source"
+          git clean -fdx
+          git apply --index "$patch"
+          rm -rf .bootstrap/v1.4.3
+          mkdir -p transport/v1.4.3
+          cp -a "$RUNNER_TEMP/v143-export/." transport/v1.4.3/
+          git add -A
+          git diff --cached --check
+          git commit -m "chore(v1.4.3): publish verified candidate blob carrier"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+          printf '%s\n' "$desired_tree" >"$RUNNER_TEMP/desired-tree.txt"
+
+      - name: Publish isolated carrier branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease=refs/heads/exec/v1.4.3-materialized-output-v1 \
+            origin HEAD:refs/heads/exec/v1.4.3-materialized-output-v1
+
+      - name: Upload exact V1.4.3 desired candidate package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.3-desired-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v143-export
+            ${{ runner.temp }}/desired-tree.txt
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Emit materialization receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## V1.4.3 isolated materialization: PASS'
+            echo
+            echo "- desired commit: `${{ steps.desired.outputs.commit }}`"
+            echo "- desired tree: `${{ steps.desired.outputs.tree }}`"
+            echo "- carrier commit: `${{ steps.carrier.outputs.commit }}`"
+            echo "- carrier tree: `${{ steps.carrier.outputs.tree }}`"
+            echo '- current and frozen Python/Rust 1.98 gates: PASS'
+            echo '- authority effect: NONE'
+          } >>"$GITHUB_STEP_SUMMARY"
