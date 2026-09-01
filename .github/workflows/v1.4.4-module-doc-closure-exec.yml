@@ -1,0 +1,963 @@
+name: v1.4.4-module-doc-closure-exec
+
+on:
+  push:
+    branches:
+      - exec/v1.4.4-module-doc-closure-v1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.4-module-doc-closure-exec
+  cancel-in-progress: false
+
+jobs:
+  generate-validate-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_BRANCH: codex/plan-v1.4.3-descriptor-fencing-clean-v1
+      TARGET_BRANCH: codex/plan-v1.4.4-module-documentation-closure-v1
+    steps:
+      - name: Checkout exact execution head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Resolve clean V1.4.3 source
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if git ls-remote --exit-code origin "refs/heads/$SOURCE_BRANCH" >/dev/null 2>&1; then
+              git fetch --no-tags origin "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "clean V1.4.3 source branch was not published" >&2
+          exit 1
+
+      - name: Generate complete module documentation closure
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "refs/remotes/origin/$SOURCE_BRANCH")"
+          source_tree="$(git rev-parse "$source_sha^{tree}")"
+          work="$RUNNER_TEMP/heptabao-v1.4.4-module-docs"
+          git worktree add --detach "$work" "$source_sha"
+          export DOC_ROOT="$work"
+          export SOURCE_SHA="$source_sha"
+          export SOURCE_TREE="$source_tree"
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          import yaml
+
+          root = Path(os.environ['DOC_ROOT'])
+          source_sha = os.environ['SOURCE_SHA']
+          source_tree = os.environ['SOURCE_TREE']
+
+          modules = {
+              'heptabao-authbus-contracts': {
+                  'purpose': 'Defines provider-neutral authentication assertions, request binding, replay rejection and bounded assertion verification. It authenticates a caller but deliberately does not authorize an operation.',
+                  'owner': 'identity-authentication-security',
+                  'maturity': 'FOUNDATION_IMPLEMENTED_NOT_PRODUCTION_AUTHORITY',
+                  'writer': 'none; verification is read-only and replay authority is injected',
+                  'invariants': ['Authentication and authorization remain separate decisions.', 'Assertion identity, key revision, issue/expiry time and canonical request binding are verified together.', 'Replay-cache saturation, invalid capacity, expiry ambiguity and request mismatch fail closed.', 'Secret-bearing assertion fields and request material are redacted from Debug output.'],
+                  'retry': 'Verification may be retried only with the same immutable assertion and request binding before expiry. A replay rejection is terminal for that assertion identity.',
+                  'operations': 'Inspect verification failures by stable error class and key revision; never log subject, signature, token or request body bytes.',
+                  'gaps': ['Production signer/key-discovery provider is not selected.', 'HA replay authority and durable nonce retention are not integrated.', 'Identity/MFA and policy authorization domains remain outside this crate.'],
+              },
+              'heptabao-barrier-api': {
+                  'purpose': 'Defines the sealed-envelope format, associated-data construction and provider boundary used to prevent plaintext from crossing the durable-store interface.',
+                  'owner': 'cryptography-barrier-core-security',
+                  'maturity': 'PROVIDER_NEUTRAL_API_IMPLEMENTED',
+                  'writer': 'barrier provider selected by the future server composition root',
+                  'invariants': ['Associated data binds domain, generation, key epoch, purpose and caller data.', 'Envelope decoding rejects truncation, invalid version and trailing bytes.', 'Key material is never embedded in the envelope.', 'Secret and envelope Debug output is redacted.'],
+                  'retry': 'Provider calls occur only after stale-generation rejection. Unknown provider outcomes must not be converted into a successful durable commit.',
+                  'operations': 'A production provider must expose key identity and epoch diagnostics without exposing key bytes and must support rotation/revocation observability.',
+                  'gaps': ['No production AEAD/KMS/HSM provider is selected.', 'Nonce-generation and key-custody ceremonies require independent review.', 'Locked-memory, dump and side-channel controls are not qualified.'],
+              },
+              'heptabao-durable-core': {
+                  'purpose': 'Composes barrier sealing with a durable generation store and verifies exact generation receipts before acknowledging mutation.',
+                  'owner': 'core-storage-barrier',
+                  'maturity': 'SINGLE_NODE_FOUNDATION_IMPLEMENTED',
+                  'writer': 'the configured durable generation store',
+                  'invariants': ['Stale expected generation is rejected before provider work.', 'Plaintext is sealed before storage commit.', 'Returned receipt must match the requested next generation and persisted digest.', 'Possible publication without durable proof remains an explicit unknown outcome.'],
+                  'retry': 'Blind retry after CommitOutcomeUnknown is forbidden; callers must reload and reconcile the authoritative generation first.',
+                  'operations': 'Correlate provider and storage receipts through opaque operation identity; do not emit plaintext, nonce or ciphertext payloads to logs.',
+                  'gaps': ['Not wired into the P0 server.', 'No production provider selection.', 'No HA or replicated transaction integration.'],
+              },
+              'heptabao-filesystem-guard': {
+                  'purpose': 'Owns a Linux directory descriptor, validates root identity, provides bounded descriptor-relative leaf access and retains an exclusive writer fence for object lifetime.',
+                  'owner': 'storage-platform-security',
+                  'maturity': 'V1_4_3_CANDIDATE_TECHNICAL_SOURCE',
+                  'writer': 'one cooperating process holding the directory writer lock',
+                  'invariants': ['Root must be absolute, non-symlink and stable across pre/open/post device and inode checks.', 'Directory access is descriptor-relative with no-follow semantics.', 'Leaf names are flat, bounded and closed-world.', 'A second writer fails while the first guard remains alive.', 'The held descriptor remains bound if the configured path is replaced.'],
+                  'retry': 'WriterBusy is retryable only after operator-confirmed owner release. UnsupportedPlatform and root-identity drift are terminal for the selected profile.',
+                  'operations': 'Diagnose device/inode mismatch, unsupported /proc descriptor access and writer-lock ownership without exposing secret-bearing filenames.',
+                  'gaps': ['Current profile is Linux-local-filesystem only.', 'Network filesystem semantics are not claimed.', 'Kernel power-cut and storage-controller qualification remain external.'],
+              },
+              'heptabao-governance': {
+                  'purpose': 'Implements fail-closed validation of qualification evidence and preserves the separation between technical evidence, compatibility claims and scoped authority grants.',
+                  'owner': 'program-governance-security',
+                  'maturity': 'GOVERNANCE_SENTINEL_IMPLEMENTED',
+                  'writer': 'none in runtime; signed governance objects are externally produced',
+                  'invariants': ['Failed, unknown or missing tests reject qualification.', 'Critical, High or unclassified findings reject qualification.', 'Qualification never grants operational authority.', 'Revocation has precedence over a previously valid receipt.'],
+                  'retry': 'A rejected evidence graph requires a new complete and current graph; mutating a rejected object in place is not a valid retry.',
+                  'operations': 'Verification must bind signatures, scope, source, expiry and revocation state and retain the rejected reason set.',
+                  'gaps': ['External signer/trust-root infrastructure is not provisioned.', 'Independent reviewer receipts remain external.', 'Repository rulesets are not automatically configured by this crate.'],
+              },
+              'heptabao-journal-api': {
+                  'purpose': 'Defines provider-neutral authenticated append/replay contracts, checked sequence numbers and bounded non-clone journal payloads.',
+                  'owner': 'audit-journal-core-security',
+                  'maturity': 'PROVIDER_NEUTRAL_API_IMPLEMENTED',
+                  'writer': 'one configured journal implementation',
+                  'invariants': ['Sequence numbers are non-zero and checked.', 'Authentication tags and domain identities are canonical.', 'Payloads are bounded, non-clone and redacted.', 'Append and replay share the same chain invariants.'],
+                  'retry': 'An unknown append result requires replay/reconciliation; callers must not append a duplicate event blindly.',
+                  'operations': 'Expose tail sequence/tag and corruption class only; payload bytes remain confidential.',
+                  'gaps': ['No production authentication provider selected.', 'Retention and compaction contracts are incomplete.', 'Replicated audit is not implemented.'],
+              },
+              'heptabao-journaled-core': {
+                  'purpose': 'Coordinates durable operation-ledger transitions with barrier and storage mutation, including response-audit and delivery outcomes.',
+                  'owner': 'core-audit-storage',
+                  'maturity': 'SINGLE_NODE_JOURNALED_FOUNDATION_IMPLEMENTED',
+                  'writer': 'operation ledger plus durable state store under one process owner',
+                  'invariants': ['Accepted and IntentCommitted precede state mutation.', 'StateCommitted binds the exact generation receipt.', 'Duplicate operation identity never mutates twice.', 'Post-commit audit failure preserves the committed result and recovery reference.', 'Unresolved operations fence later generations until reconciliation.'],
+                  'retry': 'Retry directives are typed: lookup, reconcile, manual hold or new operation. Creation retry after an unknown external effect is forbidden.',
+                  'operations': 'Operators reconcile from the authoritative snapshot and immutable ledger; never edit ledger files manually.',
+                  'gaps': ['Not wired into the network server.', 'External-effect provider adapters are absent.', 'Replicated ledger/audit recovery is absent.'],
+              },
+              'heptabao-key-lifecycle': {
+                  'purpose': 'Implements a provider-neutral durable key-epoch event state machine for bootstrap, staging, rotation, retirement and revocation.',
+                  'owner': 'cryptography-custody-core-security',
+                  'maturity': 'STATE_MACHINE_FOUNDATION_IMPLEMENTED',
+                  'writer': 'one key-lifecycle journal writer',
+                  'invariants': ['Bootstrap produces exactly one active epoch.', 'Staged epochs are unique and strictly monotonic.', 'Rotation atomically demotes the old active epoch and promotes exactly one staged epoch.', 'The active epoch cannot be revoked.', 'Live append and replay enforce identical rules.'],
+                  'retry': 'Lifecycle events are retried only by exact event identity after replay confirms they were not committed.',
+                  'operations': 'Key bytes and provider credentials never enter lifecycle events. Ceremony tooling must bind operator, provider key identity and resulting epoch.',
+                  'gaps': ['Production KMS/HSM and custody ceremony are not selected.', 'Generation wrapping and emergency recovery are not integrated.', 'Distributed epoch propagation is not implemented.'],
+              },
+              'heptabao-operation-ledger': {
+                  'purpose': 'Records immutable operation identity and a closed transition graph used to prevent duplicate mutation and drive deterministic reconciliation.',
+                  'owner': 'core-audit-reconciliation',
+                  'maturity': 'DURABLE_STATE_MACHINE_FOUNDATION_IMPLEMENTED',
+                  'writer': 'one operation-ledger journal writer',
+                  'invariants': ['Operation, request and effect-class identity are immutable.', 'Only declared transitions are accepted.', 'Restart replay reconstructs unresolved operations exactly.', 'Unknown external effects are reconcile-only.', 'Illegal duplicate acceptance fails closed.'],
+                  'retry': 'The ledger returns a typed retry directive; callers must not infer retry safety from transport status alone.',
+                  'operations': 'Manual hold and reconciliation actions require an auditable operator identity and the exact authoritative snapshot reference.',
+                  'gaps': ['No administrative reconciliation API.', 'No retention/compaction policy.', 'No HA writer ownership.'],
+              },
+              'heptabao-oracle-observer': {
+                  'purpose': 'Represents sanitized compatibility observations and validates declared side-effect deltas without making Oracle material a runtime dependency.',
+                  'owner': 'compatibility-clean-room-security',
+                  'maturity': 'OBSERVATION_FOUNDATION_UNQUALIFIED',
+                  'writer': 'restricted Oracle laboratory only',
+                  'invariants': ['Synthetic and black-box captures are distinct.', 'Black-box evidence requires raw digest and verified transfer.', 'Secret markers and undeclared security side effects are rejected.', 'Oracle data never grants authority.'],
+                  'retry': 'A rejected capture must be recaptured and re-sanitized under the restricted workflow; implementation code must not repair Oracle evidence.',
+                  'operations': 'Retain raw material only in the restricted evidence store and transfer only deterministic sanitized outputs with signed provenance.',
+                  'gaps': ['No repository-verifiable restricted fixture transfer.', 'Compatibility coverage is incomplete.', 'Independent clean-room role separation remains external.'],
+              },
+              'heptabao-p0-server': {
+                  'purpose': 'Provides a loopback-only in-memory development server for strict request parsing, init/seal/unseal, KV v1 and audit-order experiments.',
+                  'owner': 'protocol-core-development',
+                  'maturity': 'P0_DEVELOPMENT_MEMORY_ONLY',
+                  'writer': 'in-process P0 memory state',
+                  'invariants': ['Server starts sealed and fail closed.', 'Request bounds, canonicalization, authentication and audit precede mutation.', 'HTTP 204 responses contain no body.', 'Request IDs are single-use within the bounded P0 registry.', 'Secret paths and values are redacted and best-effort overwritten.'],
+                  'retry': 'Committed-but-undelivered responses are not blindly retried. The P0 request registry is not an HA replay authority.',
+                  'operations': 'Bind only to loopback and use disposable non-secret fixtures. This binary must not be exposed as a production secrets server.',
+                  'gaps': ['Not connected to durable store, journal, Authbus, policy or recovery.', 'No TLS or production listener.', 'No OpenBao compatibility claim.'],
+              },
+              'heptabao-platform-bakeoff': {
+                  'purpose': 'Evaluates dependency candidates against explicit evidence and scoring rules while preventing selection from granting production authority.',
+                  'owner': 'platform-qualification-security',
+                  'maturity': 'BAKEOFF_TOOLING_FOUNDATION',
+                  'writer': 'candidate evidence index only',
+                  'invariants': ['Identified or incompletely scored candidates are not selectable.', 'Pending license or unclassified findings block selection.', 'Prototype selection has no authority effect.', 'Candidate identity, version, feature graph and source are exact.'],
+                  'retry': 'A candidate may be rescored only with a new evidence object bound to the same exact source or an explicitly new candidate revision.',
+                  'operations': 'Preserve failed and blocked evidence; never overwrite a historical comparison with a later pass.',
+                  'gaps': ['Production selections remain empty.', 'Independent license/security review is external.', 'Real provider integration benchmarks are incomplete.'],
+              },
+              'heptabao-platform-contracts': {
+                  'purpose': 'Defines provider-neutral runtime, TLS, Raft and artifact-provenance contracts used by isolated dependency probes.',
+                  'owner': 'platform-runtime-tls-distributed-systems',
+                  'maturity': 'CONTRACT_AND_PROBE_FOUNDATION',
+                  'writer': 'none in product runtime',
+                  'invariants': ['Critical tasks require cancellation and future deadlines.', 'Raft apply order is contiguous and monotonic.', 'Snapshots cannot regress applied state.', 'Registry checksum mismatch and unsafe TLS policy fail closed.', 'Independent reproduction has no authority effect.'],
+                  'retry': 'Probe retries preserve the original failed evidence and bind a new run identity, runner and exact source.',
+                  'operations': 'Use isolated probe workspaces and never import candidate-specific types into product domain APIs.',
+                  'gaps': ['Candidates are not production-selected.', 'Cross-platform and independent reproductions remain incomplete.', 'Provider operational runbooks are absent.'],
+              },
+              'heptabao-protocol': {
+                  'purpose': 'Defines strict HTTP request framing, canonical targets, operation classification, monotonic deadlines and secret-bearing request wrappers for the P0 profile.',
+                  'owner': 'protocol-ingress-security',
+                  'maturity': 'STRICT_P0_PROTOCOL_FOUNDATION',
+                  'writer': 'none; protocol parsing is pure with injected time/context',
+                  'invariants': ['HTTP framing, Host, Content-Length and canonical target rules are strict and bounded.', 'Classification follows canonicalization and precedes authentication or mutation.', 'Deadline values are process-local monotonic ticks and never serialized across processes.', 'Secret-bearing buffers are non-clone, redacted and best-effort overwritten.', 'Unknown operations and ignored bodies fail closed.'],
+                  'retry': 'Parsing failure is terminal for the byte stream. Client retry requires a new connection and follows operation-specific idempotency rules.',
+                  'operations': 'Use stable rejection detail codes and request-attempt identity; raw target, headers and body must not be logged.',
+                  'gaps': ['Full OpenBao normalization/error compatibility is absent.', 'HTTP/2, HTTP/3, proxy forwarding and TLS are out of scope.', 'Production framework integration is not implemented.'],
+              },
+              'heptabao-recovery-core': {
+                  'purpose': 'Creates, authenticates, decodes, verifies and stages bounded recovery archives tied to current rollback checkpoints.',
+                  'owner': 'recovery-storage-audit-security',
+                  'maturity': 'ANCHORED_RECOVERY_FOUNDATION_IMPLEMENTED',
+                  'writer': 'an injected recovery target publisher after verification',
+                  'invariants': ['Archive binds state generation/digest, journal tail, key epoch, checkpoint and authenticator identities.', 'Decoder rejects malformed, excessive, discontinuous, divergent, truncated and trailing input.', 'Restore requires the exact externally verified current checkpoint.', 'Target must be empty before staging.', 'Unknown publication outcome remains explicit.'],
+                  'retry': 'After unknown publication, inspect the target and exact receipt before any retry. Never overwrite a non-empty target blindly.',
+                  'operations': 'Recovery requires a two-person, source-bound procedure with archive digest, external anchor observation and post-restore verification.',
+                  'gaps': ['No production archive authenticator or backup custody.', 'No online upgrade/migration integration.', 'No HA/replicated recovery.'],
+              },
+              'heptabao-rollback-anchor': {
+                  'purpose': 'Defines authenticated external checkpoints and compare-and-swap advancement used to detect rollback and same-position divergence.',
+                  'owner': 'storage-cryptography-distributed-systems',
+                  'maturity': 'PROVIDER_NEUTRAL_ANCHOR_FOUNDATION',
+                  'writer': 'one external rollback-anchor provider',
+                  'invariants': ['Checkpoint preimage binds all storage, journal, key and authenticator observations.', 'Previous checkpoint digest forms an authenticated chain.', 'Historical but authentic checkpoints cannot authorize current recovery.', 'Same-position divergence and key-epoch regression fail closed.', 'Provider CAS receipts are reread and verified.'],
+                  'retry': 'CAS conflict requires a fresh provider read and reconciliation. An unavailable provider must not be treated as an empty anchor.',
+                  'operations': 'Monitor anchor freshness, provider identity revision and divergence alarms independently of the mutable storage root.',
+                  'gaps': ['No production remote append-only provider selected.', 'Availability and disaster-recovery SLOs are not defined.', 'Multi-region consistency has not been qualified.'],
+              },
+              'heptabao-single-node-journal': {
+                  'purpose': 'Implements a strict authenticated append-only file journal with immutable entries, atomic TAIL publication and exact-next orphan reconciliation.',
+                  'owner': 'audit-storage-platform',
+                  'maturity': 'SINGLE_NODE_DURABLE_FOUNDATION',
+                  'writer': 'one descriptor-fenced process',
+                  'invariants': ['Marker, entry and tail formats are strict and domain bound.', 'Entry files are immutable and chain authenticated.', 'TAIL is atomically published and directory synchronized.', 'Only the exact next orphan may be reconciled.', 'Corruption, stale tail, symlink and unexpected layout fail closed.'],
+                  'retry': 'AppendOutcomeUnknown requires replay and exact-next reconciliation. Duplicate append without reconciliation is forbidden.',
+                  'operations': 'Report tail identity, orphan sequence and corruption class. Do not expose payload bytes in diagnostics.',
+                  'gaps': ['Retention/compaction and capacity control are not implemented.', 'Production authenticator not selected.', 'Replicated journal is absent.'],
+              },
+              'heptabao-single-node-store': {
+                  'purpose': 'Implements explicit create, reopen and legacy-adoption lifecycle over immutable generation bundles and an atomically published CURRENT record.',
+                  'owner': 'storage-platform-security',
+                  'maturity': 'SINGLE_NODE_DURABLE_FOUNDATION',
+                  'writer': 'one descriptor-fenced process',
+                  'invariants': ['Lifecycle mode is caller selected; reopen never silently adopts.', 'Generation bundles are immutable and CURRENT binds exact generation/digest.', 'Persist and sync precede publication and acknowledgement.', 'Corrupt current state never falls back to an older generation.', 'Missing initialized state and unknown layout fail closed.'],
+                  'retry': 'CommitOutcomeUnknown requires reopen/load and receipt reconciliation. A pre-publication orphan generation requires explicit operator-safe handling.',
+                  'operations': 'Monitor generation, digest, marker/current integrity and writer ownership. Preserve the directory for forensic analysis after corruption.',
+                  'gaps': ['Exact-next orphan-generation reconciliation requires a formal operator path.', 'Retention and disk-space policy are absent.', 'Filesystem/controller qualification remains external.'],
+              },
+              'heptabao-storage-api': {
+                  'purpose': 'Defines checked durable generations, explicit lifecycle, bounded opaque state, integrity identities and compare-and-swap store contracts.',
+                  'owner': 'storage-core-api',
+                  'maturity': 'PROVIDER_NEUTRAL_API_IMPLEMENTED',
+                  'writer': 'one provider implementation selected by composition',
+                  'invariants': ['Generation zero is invalid and arithmetic is checked.', 'Opaque state is bounded, non-clone and redacted.', 'Domain and algorithm identities are canonical ASCII.', 'Commit receipts bind generation and non-zero digest.', 'Lifecycle intent is explicit.'],
+                  'retry': 'Providers must distinguish conflict, known failure and unknown publication. Callers reconcile unknown results before retry.',
+                  'operations': 'Provider diagnostics expose identity, generation and error classification without opaque state bytes.',
+                  'gaps': ['Provider conformance suite is not yet standalone.', 'Production database backends are absent.', 'Online migration/version negotiation is not defined.'],
+              },
+          }
+
+          workspace = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))
+          member_paths = workspace['workspace']['members']
+          crate_names = []
+          crate_by_name = {}
+          dependencies = {}
+          for member in member_paths:
+              manifest = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))
+              name = manifest['package']['name']
+              crate_names.append(name)
+              crate_by_name[name] = member
+              deps = []
+              for table in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+                  for dep, spec in (manifest.get(table) or {}).items():
+                      if dep.startswith('heptabao-'):
+                          deps.append(dep)
+              dependencies[name] = sorted(set(deps))
+
+          missing_metadata = sorted(set(crate_names) - set(modules))
+          extra_metadata = sorted(set(modules) - set(crate_names))
+          if missing_metadata or extra_metadata:
+              raise SystemExit(f'module metadata drift: missing={missing_metadata}, extra={extra_metadata}')
+
+          reverse = {name: [] for name in crate_names}
+          for name, deps in dependencies.items():
+              for dep in deps:
+                  if dep in reverse:
+                      reverse[dep].append(name)
+          for value in reverse.values():
+              value.sort()
+
+          docs_root = root / 'docs/modules'
+          docs_root.mkdir(parents=True, exist_ok=True)
+          required_sections = [
+              'Purpose and non-goals', 'Maturity and authority boundary', 'Ownership and trust boundary',
+              'Dependency contract', 'Public API index', 'State and invariants', 'Failure and retry semantics',
+              'Persistent or wire formats', 'Concurrency and cancellation', 'Security and secret handling',
+              'Testing and evidence', 'Extension workflow', 'Operations and diagnostics', 'Known gaps',
+              'Traceability and maintenance',
+          ]
+
+          def scan_symbols(crate_path: Path):
+              symbols = []
+              tests = []
+              pattern = re.compile(r'^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(struct|enum|trait|fn|type|const|mod)\s+([A-Za-z_][A-Za-z0-9_]*)')
+              test_pattern = re.compile(r'^\s*fn\s+(test_[A-Za-z0-9_]+|[A-Za-z_][A-Za-z0-9_]*)\s*\(')
+              for src in sorted((crate_path / 'src').rglob('*.rs')):
+                  pending_test = False
+                  for line in src.read_text(encoding='utf-8').splitlines():
+                      if '#[test]' in line:
+                          pending_test = True
+                          continue
+                      match = pattern.match(line)
+                      if match:
+                          symbols.append(f'`{match.group(1)} {match.group(2)}` ({src.relative_to(root)})')
+                      if pending_test:
+                          tm = test_pattern.match(line)
+                          if tm:
+                              tests.append(f'`{tm.group(1)}` ({src.relative_to(root)})')
+                              pending_test = False
+                          elif line.strip() and not line.lstrip().startswith('#'):
+                              pending_test = False
+              return sorted(set(symbols)), sorted(set(tests))
+
+          coverage = []
+          for name in sorted(crate_names):
+              member = crate_by_name[name]
+              meta = modules[name]
+              symbols, tests = scan_symbols(root / member)
+              dep_lines = dependencies[name] or ['none']
+              reverse_lines = reverse[name] or ['none']
+              symbol_lines = symbols or ['No public Rust item was detected by the documentation indexer; inspect crate-local visibility before adding public API.']
+              test_lines = tests or ['No crate-local unit test name was detected; validation may live in integration or plan suites.']
+              format_note = 'This crate does not own a durable or wire format; it consumes typed contracts from dependencies.'
+              if any(token in name for token in ('protocol', 'store', 'journal', 'ledger', 'barrier', 'recovery', 'rollback', 'key-lifecycle')):
+                  format_note = 'All durable or wire encodings are versioned, bounded and strict. Decoders reject truncation, impossible lengths, invalid identity/version and trailing bytes. Exact field layouts remain normative in the linked domain contract and source tests.'
+
+              doc = f'''# `{name}` developer guide
+
+**Source baseline:** `{source_sha}`  
+**Source tree:** `{source_tree}`  
+**Owner role:** `{meta['owner']}`  
+**Maturity:** `{meta['maturity']}`  
+**Authority effect:** `NONE`
+
+## Purpose and non-goals
+
+{meta['purpose']}
+
+This crate does not by itself grant qualification, compatibility, production, migration or release authority. It must not be used to infer behavior outside the currently declared profile.
+
+## Maturity and authority boundary
+
+The source is a bounded foundation component. Technical tests establish only the checked invariants on the exact source. Production provider selection, independent review and an authority grant are separate objects.
+
+## Ownership and trust boundary
+
+- Authoritative writer: {meta['writer']}.
+- Accountable owner role: `{meta['owner']}`.
+- Inputs from clients, storage, providers, plugins, clocks, filesystems and evidence stores are untrusted unless explicitly wrapped by a verified type.
+- Callers may not bypass typed constructors or reinterpret an error as success.
+
+## Dependency contract
+
+Direct HeptaBao dependencies:
+{''.join(f'- `{item}`\n' for item in dep_lines)}
+Reverse HeptaBao dependants:
+{''.join(f'- `{item}`\n' for item in reverse_lines)}
+The allowed direction follows the system crate graph: provider-neutral types and APIs do not depend on adapters; governance and Oracle tooling do not enter the product authority path.
+
+## Public API index
+
+{''.join(f'- {item}\n' for item in symbol_lines)}
+This index is generated from explicit `pub` declarations and is not a replacement for rustdoc. New public items require an invariant, error semantics, tests and an entry in this guide.
+
+## State and invariants
+
+{''.join(f'- {item}\n' for item in meta['invariants'])}
+A code change that weakens one of these invariants requires a new plan revision rather than a silent compatibility interpretation.
+
+## Failure and retry semantics
+
+{meta['retry']}
+
+Errors are part of the public contract. Unknown, blocked, stale, corrupt, unauthenticated and unauthorized outcomes remain distinct. Callers must not collapse them into a generic retryable transport failure.
+
+## Persistent or wire formats
+
+{format_note}
+
+Format changes require an explicit version transition, backward/forward compatibility decision, hostile decoder tests and migration/rollback treatment.
+
+## Concurrency and cancellation
+
+The caller must preserve single-writer or immutable-reader ownership declared by the domain. Cancellation after an irreversible provider call or durable publication changes only the waiter; it does not revoke the completed authority or commit. Shared mutable state requires a documented fence, generation or epoch.
+
+## Security and secret handling
+
+- Secret-bearing bytes are not logged, formatted, cloned or serialized unless an explicit audited exposure method permits it.
+- `Debug` output carries only opaque identity, lengths and safe state classes.
+- Buffer overwrite is best effort and does not prove allocator, swap, crash-dump or side-channel resistance.
+- No real token, unseal share, recovery key, private key or production snapshot belongs in source, tests, CI or diagnostics.
+
+## Testing and evidence
+
+Detected crate-local tests:
+{''.join(f'- {item}\n' for item in test_lines)}
+Required local gate:
+
+```text
+cargo +1.98.0 fmt --all -- --check
+cargo +1.98.0 test --locked --workspace --all-targets
+cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+```
+
+Domain changes also run plan mutation tests, current platform/Oracle regressions and frozen inherited-source replay. A green run is technical evidence only.
+
+## Extension workflow
+
+1. Bind the exact base commit/tree and read the current plan, blocker register and this guide.
+2. Add or change typed contracts before concrete adapters.
+3. Define state transition, error, retry and cancellation behavior.
+4. Add positive, hostile and restart/replay tests.
+5. Update this guide, traceability and normative manifest in the same change.
+6. Run exact-head read-only CI; preserve failed evidence.
+7. Obtain independent review for storage, cryptography, security or distributed-systems critical changes.
+
+## Operations and diagnostics
+
+{meta['operations']}
+
+Diagnostics use stable typed error classes and opaque correlation identities. Operators must preserve suspect state for investigation instead of deleting files or rewriting evidence to obtain a pass.
+
+## Known gaps
+
+{''.join(f'- {item}\n' for item in meta['gaps'])}
+
+## Traceability and maintenance
+
+- Crate path: `{member}`
+- Module guide: `docs/modules/{name}.md`
+- Source baseline: `{source_sha}` / `{source_tree}`
+- Validation: `scripts/validate_module_documentation_v1_4_4.py`
+- Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
+
+The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+'''
+              (docs_root / f'{name}.md').write_text(doc, encoding='utf-8')
+              coverage.append({
+                  'crate': name,
+                  'path': member,
+                  'document': f'docs/modules/{name}.md',
+                  'owner_role': meta['owner'],
+                  'maturity': meta['maturity'],
+                  'required_sections': required_sections,
+                  'source_binding': 'RESOLVE_FROM_EXACT_SOURCE',
+              })
+
+          standard = '''# HeptaBao module documentation standard V1
+
+Every Cargo workspace member must have exactly one maintained developer guide under `docs/modules/<crate>.md`. The guide is an engineering contract, not marketing text. It must describe purpose/non-goals, maturity, authority boundary, writer ownership, dependency direction, public API, state invariants, error/retry/cancellation semantics, formats, security handling, tests, extension workflow, operations, known gaps and exact-source maintenance metadata.
+
+A module is not documentation-complete merely because source, tests, a master plan or a version-change manifest exists. The validator treats missing sections, stale workspace coverage, duplicate entries, placeholder language, authority promotion and README state drift as failures.
+
+Generated API indexes are review aids. Rustdoc remains required for public items, and future revisions should progressively enable `missing_docs` and doctests crate by crate.
+'''
+          (docs_root / 'MODULE_DOCUMENTATION_STANDARD_V1.md').write_text(standard, encoding='utf-8')
+
+          index_rows = '\n'.join(
+              f"| `{item['crate']}` | `{item['owner_role']}` | `{item['maturity']}` | [{item['document'].split('/')[-1]}](./{item['document'].split('/')[-1]}) |"
+              for item in coverage
+          )
+          index = f'''# HeptaBao module developer documentation
+
+Source baseline: `{source_sha}` / `{source_tree}`  
+Coverage: **{len(coverage)} / {len(crate_names)} Cargo workspace crates**.
+
+| Crate | Owner role | Maturity | Developer guide |
+|---|---|---|---|
+{index_rows}
+
+The coverage object and validator are authoritative for structural completeness. Target modules that do not yet exist in the Cargo workspace remain product gaps and are tracked by the master plan rather than being represented as implemented modules.
+'''
+          (docs_root / 'README.md').write_text(index, encoding='utf-8')
+
+          planning = root / 'planning'
+          schemas = root / 'schemas'
+          scripts = root / 'scripts'
+          tests_dir = root / 'tests/plan'
+          plan_dir = root / 'docs/plan'
+          for directory in (planning, schemas, scripts, tests_dir, plan_dir):
+              directory.mkdir(parents=True, exist_ok=True)
+
+          coverage_obj = {
+              'schema': 'heptabao.module-documentation-coverage.v1_4_4',
+              'plan_id': 'HEPTABAO-PLAN-2026-08-28',
+              'revision': '1.4.4',
+              'status': 'COMPLETE_FOR_CURRENT_CARGO_WORKSPACE',
+              'source_baseline': {'commit': source_sha, 'tree': source_tree, 'branch': os.environ['SOURCE_BRANCH'] if 'SOURCE_BRANCH' in os.environ else 'codex/plan-v1.4.3-descriptor-fencing-clean-v1'},
+              'standard': 'docs/modules/MODULE_DOCUMENTATION_STANDARD_V1.md',
+              'index': 'docs/modules/README.md',
+              'workspace_module_count': len(crate_names),
+              'documented_module_count': len(coverage),
+              'modules': coverage,
+              'target_not_yet_implemented': ['heptabao-server', 'heptabao-core-pipeline', 'heptabao-policy', 'heptabao-identity', 'heptabao-token', 'heptabao-lease', 'heptabao-system', 'heptabao-namespace', 'heptabao-plugin-host', 'heptabao-storage-raft', 'heptabao-cluster', 'heptabao-migration', 'heptabao-cli', 'heptabao-agent', 'heptabao-proxy'],
+              'claims': {'qualification': False, 'compatibility_claim': False, 'production_authority': False, 'migration_authority': False, 'release_authority': False, 'authority_effect': 'NONE'},
+          }
+          (planning / 'HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml').write_text(yaml.safe_dump(coverage_obj, sort_keys=False), encoding='utf-8')
+
+          status_obj = {
+              'schema': 'heptabao.v1-4-4-module-documentation-status.v1',
+              'plan_id': 'HEPTABAO-PLAN-2026-08-28',
+              'revision': '1.4.4',
+              'status': 'SOURCE_IMPLEMENTED_EXACT_HEAD_EXECUTION_AND_REVIEW_REQUIRED',
+              'current_plan': 'docs/plan/HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md',
+              'coverage': 'planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml',
+              'current_blocker_register': 'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml',
+              'normative_manifest': 'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml',
+              'source_baseline': {'commit': source_sha, 'tree': source_tree},
+              'implementation': {'one_guide_per_workspace_crate': 'IMPLEMENTED_SOURCE', 'as_built_dependency_and_public_api_index': 'IMPLEMENTED_SOURCE', 'documentation_coverage_validator': 'IMPLEMENTED_SOURCE', 'readme_current_truth_refresh': 'IMPLEMENTED_SOURCE'},
+              'remaining_product_work': coverage_obj['target_not_yet_implemented'],
+              'external_open': ['HB-BLK-CTRL-001', 'HB-BLK-EXT-001', 'HB-BLK-EXT-002', 'HB-BLK-EXT-003', 'HB-BLK-EXT-004', 'HB-BLK-EXT-005', 'HB-BLK-EXT-006', 'HB-BLK-EXT-007'],
+              'claims': {'qualification': False, 'compatibility_claim': False, 'selected_candidates': [], 'selection_effect': 'NONE', 'production_authority': False, 'migration_authority': False, 'release_authority': False, 'authority_effect': 'NONE'},
+          }
+          (planning / 'HEPTABAO_V1_4_4_MODULE_DOCUMENTATION_STATUS.yaml').write_text(yaml.safe_dump(status_obj, sort_keys=False), encoding='utf-8')
+
+          blockers = {
+              'schema': 'heptabao.blocker-register-extension.v1_4_4',
+              'plan_id': 'HEPTABAO-PLAN-2026-08-28',
+              'revision': '1.4.4',
+              'status': 'ACTIVE_FAIL_CLOSED',
+              'inherits': 'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_3.yaml',
+              'source_baseline': {'commit': source_sha, 'tree': source_tree},
+              'added_blockers': [
+                  {'id': 'HB-BLK-REPO-037', 'class': 'REPOSITORY_CONTROLLED', 'severity': 'HIGH', 'title': 'current Cargo modules lacked one maintained developer guide each', 'state': 'IMPLEMENTED_SOURCE', 'closure_criteria': ['workspace members and module guides are one-to-one', 'every guide contains all mandatory engineering sections', 'guide records owner maturity source and known gaps'], 'evidence': ['docs/modules/README.md', 'planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml'], 'closure_receipt_required': True},
+                  {'id': 'HB-BLK-REPO-038', 'class': 'REPOSITORY_CONTROLLED', 'severity': 'HIGH', 'title': 'target architecture could be confused with the as-built Cargo graph', 'state': 'IMPLEMENTED_SOURCE', 'closure_criteria': ['dependency and reverse-dependency lists derive from exact Cargo manifests', 'unimplemented target modules remain explicitly listed as gaps', 'module guides never imply production authority'], 'evidence': ['docs/modules/README.md', 'scripts/validate_module_documentation_v1_4_4.py'], 'closure_receipt_required': True},
+                  {'id': 'HB-BLK-REPO-039', 'class': 'REPOSITORY_CONTROLLED', 'severity': 'HIGH', 'title': 'module documentation completeness was not mechanically enforced', 'state': 'IMPLEMENTED_SOURCE', 'closure_criteria': ['validator rejects missing extra duplicate or incomplete module documents', 'mutation tests prove fail-closed behavior', 'read-only exact-head workflow runs docs Python and Rust gates'], 'evidence': ['scripts/validate_module_documentation_v1_4_4.py', 'tests/plan/test_module_documentation_v1_4_4.py', '.github/workflows/plan-v1.4.4-module-documentation.yml'], 'closure_receipt_required': True},
+                  {'id': 'HB-BLK-REPO-040', 'class': 'REPOSITORY_CONTROLLED', 'severity': 'MEDIUM', 'title': 'root README current-truth section lagged the implemented durable kernel', 'state': 'IMPLEMENTED_SOURCE', 'closure_criteria': ['README names V1.4.4 and its exact predecessor', 'README states nineteen documented workspace modules and non-production boundary', 'README links current plan status coverage and module index'], 'evidence': ['README.md'], 'closure_receipt_required': True},
+              ],
+              'external_and_control_blockers_carried_forward': status_obj['external_open'],
+              'claims': status_obj['claims'],
+          }
+          (planning / 'HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml').write_text(yaml.safe_dump(blockers, sort_keys=False), encoding='utf-8')
+
+          plan = f'''# HeptaBao Plan V1.4.4 — Module Documentation Closure
+
+**Plan ID:** `HEPTABAO-PLAN-2026-08-28`  
+**Revision:** `1.4.4`  
+**Source baseline:** `{source_sha}` / `{source_tree}`  
+**Authority effect:** `NONE`
+
+## Purpose
+
+V1.4.4 closes the repository-controlled documentation gap identified after the durable single-node, journal, key-lifecycle, recovery and descriptor-fencing foundations. It gives every current Cargo workspace member a maintained developer guide and mechanically separates the as-built graph from future target modules.
+
+## Required result
+
+- one guide for every exact Cargo workspace member;
+- owner, maturity, writer, dependency, public API, invariant, error/retry, format, concurrency, secret handling, test, extension, operations and known-gap sections;
+- generated as-built dependency and public API indexes bound to the exact source baseline;
+- a machine-readable coverage object and fail-closed validator;
+- mutation tests and a read-only exact-head workflow;
+- refreshed root README current truth;
+- no qualification, compatibility, selection or authority promotion.
+
+## Non-scope
+
+This revision documents current modules; it does not represent future policy, identity, token, lease, namespace, plugin, Raft/HA, CLI, Agent or Proxy modules as implemented. It does not select production providers or close external legal, review, signing, Oracle-transfer, storage-lab or independent-reproduction blockers.
+
+## Closure gates
+
+1. Validate one-to-one workspace/document coverage and all mandatory sections.
+2. Run hostile documentation mutation tests.
+3. Run current platform and Oracle regression suites.
+4. Run Rust 1.98 formatting, locked all-target tests and strict Clippy.
+5. Verify exact additive documentation delta and absence of execution/materializer residue.
+6. Keep every authority field false/NONE.
+'''
+          (plan_dir / 'HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md').write_text(plan, encoding='utf-8')
+
+          manifest_docs = [
+              {'path': 'docs/plan/HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md', 'role': 'PLAN'},
+              {'path': 'docs/modules/MODULE_DOCUMENTATION_STANDARD_V1.md', 'role': 'DOCUMENTATION_STANDARD'},
+              {'path': 'docs/modules/README.md', 'role': 'MODULE_INDEX'},
+              {'path': 'planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml', 'role': 'COVERAGE'},
+              {'path': 'planning/HEPTABAO_V1_4_4_MODULE_DOCUMENTATION_STATUS.yaml', 'role': 'STATUS'},
+              {'path': 'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml', 'role': 'BLOCKER_REGISTER'},
+              {'path': 'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml', 'role': 'MANIFEST'},
+              {'path': 'schemas/heptabao_normative_document_manifest_v1_4_4.schema.json', 'role': 'SCHEMA'},
+              {'path': 'scripts/validate_module_documentation_v1_4_4.py', 'role': 'VALIDATOR'},
+              {'path': 'tests/plan/test_module_documentation_v1_4_4.py', 'role': 'TEST'},
+              {'path': '.github/workflows/plan-v1.4.4-module-documentation.yml', 'role': 'WORKFLOW'},
+              {'path': 'README.md', 'role': 'ROOT_README'},
+          ] + [{'path': item['document'], 'role': 'MODULE_DEVELOPER_GUIDE'} for item in coverage]
+          manifest = {'schema': 'heptabao.normative-document-manifest.v1_4_4', 'plan_id': 'HEPTABAO-PLAN-2026-08-28', 'revision': '1.4.4', 'status': 'ACTIVE_MODULE_DOCUMENTATION_CLOSURE', 'inherits': 'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_3.yaml', 'source_binding': 'RESOLVE_FROM_EXACT_SOURCE', 'documents': [{**item, 'source_binding': 'RESOLVE_FROM_EXACT_SOURCE'} for item in manifest_docs], 'claims': status_obj['claims']}
+          (planning / 'HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml').write_text(yaml.safe_dump(manifest, sort_keys=False), encoding='utf-8')
+
+          schema = {
+              '$schema': 'https://json-schema.org/draft/2020-12/schema',
+              '$id': 'https://heptabao.example/schemas/heptabao_normative_document_manifest_v1_4_4.schema.json',
+              'type': 'object',
+              'additionalProperties': False,
+              'required': ['schema', 'plan_id', 'revision', 'status', 'inherits', 'source_binding', 'documents', 'claims'],
+              'properties': {
+                  'schema': {'const': 'heptabao.normative-document-manifest.v1_4_4'},
+                  'plan_id': {'const': 'HEPTABAO-PLAN-2026-08-28'},
+                  'revision': {'const': '1.4.4'},
+                  'status': {'const': 'ACTIVE_MODULE_DOCUMENTATION_CLOSURE'},
+                  'inherits': {'const': 'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_3.yaml'},
+                  'source_binding': {'const': 'RESOLVE_FROM_EXACT_SOURCE'},
+                  'documents': {'type': 'array', 'minItems': len(manifest_docs), 'items': {'type': 'object', 'additionalProperties': False, 'required': ['path', 'role', 'source_binding'], 'properties': {'path': {'type': 'string', 'minLength': 1}, 'role': {'type': 'string', 'minLength': 1}, 'source_binding': {'const': 'RESOLVE_FROM_EXACT_SOURCE'}}}},
+                  'claims': {'type': 'object'},
+              },
+          }
+          (schemas / 'heptabao_normative_document_manifest_v1_4_4.schema.json').write_text(json.dumps(schema, indent=2) + '\n', encoding='utf-8')
+
+          validator = r'''#!/usr/bin/env python3
+          from __future__ import annotations
+
+          import argparse
+          import json
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          import jsonschema
+          import yaml
+
+          REQUIRED = [
+              'Purpose and non-goals', 'Maturity and authority boundary', 'Ownership and trust boundary',
+              'Dependency contract', 'Public API index', 'State and invariants', 'Failure and retry semantics',
+              'Persistent or wire formats', 'Concurrency and cancellation', 'Security and secret handling',
+              'Testing and evidence', 'Extension workflow', 'Operations and diagnostics', 'Known gaps',
+              'Traceability and maintenance',
+          ]
+          FORBIDDEN = ('TODO', 'TBD', 'PLACEHOLDER', 'production_authority: true', 'qualification: true', 'authority_effect: GRANT')
+
+          class UniqueLoader(yaml.SafeLoader):
+              pass
+
+          def construct_mapping(loader, node, deep=False):
+              mapping = {}
+              for key_node, value_node in node.value:
+                  key = loader.construct_object(key_node, deep=deep)
+                  if key in mapping:
+                      raise ValueError(f'duplicate YAML key: {key!r}')
+                  mapping[key] = loader.construct_object(value_node, deep=deep)
+              return mapping
+
+          UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
+
+          def load_yaml(path: Path):
+              return yaml.load(path.read_text(encoding='utf-8'), Loader=UniqueLoader)
+
+          def validate(root: Path) -> list[str]:
+              errors = []
+              workspace = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))
+              crates = []
+              for member in workspace['workspace']['members']:
+                  manifest = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))
+                  crates.append(manifest['package']['name'])
+              coverage_path = root / 'planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml'
+              try:
+                  coverage = load_yaml(coverage_path)
+              except Exception as exc:
+                  return [f'coverage YAML invalid: {exc}']
+              entries = coverage.get('modules') or []
+              names = [entry.get('crate') for entry in entries]
+              if len(names) != len(set(names)):
+                  errors.append('duplicate module coverage entry')
+              if sorted(names) != sorted(crates):
+                  errors.append(f'workspace/document coverage mismatch: workspace={sorted(crates)!r}, documented={sorted(names)!r}')
+              if coverage.get('workspace_module_count') != len(crates) or coverage.get('documented_module_count') != len(crates):
+                  errors.append('module counts do not equal exact workspace count')
+              expected_claims = {'qualification': False, 'compatibility_claim': False, 'production_authority': False, 'migration_authority': False, 'release_authority': False, 'authority_effect': 'NONE'}
+              if coverage.get('claims') != expected_claims:
+                  errors.append('coverage authority boundary drifted')
+              docs_seen = set()
+              for entry in entries:
+                  name = entry.get('crate')
+                  rel = entry.get('document')
+                  if rel in docs_seen:
+                      errors.append(f'duplicate module document path: {rel}')
+                  docs_seen.add(rel)
+                  path = root / str(rel)
+                  if not path.is_file():
+                      errors.append(f'missing module document: {rel}')
+                      continue
+                  text = path.read_text(encoding='utf-8')
+                  if f'`{name}` developer guide' not in text:
+                      errors.append(f'module title mismatch: {rel}')
+                  for section in REQUIRED:
+                      if f'## {section}' not in text:
+                          errors.append(f'{rel} missing section {section!r}')
+                  for token in FORBIDDEN:
+                      if token in text:
+                          errors.append(f'{rel} contains forbidden placeholder/authority token {token!r}')
+                  if entry.get('required_sections') != REQUIRED:
+                      errors.append(f'{rel} required section registry drifted')
+              module_files = {str(path.relative_to(root)) for path in (root / 'docs/modules').glob('heptabao-*.md')}
+              if module_files != docs_seen:
+                  errors.append(f'unindexed or missing module guide files: files={sorted(module_files)!r}, index={sorted(docs_seen)!r}')
+              for required in ('docs/modules/README.md', 'docs/modules/MODULE_DOCUMENTATION_STANDARD_V1.md'):
+                  if not (root / required).is_file():
+                      errors.append(f'missing {required}')
+              readme = (root / 'README.md').read_text(encoding='utf-8')
+              for token in ('V1.4.4', '19 / 19', 'not production-deployable', 'HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml'):
+                  if token not in readme:
+                      errors.append(f'README missing current-truth token {token!r}')
+              manifest_path = root / 'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml'
+              schema_path = root / 'schemas/heptabao_normative_document_manifest_v1_4_4.schema.json'
+              try:
+                  manifest = load_yaml(manifest_path)
+                  schema = json.loads(schema_path.read_text(encoding='utf-8'))
+                  jsonschema.Draft202012Validator.check_schema(schema)
+                  jsonschema.validate(manifest, schema)
+              except Exception as exc:
+                  errors.append(f'manifest/schema invalid: {exc}')
+              else:
+                  paths = [item.get('path') for item in manifest.get('documents') or []]
+                  if len(paths) != len(set(paths)):
+                      errors.append('manifest contains duplicate paths')
+                  for rel in paths:
+                      if not (root / str(rel)).is_file():
+                          errors.append(f'manifest path missing: {rel}')
+                  if not docs_seen.issubset(set(paths)):
+                      errors.append('manifest does not include every module guide')
+              status = load_yaml(root / 'planning/HEPTABAO_V1_4_4_MODULE_DOCUMENTATION_STATUS.yaml')
+              blocker = load_yaml(root / 'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml')
+              expected_full = {'qualification': False, 'compatibility_claim': False, 'selected_candidates': [], 'selection_effect': 'NONE', 'production_authority': False, 'migration_authority': False, 'release_authority': False, 'authority_effect': 'NONE'}
+              if status.get('claims') != expected_full or blocker.get('claims') != expected_full:
+                  errors.append('status/blocker authority boundary drifted')
+              blocker_ids = [item.get('id') for item in blocker.get('added_blockers') or []]
+              if blocker_ids != ['HB-BLK-REPO-037', 'HB-BLK-REPO-038', 'HB-BLK-REPO-039', 'HB-BLK-REPO-040']:
+                  errors.append('V1.4.4 blocker set drifted')
+              return errors
+
+          def main():
+              parser = argparse.ArgumentParser()
+              parser.add_argument('--root', default='.')
+              args = parser.parse_args()
+              errors = validate(Path(args.root).resolve())
+              if errors:
+                  for error in errors:
+                      print(error, file=sys.stderr)
+                  return 1
+              print('V1.4.4 module documentation validation: PASS')
+              return 0
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+          '''
+          validator = '\n'.join(line[10:] if line.startswith('          ') else line for line in validator.splitlines()) + '\n'
+          (scripts / 'validate_module_documentation_v1_4_4.py').write_text(validator, encoding='utf-8')
+
+          tests = r'''from __future__ import annotations
+
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          import unittest
+          from pathlib import Path
+
+          import yaml
+
+          ROOT = Path(__file__).resolve().parents[2]
+          VALIDATOR = ROOT / 'scripts/validate_module_documentation_v1_4_4.py'
+
+          class ModuleDocumentationV144Tests(unittest.TestCase):
+              def run_validator(self, root: Path):
+                  return subprocess.run([sys.executable, str(root / 'scripts/validate_module_documentation_v1_4_4.py'), '--root', str(root)], cwd=root, text=True, capture_output=True)
+
+              def copy_repo(self):
+                  temp = Path(tempfile.mkdtemp(prefix='heptabao-doc-test-'))
+                  self.addCleanup(lambda: shutil.rmtree(temp, ignore_errors=True))
+                  shutil.copytree(ROOT, temp, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', 'target', '__pycache__'))
+                  return temp
+
+              def test_current_repository_validates(self):
+                  result = self.run_validator(ROOT)
+                  self.assertEqual(result.returncode, 0, result.stderr)
+
+              def test_missing_module_document_fails_closed(self):
+                  temp = self.copy_repo()
+                  (temp / 'docs/modules/heptabao-protocol.md').unlink()
+                  self.assertNotEqual(self.run_validator(temp).returncode, 0)
+
+              def test_missing_required_section_fails_closed(self):
+                  temp = self.copy_repo()
+                  path = temp / 'docs/modules/heptabao-storage-api.md'
+                  path.write_text(path.read_text(encoding='utf-8').replace('## Known gaps', '## Removed gaps'), encoding='utf-8')
+                  self.assertNotEqual(self.run_validator(temp).returncode, 0)
+
+              def test_authority_promotion_fails_closed(self):
+                  temp = self.copy_repo()
+                  path = temp / 'planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml'
+                  obj = yaml.safe_load(path.read_text(encoding='utf-8'))
+                  obj['claims']['production_authority'] = True
+                  path.write_text(yaml.safe_dump(obj, sort_keys=False), encoding='utf-8')
+                  self.assertNotEqual(self.run_validator(temp).returncode, 0)
+
+              def test_unindexed_module_guide_fails_closed(self):
+                  temp = self.copy_repo()
+                  (temp / 'docs/modules/heptabao-unindexed.md').write_text('# unindexed\n', encoding='utf-8')
+                  self.assertNotEqual(self.run_validator(temp).returncode, 0)
+
+              def test_readme_state_drift_fails_closed(self):
+                  temp = self.copy_repo()
+                  path = temp / 'README.md'
+                  path.write_text(path.read_text(encoding='utf-8').replace('V1.4.4', 'V1.4.3'), encoding='utf-8')
+                  self.assertNotEqual(self.run_validator(temp).returncode, 0)
+
+          if __name__ == '__main__':
+              unittest.main()
+          '''
+          tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in tests.splitlines()) + '\n'
+          (tests_dir / 'test_module_documentation_v1_4_4.py').write_text(tests, encoding='utf-8')
+
+          workflow = '''name: plan-v1.4.4-module-documentation
+
+          on:
+            push:
+              branches:
+                - codex/plan-v1.4.4-module-documentation-closure-v1
+            pull_request:
+              paths:
+                - 'Cargo.toml'
+                - 'crates/**'
+                - 'docs/modules/**'
+                - 'docs/plan/HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md'
+                - 'planning/HEPTABAO_*V1_4_4.yaml'
+                - 'schemas/heptabao_normative_document_manifest_v1_4_4.schema.json'
+                - 'scripts/validate_module_documentation_v1_4_4.py'
+                - 'tests/plan/test_module_documentation_v1_4_4.py'
+                - 'README.md'
+                - '.github/workflows/plan-v1.4.4-module-documentation.yml'
+
+          permissions:
+            contents: read
+
+          jobs:
+            module-documentation:
+              runs-on: ubuntu-24.04
+              timeout-minutes: 30
+              steps:
+                - name: Checkout exact source
+                  uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+                  with:
+                    ref: ${{ github.event.pull_request.head.sha || github.sha }}
+                    fetch-depth: 0
+                    persist-credentials: false
+                - name: Install Python and Rust 1.98
+                  run: |
+                    set -euo pipefail
+                    python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+                    rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+                - name: Validate complete module documentation
+                  run: |
+                    set -euo pipefail
+                    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+                    python scripts/validate_module_documentation_v1_4_4.py
+                    python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+                    python -m unittest discover -s tests/platform -p 'test_*.py' -v
+                    python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+                    cargo +1.98.0 fmt --all -- --check
+                    cargo +1.98.0 test --locked --workspace --all-targets
+                    cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+                    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          '''
+          workflow = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow.splitlines()) + '\n'
+          (root / '.github/workflows/plan-v1.4.4-module-documentation.yml').write_text(workflow, encoding='utf-8')
+
+          readme = f'''# HeptaBao
+
+HeptaBao is an independent clean-room Rust reimplementation program for an OpenBao-compatible secrets-management server.
+
+## Current truth
+
+- Current plan: **V1.4.4 module documentation closure**.
+- Exact predecessor: **V1.4.3 descriptor anchoring and writer fencing clean-source candidate**.
+- Current implemented foundation: strict P0 protocol, Authbus contracts, durable generation store, authenticated journal, operation ledger, key lifecycle, external rollback checkpoint contract, anchored recovery and Linux descriptor/writer fencing.
+- Current Cargo workspace documentation: **19 / 19** crates have developer guides.
+- Qualification: **false**.
+- Compatibility claim: **false**.
+- Dependency selections: **none with production authority**.
+- Production, migration, release and mixed-cluster authority: **false**.
+- Supported production versions: **none**.
+
+The repository is **not production-deployable**. Do not use it to protect real secrets and do not place real tokens, unseal shares, recovery keys, private keys or production snapshots in source, tests or CI.
+
+## Current normative entry points
+
+1. `docs/plan/HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md`
+2. `planning/HEPTABAO_V1_4_4_MODULE_DOCUMENTATION_STATUS.yaml`
+3. `planning/HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml`
+4. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml`
+5. `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
+6. `docs/modules/README.md`
+7. `docs/modules/MODULE_DOCUMENTATION_STANDARD_V1.md`
+8. `.github/workflows/plan-v1.4.4-module-documentation.yml`
+
+## Architecture boundary
+
+The current code is a set of safety-oriented kernel components and a loopback-only P0 memory server. A production composition root, policy, identity, token, lease, namespace, plugin host, secrets engines, Raft/HA, CLI, Agent, Proxy and full OpenBao compatibility remain future product work. Target-architecture documents do not imply that these modules exist.
+
+## Evidence and authority boundary
+
+Technical source, tests, CI, qualification, compatibility and operational authority are distinct. External repository controls, independent reviews, legal disposition, incident operation, isolated signing, restricted Oracle transfer, power-cut/filesystem laboratory evidence and independent reproduction close only through their declared real completion objects.
+
+## Development
+
+Read the guide for the crate you are changing under `docs/modules/`, update it in the same commit, and run:
+
+```text
+python scripts/validate_module_documentation_v1_4_4.py
+cargo +1.98.0 fmt --all -- --check
+cargo +1.98.0 test --locked --workspace --all-targets
+cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+```
+
+Source baseline for this documentation revision: `{source_sha}` / `{source_tree}`.
+'''
+          (root / 'README.md').write_text(readme, encoding='utf-8')
+          PY
+
+          cd "$work"
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          git diff --check
+          test -z "$(find . -path './.git' -prune -o -type f \( -name '*.md' -o -name '*.yaml' -o -name '*.py' -o -name '*.yml' \) -print0 | xargs -0 grep -lE 'TODO|TBD|PLACEHOLDER' || true)"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md .github/workflows/plan-v1.4.4-module-documentation.yml docs/modules docs/plan/HEPTABAO_PLAN_V1_4_4_MODULE_DOCUMENTATION_CLOSURE.md planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml planning/HEPTABAO_V1_4_4_MODULE_DOCUMENTATION_STATUS.yaml planning/HEPTABAO_BLOCKER_REGISTER_V1_4_4.yaml planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_4.yaml schemas/heptabao_normative_document_manifest_v1_4_4.schema.json scripts/validate_module_documentation_v1_4_4.py tests/plan/test_module_documentation_v1_4_4.py
+          git commit -m 'docs(v1.4.4): close current workspace module documentation gaps'
+          test "$(git rev-parse HEAD^)" = "$source_sha"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin "+HEAD:refs/heads/$TARGET_BRANCH"
+          printf 'source_commit=%s\nsource_tree=%s\ncandidate_commit=%s\ncandidate_tree=%s\nmodule_count=19\n' \
+            "$source_sha" "$source_tree" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" \
+            | tee "$RUNNER_TEMP/v1.4.4-module-doc-receipt.txt"
+
+      - name: Upload documentation closure receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.4-module-doc-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/v1.4.4-module-doc-receipt.txt
