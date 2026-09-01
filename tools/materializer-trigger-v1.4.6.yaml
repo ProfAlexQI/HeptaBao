@@ -1,4 +1,4 @@
-trigger: clean-v1.4.6-authoritative-recovery-v1
+trigger: clean-v1.4.6-authoritative-recovery-v2
 baseline: 936cb5599d206cea895de2ae04a1289a0b3a0326
 donor: 6dd945c3c2d9709d0749033dcd32ea2fa78bc0ac
-materializer: 09223ba2117f9138c12336a8527440f7f44b0b65
+materializer: 0d60c12af830da2e8c6003fe1d25b8b8631fc85b
