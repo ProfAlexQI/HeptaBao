@@ -148,3 +148,12 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+
+### V1.4.5 append-outcome classification
+
+A failed `DurableJournal::append` is not assumed to be a known non-write. Providers
+must classify the error through `classify_append_failure`. The default is
+`OutcomeUnknown`; only a provider with affirmative evidence that neither the record
+nor tail was published may return `DefinitelyNotAppended`. Callers must fence writes
+on the unknown disposition until a fresh open performs authenticated replay.

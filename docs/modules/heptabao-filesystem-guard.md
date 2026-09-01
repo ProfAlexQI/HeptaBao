@@ -135,3 +135,13 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+
+### V1.4.5 ancestor provenance
+
+Linux acquisition now walks every normal component from an opened `/` descriptor.
+Each next component is reached only through the preceding `/proc/self/fd/<fd>`
+capability, opened with `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`, and checked for
+pre-open/opened/post-open device and inode equality. Intermediate symlinks and
+non-directory components fail closed. This is a descriptor walk, not a claim of
+`openat2` kernel-enforced `RESOLVE_*` semantics or mount-namespace immunity.

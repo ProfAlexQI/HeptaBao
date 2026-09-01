@@ -35,16 +35,8 @@ impl<S, B> DurableStateEngine<S, B> {
         &self.store
     }
 
-    pub const fn store_mut(&mut self) -> &mut S {
-        &mut self.store
-    }
-
     pub const fn barrier(&self) -> &B {
         &self.barrier
-    }
-
-    pub fn into_parts(self) -> (S, B) {
-        (self.store, self.barrier)
     }
 }
 

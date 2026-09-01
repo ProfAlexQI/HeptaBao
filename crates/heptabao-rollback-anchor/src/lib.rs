@@ -243,7 +243,7 @@ impl RecoveryCheckpoint {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct VerifiedRecoveryCheckpoint {
     checkpoint: RecoveryCheckpoint,
 }
@@ -251,10 +251,6 @@ pub struct VerifiedRecoveryCheckpoint {
 impl VerifiedRecoveryCheckpoint {
     pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
         &self.checkpoint
-    }
-
-    pub fn into_checkpoint(self) -> RecoveryCheckpoint {
-        self.checkpoint
     }
 }
 
@@ -302,18 +298,6 @@ impl<A, P> AnchorCoordinator<A, P> {
             anchor,
             authenticator,
         }
-    }
-
-    pub const fn anchor(&self) -> &A {
-        &self.anchor
-    }
-
-    pub const fn authenticator(&self) -> &P {
-        &self.authenticator
-    }
-
-    pub fn into_parts(self) -> (A, P) {
-        (self.anchor, self.authenticator)
     }
 }
 
@@ -409,13 +393,12 @@ where
         };
         let receipt = self
             .anchor
-            .compare_and_swap(previous.as_ref().map(RecoveryCheckpoint::revision), next)
+            .compare_and_swap(
+                previous.as_ref().map(RecoveryCheckpoint::revision),
+                next.clone(),
+            )
             .map_err(AnchorCoordinatorError::Anchor)?;
-        if receipt.previous != previous
-            || receipt.current.revision != revision
-            || receipt.current.previous_digest != previous_digest
-            || receipt.current.authenticator_id != *self.authenticator.authenticator_id()
-        {
+        if receipt.previous != previous || receipt.current != next {
             return Err(AnchorCoordinatorError::Contract(
                 AnchorContractError::ReceiptMismatch,
             ));
@@ -437,6 +420,13 @@ where
         &self,
         checkpoint: RecoveryCheckpoint,
     ) -> AnchorResult<VerifiedRecoveryCheckpoint, A::Error, P::Error> {
+        self.verify_current(&checkpoint)
+    }
+
+    pub fn verify_current(
+        &self,
+        checkpoint: &RecoveryCheckpoint,
+    ) -> AnchorResult<VerifiedRecoveryCheckpoint, A::Error, P::Error> {
         let current = self
             .anchor
             .current()
@@ -444,7 +434,7 @@ where
             .ok_or(AnchorCoordinatorError::Contract(
                 AnchorContractError::CheckpointNotCurrent,
             ))?;
-        if current != checkpoint {
+        if &current != checkpoint {
             return Err(AnchorCoordinatorError::Contract(
                 AnchorContractError::CheckpointNotCurrent,
             ));
@@ -803,6 +793,61 @@ mod tests {
             &second,
         )?;
         assert_ne!(first_bytes, second_bytes);
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct AlternateReceiptAnchor {
+        alternate: RecoveryCheckpoint,
+    }
+
+    impl RollbackAnchor for AlternateReceiptAnchor {
+        type Error = TestError;
+
+        fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error> {
+            Ok(None)
+        }
+
+        fn compare_and_swap(
+            &mut self,
+            expected_revision: Option<AnchorRevision>,
+            _next: RecoveryCheckpoint,
+        ) -> Result<AnchorAdvanceReceipt, Self::Error> {
+            if expected_revision.is_some() {
+                return Err(TestError::StaleRevision);
+            }
+            Ok(AnchorAdvanceReceipt {
+                previous: None,
+                current: self.alternate.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn alternate_authenticated_cas_receipt_is_rejected() -> Result<(), Box<dyn Error>> {
+        let authenticator = TestAuthenticator::new()?;
+        let alternate_observation = observation(1, 1, 1, 9)?;
+        let preimage = RecoveryCheckpoint::canonical_preimage(
+            AnchorRevision::INITIAL,
+            None,
+            authenticator.authenticator_id(),
+            &alternate_observation,
+        )?;
+        let alternate = RecoveryCheckpoint::from_parts(
+            AnchorRevision::INITIAL,
+            None,
+            authenticator.authenticator_id().clone(),
+            alternate_observation,
+            authenticator.authenticate(&preimage)?,
+        )?;
+        let mut coordinator =
+            AnchorCoordinator::new(AlternateReceiptAnchor { alternate }, authenticator);
+        assert!(matches!(
+            coordinator.advance(observation(1, 1, 1, 3)?),
+            Err(AnchorCoordinatorError::Contract(
+                AnchorContractError::ReceiptMismatch
+            ))
+        ));
         Ok(())
     }
 }

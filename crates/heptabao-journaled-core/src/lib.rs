@@ -46,10 +46,6 @@ where
     pub const fn ledger(&self) -> &OperationLedger<J> {
         &self.ledger
     }
-
-    pub fn into_parts(self) -> (DurableStateEngine<S, B>, OperationLedger<J>) {
-        (self.state, self.ledger)
-    }
 }
 
 impl<S, B, J> fmt::Debug for JournaledDurableCore<S, B, J>
@@ -286,6 +282,13 @@ where
             .current(operation_id)
             .cloned()
             .ok_or(JournaledCoreError::OperationMissing)?;
+        if current.class() == OperationClass::DurableMutation
+            && current.phase() == OperationPhase::IntentCommitted
+        {
+            return Err(JournaledCoreError::OperationContract(
+                OperationContractError::InvalidTransition,
+            ));
+        }
         let next = current
             .next(
                 OperationPhase::Reconciled,
@@ -410,8 +413,8 @@ mod tests {
     use super::*;
     use heptabao_barrier_api::{BarrierContext, BarrierContractError, KeyEpoch, SealedEnvelope};
     use heptabao_journal_api::{
-        AppendReceipt, JournalContractError, JournalDomain, JournalOpenMode, JournalPayload,
-        JournalRecord, JournalSequence, JournalTag, JournalTail,
+        AppendFailureDisposition, AppendReceipt, JournalContractError, JournalDomain,
+        JournalOpenMode, JournalPayload, JournalRecord, JournalSequence, JournalTag, JournalTail,
     };
     use heptabao_storage_api::{
         GenerationSnapshot, OpaqueState, StateDigest, StorageContractError, StoreDomain,
@@ -742,6 +745,10 @@ mod tests {
                 appended,
             })
         }
+
+        fn classify_append_failure(&self, _error: &Self::Error) -> AppendFailureDisposition {
+            AppendFailureDisposition::DefinitelyNotAppended
+        }
     }
 
     fn journal_tag(sequence: JournalSequence) -> Result<JournalTag, MemoryJournalError> {
@@ -884,6 +891,17 @@ mod tests {
                     Some(RetryDirective::ReconcileOnly)
                 );
                 if let Some(commit) = commit {
+                    let generic_detail =
+                        StableDetailCode::new("generic-reconcile-forbidden".to_owned());
+                    assert!(generic_detail.is_ok());
+                    if let Ok(generic_detail) = generic_detail {
+                        assert!(matches!(
+                            core.reconcile(&operation_id, generic_detail),
+                            Err(JournaledCoreError::OperationContract(
+                                OperationContractError::InvalidTransition
+                            ))
+                        ));
+                    }
                     assert!(
                         core.reconcile_committed_state(&operation_id, commit)
                             .is_ok()

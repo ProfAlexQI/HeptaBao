@@ -14,7 +14,9 @@ use std::error::Error;
 use std::fmt;
 
 use heptabao_barrier_api::KeyEpoch;
-use heptabao_journal_api::{AppendReceipt, DurableJournal, JournalPayload};
+use heptabao_journal_api::{
+    AppendFailureDisposition, AppendReceipt, DurableJournal, JournalPayload,
+};
 
 const EVENT_MAGIC: &[u8] = b"HEPTABAO-KEY-RING-EVENT-V1\0";
 const EVENT_VERSION: u16 = 1;
@@ -301,9 +303,16 @@ impl KeyRingState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeyLedgerWriteState {
+    Writable,
+    ReplayRequired,
+}
+
 pub struct KeyRingLedger<J: DurableJournal> {
     journal: J,
     state: KeyRingState,
+    write_state: KeyLedgerWriteState,
 }
 
 impl<J: DurableJournal> fmt::Debug for KeyRingLedger<J> {
@@ -313,6 +322,7 @@ impl<J: DurableJournal> fmt::Debug for KeyRingLedger<J> {
             .field("journal", &self.journal)
             .field("active_epoch", &self.state.active_epoch())
             .field("known_epoch_count", &self.state.known_epoch_count())
+            .field("write_state", &self.write_state)
             .finish()
     }
 }
@@ -326,7 +336,19 @@ impl<J: DurableJournal> KeyRingLedger<J> {
                 .map_err(KeyLifecycleError::Contract)?;
             state.apply(&event).map_err(KeyLifecycleError::Contract)?;
         }
-        Ok(Self { journal, state })
+        Ok(Self {
+            journal,
+            state,
+            write_state: KeyLedgerWriteState::Writable,
+        })
+    }
+
+    pub const fn write_state(&self) -> KeyLedgerWriteState {
+        self.write_state
+    }
+
+    pub const fn replay_required(&self) -> bool {
+        matches!(self.write_state, KeyLedgerWriteState::ReplayRequired)
     }
 
     pub const fn state(&self) -> &KeyRingState {
@@ -403,24 +425,34 @@ impl<J: DurableJournal> KeyRingLedger<J> {
         )?)
     }
 
-    pub fn into_journal(self) -> J {
-        self.journal
+    pub fn reopen(self) -> Result<Self, KeyLifecycleError<J::Error>> {
+        Self::open(self.journal)
     }
 
     fn record(
         &mut self,
         event: KeyRingEvent,
     ) -> Result<AppendReceipt, KeyLifecycleError<J::Error>> {
+        if self.replay_required() {
+            return Err(KeyLifecycleError::ReplayRequiredAfterAppendFailure);
+        }
         let mut candidate = self.state.clone();
         candidate
             .apply(&event)
             .map_err(KeyLifecycleError::Contract)?;
         let payload = event.encode().map_err(KeyLifecycleError::Contract)?;
         let expected_tail = self.journal.tail().map(|tail| tail.sequence);
-        let receipt = self
-            .journal
-            .append(expected_tail, payload)
-            .map_err(KeyLifecycleError::Journal)?;
+        let receipt = match self.journal.append(expected_tail, payload) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                if self.journal.classify_append_failure(&error)
+                    == AppendFailureDisposition::OutcomeUnknown
+                {
+                    self.write_state = KeyLedgerWriteState::ReplayRequired;
+                }
+                return Err(KeyLifecycleError::Journal(error));
+            }
+        };
         self.state = candidate;
         Ok(receipt)
     }
@@ -433,6 +465,7 @@ where
 {
     Contract(KeyLifecycleContractError),
     Journal(E),
+    ReplayRequiredAfterAppendFailure,
 }
 
 impl<E> fmt::Display for KeyLifecycleError<E>
@@ -443,6 +476,9 @@ where
         match self {
             Self::Contract(error) => write!(formatter, "key lifecycle contract failure: {error}"),
             Self::Journal(error) => write!(formatter, "key lifecycle journal failure: {error}"),
+            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(
+                "key lifecycle append outcome was unknown; close and reopen before writing",
+            ),
         }
     }
 }
@@ -580,6 +616,7 @@ mod tests {
     struct MemoryJournal {
         domain: JournalDomain,
         payloads: Vec<Vec<u8>>,
+        fail_after_append: bool,
     }
 
     impl MemoryJournal {
@@ -587,6 +624,7 @@ mod tests {
             Ok(Self {
                 domain: JournalDomain::new("heptabao/key-lifecycle-test".to_owned())?,
                 payloads: Vec::new(),
+                fail_after_append: false,
             })
         }
     }
@@ -654,6 +692,9 @@ mod tests {
                 tag: tag(sequence)?,
             };
             self.payloads.push(payload.into_bytes());
+            if self.fail_after_append {
+                return Err(MemoryError::StaleTail);
+            }
             Ok(AppendReceipt {
                 previous_tail,
                 appended,
@@ -687,8 +728,7 @@ mod tests {
         );
         ledger.retire(first, reason("retire")?)?;
         ledger.revoke(first, reason("revoke")?)?;
-        let journal = ledger.into_journal();
-        let reopened = KeyRingLedger::open(journal)?;
+        let reopened = ledger.reopen()?;
         assert_eq!(reopened.state().active_epoch(), Some(second));
         assert_eq!(reopened.state().status(first), Some(KeyStatus::Revoked));
         Ok(())
@@ -742,6 +782,26 @@ mod tests {
             KeyRingEvent::decode(&bytes),
             Err(KeyLifecycleContractError::TrailingEventBytes)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn append_outcome_unknown_poison_requires_replay() -> Result<(), Box<dyn Error>> {
+        let mut journal = MemoryJournal::new()?;
+        journal.fail_after_append = true;
+        let mut ledger = KeyRingLedger::open(journal)?;
+        assert!(matches!(
+            ledger.bootstrap(KeyEpoch::INITIAL, reason("bootstrap")?),
+            Err(KeyLifecycleError::Journal(MemoryError::StaleTail))
+        ));
+        assert_eq!(ledger.write_state(), KeyLedgerWriteState::ReplayRequired);
+        assert!(matches!(
+            ledger.stage(KeyEpoch::new(2)?, reason("must-not-continue")?),
+            Err(KeyLifecycleError::ReplayRequiredAfterAppendFailure)
+        ));
+
+        let reopened = ledger.reopen()?;
+        assert_eq!(reopened.state().active_epoch(), Some(KeyEpoch::INITIAL));
         Ok(())
     }
 }

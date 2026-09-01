@@ -167,3 +167,23 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+
+### V1.4.5 linear restore admission
+
+Restore receives an `AnchorCoordinator`, not a detached verified token. It verifies
+the archive checkpoint against the live external anchor before target inspection and
+again immediately before creating the private `AuthorizedRecoveryImage` capability.
+Targets can stage only that capability, cannot receive a public verified image, and
+the receipt binds the current anchor revision. The verified image cannot be
+downgraded to a raw recovery image.
+
+
+### V1.4.5 publication receipt uncertainty
+
+A mismatched receipt returned after `publish` is classified as
+`PublishReceiptMismatchOutcomeUnknown`, because publication may already have
+occurred. It is never a safe retryable contract failure. Operators and target
+providers must perform authoritative readback and reconciliation before another
+restore attempt. Only `AuthorizedRecoveryImage` exposes consumable sealed state and
+journal records; archive-authenticated images do not.

@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use heptabao_journal_api::{AppendReceipt, DurableJournal, JournalPayload};
+use heptabao_journal_api::{
+    AppendFailureDisposition, AppendReceipt, DurableJournal, JournalPayload,
+};
 use heptabao_storage_api::{Generation, StateDigest};
 
 const EVENT_MAGIC: &[u8] = b"HEPTABAO-OPERATION-EVENT-V1\0";
@@ -412,9 +414,16 @@ pub enum RetryDirective {
     NoAutomaticRetry,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LedgerWriteState {
+    Writable,
+    ReplayRequired,
+}
+
 pub struct OperationLedger<J: DurableJournal> {
     journal: J,
     operations: BTreeMap<OperationId, OperationEvent>,
+    write_state: LedgerWriteState,
 }
 
 impl<J: DurableJournal> fmt::Debug for OperationLedger<J> {
@@ -423,6 +432,7 @@ impl<J: DurableJournal> fmt::Debug for OperationLedger<J> {
             .debug_struct("OperationLedger")
             .field("journal", &self.journal)
             .field("operation_count", &self.operations.len())
+            .field("write_state", &self.write_state)
             .finish()
     }
 }
@@ -439,7 +449,16 @@ impl<J: DurableJournal> OperationLedger<J> {
         Ok(Self {
             journal,
             operations,
+            write_state: LedgerWriteState::Writable,
         })
+    }
+
+    pub const fn write_state(&self) -> LedgerWriteState {
+        self.write_state
+    }
+
+    pub const fn replay_required(&self) -> bool {
+        matches!(self.write_state, LedgerWriteState::ReplayRequired)
     }
 
     pub fn current(&self, operation_id: &OperationId) -> Option<&OperationEvent> {
@@ -465,20 +484,30 @@ impl<J: DurableJournal> OperationLedger<J> {
         &mut self,
         event: OperationEvent,
     ) -> Result<AppendReceipt, OperationLedgerError<J::Error>> {
+        if self.replay_required() {
+            return Err(OperationLedgerError::ReplayRequiredAfterAppendFailure);
+        }
         let previous = self.operations.get(event.operation_id());
         validate_transition(previous, &event).map_err(OperationLedgerError::Contract)?;
         let payload = event.encode().map_err(OperationLedgerError::Contract)?;
         let expected_tail = self.journal.tail().map(|tail| tail.sequence);
-        let receipt = self
-            .journal
-            .append(expected_tail, payload)
-            .map_err(OperationLedgerError::Journal)?;
+        let receipt = match self.journal.append(expected_tail, payload) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                if self.journal.classify_append_failure(&error)
+                    == AppendFailureDisposition::OutcomeUnknown
+                {
+                    self.write_state = LedgerWriteState::ReplayRequired;
+                }
+                return Err(OperationLedgerError::Journal(error));
+            }
+        };
         self.operations.insert(event.operation_id.clone(), event);
         Ok(receipt)
     }
 
-    pub fn into_journal(self) -> J {
-        self.journal
+    pub fn reopen(self) -> Result<Self, OperationLedgerError<J::Error>> {
+        Self::open(self.journal)
     }
 }
 
@@ -489,6 +518,7 @@ where
 {
     Contract(OperationContractError),
     Journal(E),
+    ReplayRequiredAfterAppendFailure,
 }
 
 impl<E> fmt::Display for OperationLedgerError<E>
@@ -501,6 +531,9 @@ where
                 write!(formatter, "operation ledger contract failure: {error}")
             }
             Self::Journal(error) => write!(formatter, "durable journal failure: {error}"),
+            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(
+                "journal append outcome was unknown; close and reopen the ledger before writing",
+            ),
         }
     }
 }
@@ -623,11 +656,6 @@ const fn allowed_transition(
                 OperationClass::DurableMutation,
                 OperationPhase::IntentCommitted,
                 OperationPhase::StateCommitted,
-            )
-            | (
-                OperationClass::DurableMutation,
-                OperationPhase::IntentCommitted,
-                OperationPhase::Reconciled,
             )
             | (
                 OperationClass::ExternalEffect,
@@ -983,6 +1011,20 @@ mod tests {
                         assert!(intent.is_ok());
                         if let Ok(intent) = intent {
                             assert!(ledger.record(intent.clone()).is_ok());
+                            let reconcile_detail = stable_detail("unsafe-generic-reconcile");
+                            assert!(reconcile_detail.is_ok());
+                            if let Ok(reconcile_detail) = reconcile_detail {
+                                assert!(matches!(
+                                    intent.next(
+                                        OperationPhase::Reconciled,
+                                        None,
+                                        None,
+                                        None,
+                                        reconcile_detail,
+                                    ),
+                                    Err(OperationContractError::InvalidTransition)
+                                ));
+                            }
                             let state_digest = StateDigest::new([3; 32]);
                             let detail = stable_detail("state-committed");
                             assert!(state_digest.is_ok());
@@ -1011,8 +1053,7 @@ mod tests {
                         Some(RetryDirective::LookupOnly)
                     );
                 }
-                let journal = ledger.into_journal();
-                let reopened = OperationLedger::open(journal);
+                let reopened = ledger.reopen();
                 assert!(reopened.is_ok());
                 if let Ok(reopened) = reopened {
                     assert_eq!(reopened.operation_count(), 1);
@@ -1117,6 +1158,31 @@ mod tests {
                     OperationEvent::decode(&bytes),
                     Err(OperationContractError::TrailingEventBytes)
                 );
+            }
+        }
+    }
+    #[test]
+    fn append_outcome_unknown_fences_until_authenticated_replay() {
+        let journal = MemoryJournal::new();
+        assert!(journal.is_ok());
+        if let Ok(mut journal) = journal {
+            journal.fail_on_append = Some(1);
+            let ledger = OperationLedger::open(journal);
+            assert!(ledger.is_ok());
+            if let Ok(mut ledger) = ledger {
+                let event = accepted(OperationClass::DurableMutation);
+                assert!(event.is_ok());
+                if let Ok(event) = event {
+                    assert!(matches!(
+                        ledger.record(event.clone()),
+                        Err(OperationLedgerError::Journal(MemoryJournalError::Injected))
+                    ));
+                    assert_eq!(ledger.write_state(), LedgerWriteState::ReplayRequired);
+                    assert!(matches!(
+                        ledger.record(event),
+                        Err(OperationLedgerError::ReplayRequiredAfterAppendFailure)
+                    ));
+                }
             }
         }
     }

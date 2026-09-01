@@ -150,3 +150,12 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+
+### V1.4.5 live-anchor verification
+
+Verified checkpoint values are non-cloneable and cannot be downgraded into ordinary
+checkpoints. Raw anchor and authenticator providers are not extractable from the
+coordinator. `verify_current` always rereads the external anchor, requires exact
+checkpoint equality and authenticates the current object; a historical verification
+result is never sufficient for a later restore ceremony.

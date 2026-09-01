@@ -18,7 +18,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
@@ -152,13 +152,7 @@ impl ExclusiveDirectory {
         }
         let before_identity = identity(&before);
 
-        let mut options = OpenOptions::new();
-        options
-            .read(true)
-            .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        let handle = options
-            .open(&original_path)
-            .map_err(DirectoryGuardError::Io)?;
+        let handle = open_absolute_directory_no_symlinks(&original_path)?;
         let opened = handle.metadata().map_err(DirectoryGuardError::Io)?;
         let after = fs::symlink_metadata(&original_path).map_err(DirectoryGuardError::Io)?;
         if !opened.is_dir()
@@ -217,7 +211,8 @@ impl fmt::Display for DirectoryGuardError {
             Self::RootMustBeAbsolute => formatter.write_str("guarded root must be absolute"),
             Self::UnsupportedPlatform => formatter
                 .write_str("descriptor-anchored writer guard is unsupported on this platform"),
-            Self::UnsafeRoot => formatter.write_str("guarded root is a symlink or not a directory"),
+            Self::UnsafeRoot => formatter
+                .write_str("guarded root or one of its ancestors is a symlink or not a directory"),
             Self::RootIdentityChanged => formatter
                 .write_str("guarded directory identity changed during or after acquisition"),
             Self::DescriptorPathUnavailable => formatter
@@ -262,6 +257,64 @@ fn validate_leaf(name: &str) -> Result<(), DirectoryGuardError> {
         return Err(DirectoryGuardError::InvalidLeafName);
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn open_absolute_directory_no_symlinks(path: &Path) -> Result<File, DirectoryGuardError> {
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return Err(DirectoryGuardError::RootMustBeAbsolute);
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    let mut current = options.open("/").map_err(DirectoryGuardError::Io)?;
+
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(DirectoryGuardError::UnsafeRoot);
+        };
+        let current_identity = identity(&current.metadata().map_err(DirectoryGuardError::Io)?);
+        let current_access = PathBuf::from(format!("/proc/self/fd/{}", current.as_raw_fd()));
+        let access_metadata = fs::metadata(&current_access).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                DirectoryGuardError::DescriptorPathUnavailable
+            } else {
+                DirectoryGuardError::Io(error)
+            }
+        })?;
+        if !access_metadata.is_dir() || identity(&access_metadata) != current_identity {
+            return Err(DirectoryGuardError::DescriptorPathUnavailable);
+        }
+
+        let candidate = current_access.join(name);
+        let before = fs::symlink_metadata(&candidate).map_err(DirectoryGuardError::Io)?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(DirectoryGuardError::UnsafeRoot);
+        }
+        let before_identity = identity(&before);
+        let next = options.open(&candidate).map_err(|error| {
+            if error.raw_os_error() == Some(40) {
+                DirectoryGuardError::UnsafeRoot
+            } else {
+                DirectoryGuardError::Io(error)
+            }
+        })?;
+        let opened = next.metadata().map_err(DirectoryGuardError::Io)?;
+        let after = fs::symlink_metadata(&candidate).map_err(DirectoryGuardError::Io)?;
+        if !opened.is_dir()
+            || after.file_type().is_symlink()
+            || !after.is_dir()
+            || identity(&opened) != before_identity
+            || identity(&after) != before_identity
+        {
+            return Err(DirectoryGuardError::RootIdentityChanged);
+        }
+        current = next;
+    }
+    Ok(current)
 }
 
 #[cfg(target_os = "linux")]
@@ -444,5 +497,19 @@ mod tests {
             result,
             Err(DirectoryGuardError::RootMustBeAbsolute)
         ));
+    }
+
+    #[test]
+    fn intermediate_symlink_is_rejected() -> Result<(), Box<dyn Error>> {
+        let target = TemporaryDirectory::new("ancestor-target")?;
+        let link_parent = TemporaryDirectory::new("ancestor-link-parent")?;
+        let ancestor_link = link_parent.path.join("redirected");
+        symlink(&target.path, &ancestor_link)?;
+        let nested = target.path.join("nested");
+        fs::create_dir(&nested)?;
+
+        let result = ExclusiveDirectory::open(ancestor_link.join("nested"));
+        assert!(matches!(result, Err(DirectoryGuardError::UnsafeRoot)));
+        Ok(())
     }
 }
