@@ -1,0 +1,136 @@
+name: v1.4-source-blob-materializer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.3-gap-closure-v2
+    paths:
+      - .github/workflows/v1.4-source-blob-materializer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair-compile-and-materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Apply exact lifetime and error-source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/heptabao-single-node-store/src/lib.rs')
+          source = path.read_text(encoding='utf-8')
+          old_bound = "    P: IntegrityProvider,\n{\n    type Error = FileStoreError<P::Error>;"
+          new_bound = "    P: IntegrityProvider + 'static,\n{\n    type Error = FileStoreError<P::Error>;"
+          if source.count(old_bound) != 1:
+              raise SystemExit('DurableGenerationStore provider bound drifted')
+          source = source.replace(old_bound, new_bound, 1)
+          old_error = """impl<E> Error for FileStoreError<E>
+          where
+              E: Error + Send + Sync + 'static,
+          {
+              fn source(&self) -> Option<&(dyn Error + 'static)> {
+                  match self {
+                      Self::Contract(error) => Some(error),
+                      Self::IntegrityProvider(error) => Some(error),
+                      Self::Io(error) => Some(error),
+                      _ => None,
+                  }
+              }
+          }
+          """
+          new_error = """impl<E> Error for FileStoreError<E>
+          where
+              E: Error + Send + Sync + 'static,
+          {
+          }
+          """
+          if source.count(old_error) != 1:
+              raise SystemExit('FileStoreError source implementation drifted')
+          path.write_text(source.replace(old_error, new_error, 1), encoding='utf-8')
+          PY
+          cargo +1.98.0 fmt --all
+          cargo +1.98.0 fmt --all -- --check
+
+      - name: Create exact unreferenced repair blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=crates/heptabao-single-node-store/src/lib.rs
+          payload="$RUNNER_TEMP/blob-payload.json"
+          response="$RUNNER_TEMP/blob-response.json"
+          python - "$path" "$payload" <<'PY'
+          import base64
+          import json
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1]).read_bytes()
+          Path(sys.argv[2]).write_text(
+              json.dumps({
+                  'content': base64.b64encode(source).decode('ascii'),
+                  'encoding': 'base64',
+              }, separators=(',', ':')),
+              encoding='utf-8',
+          )
+          PY
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$payload" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/blobs" \
+            >"$response"
+          sha="$(python - "$response" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          value = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          sha = value.get('sha')
+          if not isinstance(sha, str) or len(sha) != 40:
+              raise SystemExit('GitHub did not return a blob SHA')
+          print(sha)
+          PY
+          )"
+          test "$sha" = "$(git hash-object "$path")"
+          printf '%s\t%s\n' "$path" "$sha"
+
+      - name: Continue exact Rust test and strict Clippy diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
