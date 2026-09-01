@@ -30,10 +30,7 @@ replace(
 )
 replace(
     path,
-    """                        assert_eq!(
-                            store.recover_commit(intent),
-                            Ok(CommitRecovery::NotCommitted)
-                        );
+    """                        assert_eq!(store.recover_commit(intent), Ok(CommitRecovery::NotCommitted));
 """,
     """                        assert!(matches!(
                             store.recover_commit(intent),
