@@ -102,6 +102,15 @@ candidate under distinct job names. No push job may reuse those contexts.
 Execution-only materializers and diagnostics are forbidden from the candidate
 tree.
 
+The inherited V1.4.5 gate remains active on successor pull requests, but its
+closed change-surface proof is bound to immutable V1.4.5 checkpoint
+`936cb5599d206cea895de2ae04a1289a0b3a0326`. It separately proves that this
+checkpoint is an ancestor of the current pull-request head, then executes the
+V1.4.5 semantic, hostile, documentation and full-workspace regressions against
+the current exact head and prospective merge. This prevents legitimate V1.4.6
+files from being misclassified as V1.4.5 scope drift without weakening the
+inherited safety gate.
+
 ## 8. Required evidence
 
 The immutable candidate must pass:
