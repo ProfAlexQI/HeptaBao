@@ -17,8 +17,8 @@ use heptabao_journal_api::{
 };
 use heptabao_storage_api::{Generation, StateDigest};
 
-const EVENT_MAGIC: &[u8] = b"HEPTABAO-OPERATION-EVENT-V1\0";
-const EVENT_VERSION: u16 = 1;
+const EVENT_MAGIC: &[u8] = b"HEPTABAO-OPERATION-EVENT-V2\0";
+const EVENT_VERSION: u16 = 2;
 pub const MAX_OPERATION_ID_BYTES: usize = 128;
 pub const MAX_DETAIL_CODE_BYTES: usize = 128;
 
@@ -140,6 +140,7 @@ pub enum OperationPhase {
     Accepted,
     RejectedBeforeDispatch,
     IntentCommitted,
+    AbortedBeforeStateCommit,
     EffectStarted,
     EffectSucceeded,
     EffectFailed,
@@ -158,6 +159,7 @@ impl OperationPhase {
             Self::Accepted => 1,
             Self::RejectedBeforeDispatch => 2,
             Self::IntentCommitted => 3,
+            Self::AbortedBeforeStateCommit => 14,
             Self::EffectStarted => 4,
             Self::EffectSucceeded => 5,
             Self::EffectFailed => 6,
@@ -186,6 +188,7 @@ impl OperationPhase {
             11 => Ok(Self::Delivered),
             12 => Ok(Self::DeliveryFailedAfterCommit),
             13 => Ok(Self::Reconciled),
+            14 => Ok(Self::AbortedBeforeStateCommit),
             _ => Err(OperationContractError::MalformedEvent),
         }
     }
@@ -685,7 +688,7 @@ const fn allowed_transition(
             | (
                 OperationClass::DurableMutation,
                 OperationPhase::IntentCommitted,
-                OperationPhase::StateCommitted,
+                OperationPhase::StateCommitted | OperationPhase::AbortedBeforeStateCommit,
             )
             | (
                 OperationClass::ExternalEffect,
@@ -748,6 +751,11 @@ fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractE
     if event.class == OperationClass::DurableMutation && event.effect_key_digest.is_some() {
         return Err(OperationContractError::InvalidEventShape);
     }
+    if event.phase == OperationPhase::AbortedBeforeStateCommit
+        && event.class != OperationClass::DurableMutation
+    {
+        return Err(OperationContractError::InvalidEventShape);
+    }
     if event.class == OperationClass::ExternalEffect
         && !matches!(event.phase, OperationPhase::RejectedBeforeDispatch)
         && event.effect_key_digest.is_none()
@@ -769,14 +777,19 @@ fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractE
         }
         return Ok(());
     }
-    let state_required = matches!(
-        event.phase,
-        OperationPhase::StateCommitted
-            | OperationPhase::ResponseAudited
-            | OperationPhase::ResponseAuditFailedAfterCommit
-            | OperationPhase::Delivered
-            | OperationPhase::DeliveryFailedAfterCommit
-    );
+    let state_required = (event.class == OperationClass::DurableMutation
+        && matches!(
+            event.phase,
+            OperationPhase::IntentCommitted | OperationPhase::AbortedBeforeStateCommit
+        ))
+        || matches!(
+            event.phase,
+            OperationPhase::StateCommitted
+                | OperationPhase::ResponseAudited
+                | OperationPhase::ResponseAuditFailedAfterCommit
+                | OperationPhase::Delivered
+                | OperationPhase::DeliveryFailedAfterCommit
+        );
     if state_required != event.state_generation.is_some() {
         return Err(OperationContractError::InvalidEventShape);
     }
@@ -806,7 +819,9 @@ const fn phase_blocks_new_mutation(phase: OperationPhase) -> bool {
 
 const fn retry_directive_for_event(event: &OperationEvent) -> RetryDirective {
     match event.phase {
-        OperationPhase::RejectedBeforeDispatch => RetryDirective::SafeToRetryNewOperation,
+        OperationPhase::RejectedBeforeDispatch | OperationPhase::AbortedBeforeStateCommit => {
+            RetryDirective::SafeToRetryNewOperation
+        }
         OperationPhase::StateCommitted
         | OperationPhase::ResponseAudited
         | OperationPhase::Delivered => RetryDirective::LookupOnly,
@@ -1016,6 +1031,12 @@ mod tests {
         StableDetailCode::new(value.to_owned())
     }
 
+    fn durable_target() -> Option<(Generation, StateDigest)> {
+        StateDigest::new([3; 32])
+            .ok()
+            .map(|digest| (Generation::INITIAL, digest))
+    }
+
     #[test]
     fn legal_mutation_chain_replays_and_requires_lookup_after_commit() {
         let journal = MemoryJournal::new();
@@ -1033,7 +1054,7 @@ mod tests {
                     if let Ok(detail) = detail {
                         let intent = accepted.next(
                             OperationPhase::IntentCommitted,
-                            None,
+                            durable_target(),
                             None,
                             None,
                             detail,
@@ -1047,7 +1068,7 @@ mod tests {
                                 assert!(matches!(
                                     intent.next(
                                         OperationPhase::Reconciled,
-                                        None,
+                                        intent.state(),
                                         None,
                                         None,
                                         reconcile_detail,
@@ -1087,6 +1108,67 @@ mod tests {
                 assert!(reopened.is_ok());
                 if let Ok(reopened) = reopened {
                     assert_eq!(reopened.operation_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn proven_not_committed_intent_is_terminal_and_unblocks_new_mutations() {
+        let journal = MemoryJournal::new();
+        assert!(journal.is_ok());
+        if let Ok(journal) = journal {
+            let ledger = OperationLedger::open(journal);
+            assert!(ledger.is_ok());
+            if let Ok(mut ledger) = ledger {
+                let accepted = accepted(OperationClass::DurableMutation);
+                assert!(accepted.is_ok());
+                if let Ok(accepted) = accepted {
+                    assert!(ledger.record(accepted.clone()).is_ok());
+                    let intent_detail = stable_detail("intent-bound-to-target");
+                    assert!(intent_detail.is_ok());
+                    if let Ok(intent_detail) = intent_detail {
+                        let intent = accepted.next(
+                            OperationPhase::IntentCommitted,
+                            durable_target(),
+                            None,
+                            None,
+                            intent_detail,
+                        );
+                        assert!(intent.is_ok());
+                        if let Ok(intent) = intent {
+                            assert!(ledger.record(intent.clone()).is_ok());
+                            assert_eq!(
+                                ledger.blocking_phase(),
+                                Some(OperationPhase::IntentCommitted)
+                            );
+                            let abort_detail = stable_detail("state-commit-not-observed");
+                            assert!(abort_detail.is_ok());
+                            if let Ok(abort_detail) = abort_detail {
+                                let aborted = intent.next(
+                                    OperationPhase::AbortedBeforeStateCommit,
+                                    intent.state(),
+                                    None,
+                                    None,
+                                    abort_detail,
+                                );
+                                assert!(aborted.is_ok());
+                                if let Ok(aborted) = aborted {
+                                    assert!(ledger.record(aborted).is_ok());
+                                    assert_eq!(ledger.blocking_phase(), None);
+                                    let operation_id =
+                                        OperationId::new("operation-0001".to_owned());
+                                    assert!(operation_id.is_ok());
+                                    if let Ok(operation_id) = operation_id {
+                                        assert_eq!(
+                                            ledger.retry_directive(&operation_id),
+                                            Some(RetryDirective::SafeToRetryNewOperation)
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -19,7 +19,9 @@ use heptabao_operation_ledger::{
     OperationClass, OperationContractError, OperationDigest, OperationEvent, OperationId,
     OperationLedger, OperationLedgerError, OperationPhase, RetryDirective, StableDetailCode,
 };
-use heptabao_storage_api::{CommitReceipt, DurableGenerationStore, Generation};
+use heptabao_storage_api::{
+    CommitIntent, CommitReceipt, CommitRecovery, DurableGenerationStore, Generation, StateDigest,
+};
 
 pub type JournaledCoreResult<T, S, B, J> = Result<T, JournaledCoreError<S, B, J>>;
 
@@ -99,6 +101,12 @@ where
             return Err(JournaledCoreError::UnresolvedOperationBlocksMutation { phase });
         }
 
+        let prepared = self
+            .state
+            .prepare_persist(expected_current, plaintext, caller_associated_data)
+            .map_err(JournaledCoreError::DurableState)?;
+        let storage_intent = prepared.intent();
+
         let accepted = OperationEvent::accepted(
             operation_id.clone(),
             request_digest,
@@ -113,10 +121,10 @@ where
         let intent = accepted
             .next(
                 OperationPhase::IntentCommitted,
+                Some((storage_intent.committed(), storage_intent.digest())),
                 None,
                 None,
-                None,
-                detail_code("mutation-intent-committed")
+                detail_code("mutation-intent-bound-to-target")
                     .map_err(JournaledCoreError::OperationContract)?,
             )
             .map_err(JournaledCoreError::OperationContract)?;
@@ -126,12 +134,12 @@ where
 
         let commit = self
             .state
-            .persist(expected_current, plaintext, caller_associated_data)
+            .commit_prepared(prepared)
             .map_err(JournaledCoreError::DurableState)?;
         let committed = intent
             .next(
                 OperationPhase::StateCommitted,
-                Some((commit.committed, commit.digest)),
+                intent.state(),
                 None,
                 None,
                 detail_code("state-committed").map_err(JournaledCoreError::OperationContract)?,
@@ -174,45 +182,102 @@ where
         Ok(())
     }
 
-    pub fn reconcile_committed_state(
+    pub fn recover_durable_intent(
         &mut self,
         operation_id: &OperationId,
-        commit: CommitReceipt,
-    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
+    ) -> JournaledCoreResult<DurableIntentRecovery, S::Error, B::Error, J::Error> {
+        if self.ledger.replay_required() {
+            self.ledger
+                .recover_after_append_failure()
+                .map_err(JournaledCoreError::Ledger)?;
+        }
         let current = self
             .ledger
             .current(operation_id)
             .cloned()
             .ok_or(JournaledCoreError::OperationMissing)?;
-        if current.phase() != OperationPhase::IntentCommitted {
+        if current.class() != OperationClass::DurableMutation
+            || !matches!(
+                current.phase(),
+                OperationPhase::IntentCommitted
+                    | OperationPhase::StateCommitted
+                    | OperationPhase::AbortedBeforeStateCommit
+            )
+        {
             return Err(JournaledCoreError::OperationContract(
                 OperationContractError::InvalidTransition,
             ));
         }
-        let snapshot =
-            self.state.store().load_current().map_err(|error| {
-                JournaledCoreError::DurableState(DurableCoreError::Storage(error))
+        let (generation, digest) = current
+            .state()
+            .ok_or(JournaledCoreError::DurableIntentTargetMissing)?;
+        let intent =
+            CommitIntent::new(generation.previous(), generation, digest).map_err(|error| {
+                JournaledCoreError::DurableState(DurableCoreError::StorageContract(error))
             })?;
-        let observed = snapshot.map(|value| (value.generation, value.digest));
-        if observed != Some((commit.committed, commit.digest)) {
-            return Err(JournaledCoreError::DurableState(
-                DurableCoreError::CommitReceiptMismatch,
-            ));
+
+        match current.phase() {
+            OperationPhase::StateCommitted => {
+                return Ok(DurableIntentRecovery::Committed(intent.receipt()));
+            }
+            OperationPhase::AbortedBeforeStateCommit => {
+                return Ok(DurableIntentRecovery::AbortedBeforeStateCommit { intent });
+            }
+            OperationPhase::IntentCommitted => {}
+            _ => {
+                return Err(JournaledCoreError::OperationContract(
+                    OperationContractError::InvalidTransition,
+                ));
+            }
         }
-        let committed = current
-            .next(
-                OperationPhase::StateCommitted,
-                Some((commit.committed, commit.digest)),
-                None,
-                None,
-                detail_code("state-commit-reconciled")
-                    .map_err(JournaledCoreError::OperationContract)?,
-            )
-            .map_err(JournaledCoreError::OperationContract)?;
-        self.ledger
-            .record(committed)
-            .map_err(JournaledCoreError::Ledger)?;
-        Ok(())
+
+        match self
+            .state
+            .recover_commit(intent)
+            .map_err(JournaledCoreError::DurableState)?
+        {
+            CommitRecovery::Committed(receipt) => {
+                if receipt != intent.receipt() {
+                    return Err(JournaledCoreError::DurableState(
+                        DurableCoreError::CommitReceiptMismatch,
+                    ));
+                }
+                let committed = current
+                    .next(
+                        OperationPhase::StateCommitted,
+                        current.state(),
+                        None,
+                        None,
+                        detail_code("state-commit-recovered")
+                            .map_err(JournaledCoreError::OperationContract)?,
+                    )
+                    .map_err(JournaledCoreError::OperationContract)?;
+                self.ledger
+                    .record(committed)
+                    .map_err(JournaledCoreError::Ledger)?;
+                Ok(DurableIntentRecovery::Committed(receipt))
+            }
+            CommitRecovery::NotCommitted => {
+                let aborted = current
+                    .next(
+                        OperationPhase::AbortedBeforeStateCommit,
+                        current.state(),
+                        None,
+                        None,
+                        detail_code("state-commit-not-observed")
+                            .map_err(JournaledCoreError::OperationContract)?,
+                    )
+                    .map_err(JournaledCoreError::OperationContract)?;
+                self.ledger
+                    .record(aborted)
+                    .map_err(JournaledCoreError::Ledger)?;
+                Ok(DurableIntentRecovery::AbortedBeforeStateCommit { intent })
+            }
+            CommitRecovery::Conflict { actual } => Err(JournaledCoreError::DurableIntentConflict {
+                expected: (generation, digest),
+                actual,
+            }),
+        }
     }
 
     pub fn record_response_audited(
@@ -350,6 +415,12 @@ pub struct JournaledCommitReceipt {
     pub commit: CommitReceipt,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableIntentRecovery {
+    Committed(CommitReceipt),
+    AbortedBeforeStateCommit { intent: CommitIntent },
+}
+
 #[derive(Debug)]
 pub enum JournaledCoreError<S, B, J>
 where
@@ -368,6 +439,11 @@ where
         phase: OperationPhase,
     },
     OperationMissing,
+    DurableIntentTargetMissing,
+    DurableIntentConflict {
+        expected: (Generation, StateDigest),
+        actual: Option<(Generation, StateDigest)>,
+    },
     StateCommittedLedgerIncomplete {
         commit: CommitReceipt,
         ledger_error: OperationLedgerError<J>,
@@ -396,6 +472,14 @@ where
                 "unresolved operation at phase {phase:?} fences every new mutation"
             ),
             Self::OperationMissing => formatter.write_str("operation is missing from the ledger"),
+            Self::DurableIntentTargetMissing => formatter
+                .write_str("durable intent is missing its persisted generation and digest target"),
+            Self::DurableIntentConflict { expected, actual } => write!(
+                formatter,
+                "durable intent target generation {} conflicts with authoritative generation {:?}",
+                expected.0.get(),
+                actual.map(|value| value.0.get())
+            ),
             Self::StateCommittedLedgerIncomplete {
                 commit,
                 ledger_error,
@@ -452,15 +536,17 @@ mod tests {
         current: Option<Generation>,
         digest: Option<StateDigest>,
         bytes: Vec<u8>,
+        fail_commit_before_mutation: bool,
     }
 
     impl MemoryStore {
-        fn new() -> Result<Self, StorageContractError> {
+        fn new(fail_commit_before_mutation: bool) -> Result<Self, StorageContractError> {
             Ok(Self {
                 domain: StoreDomain::new("heptabao/journaled-core-test".to_owned())?,
                 current: None,
                 digest: None,
                 bytes: Vec::new(),
+                fail_commit_before_mutation,
             })
         }
     }
@@ -538,6 +624,10 @@ mod tests {
             candidate: OpaqueState,
         ) -> Result<CommitReceipt, Self::Error> {
             if expected_current != self.current {
+                return Err(MemoryStoreError::Conflict);
+            }
+            if self.fail_commit_before_mutation {
+                self.fail_commit_before_mutation = false;
                 return Err(MemoryStoreError::Conflict);
             }
             let committed = match self.current {
@@ -810,8 +900,15 @@ mod tests {
     fn build_core(
         fail_on_append: Option<usize>,
     ) -> Result<JournaledDurableCore<MemoryStore, MockBarrier, MemoryJournal>, BuildError> {
+        build_core_with_commit_failure(fail_on_append, false)
+    }
+
+    fn build_core_with_commit_failure(
+        fail_on_append: Option<usize>,
+        fail_commit_before_mutation: bool,
+    ) -> Result<JournaledDurableCore<MemoryStore, MockBarrier, MemoryJournal>, BuildError> {
         let state = DurableStateEngine::new(
-            MemoryStore::new().map_err(BuildError::Storage)?,
+            MemoryStore::new(fail_commit_before_mutation).map_err(BuildError::Storage)?,
             MockBarrier,
         );
         let journal = MemoryJournal::new(fail_on_append).map_err(BuildError::Journal)?;
@@ -897,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn postcommit_ledger_failure_returns_committed_generation() {
+    fn postcommit_ledger_failure_is_recovered_from_persisted_target_not_caller_receipt() {
         let core = build_core(Some(3));
         assert!(core.is_ok());
         if let Ok(mut core) = core {
@@ -914,16 +1011,10 @@ mod tests {
                     secret,
                     Vec::new(),
                 );
-                let commit = match result {
-                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { commit, .. }) => {
-                        Some(commit)
-                    }
-                    _ => None,
-                };
-                assert_eq!(
-                    commit.map(|receipt| receipt.committed),
-                    Some(Generation::INITIAL)
-                );
+                assert!(matches!(
+                    result,
+                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { .. })
+                ));
                 assert_eq!(
                     core.state().store().current_generation(),
                     Some(Generation::INITIAL)
@@ -932,27 +1023,67 @@ mod tests {
                     core.ledger().retry_directive(&operation_id),
                     Some(RetryDirective::ReconcileOnly)
                 );
-                if let Some(commit) = commit {
-                    let generic_detail =
-                        StableDetailCode::new("generic-reconcile-forbidden".to_owned());
-                    assert!(generic_detail.is_ok());
-                    if let Ok(generic_detail) = generic_detail {
-                        assert!(matches!(
-                            core.reconcile(&operation_id, generic_detail),
-                            Err(JournaledCoreError::OperationContract(
-                                OperationContractError::InvalidTransition
-                            ))
-                        ));
-                    }
-                    assert!(
-                        core.reconcile_committed_state(&operation_id, commit)
-                            .is_ok()
-                    );
-                    assert_eq!(
-                        core.ledger().retry_directive(&operation_id),
-                        Some(RetryDirective::LookupOnly)
-                    );
+                let generic_detail =
+                    StableDetailCode::new("generic-reconcile-forbidden".to_owned());
+                assert!(generic_detail.is_ok());
+                if let Ok(generic_detail) = generic_detail {
+                    assert!(matches!(
+                        core.reconcile(&operation_id, generic_detail),
+                        Err(JournaledCoreError::OperationContract(
+                            OperationContractError::InvalidTransition
+                        ))
+                    ));
                 }
+                let recovered = core.recover_durable_intent(&operation_id);
+                assert!(matches!(
+                    recovered,
+                    Ok(DurableIntentRecovery::Committed(receipt))
+                        if receipt.committed == Generation::INITIAL
+                ));
+                assert_eq!(
+                    core.ledger().retry_directive(&operation_id),
+                    Some(RetryDirective::LookupOnly)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn definitely_uncommitted_intent_is_durably_aborted_before_unfencing() {
+        let core = build_core_with_commit_failure(None, true);
+        assert!(core.is_ok());
+        if let Ok(mut core) = core {
+            let operation_id = operation_id();
+            let request_digest = request_digest();
+            let secret = SecretState::new(b"never-committed".to_vec());
+            if let (Ok(operation_id), Ok(request_digest), Ok(secret)) =
+                (operation_id, request_digest, secret)
+            {
+                assert!(matches!(
+                    core.persist_mutation(
+                        operation_id.clone(),
+                        request_digest,
+                        None,
+                        secret,
+                        Vec::new(),
+                    ),
+                    Err(JournaledCoreError::DurableState(_))
+                ));
+                assert_eq!(
+                    core.ledger().blocking_phase(),
+                    Some(OperationPhase::IntentCommitted)
+                );
+                assert_eq!(core.state().store().current_generation(), None);
+                let recovered = core.recover_durable_intent(&operation_id);
+                assert!(matches!(
+                    recovered,
+                    Ok(DurableIntentRecovery::AbortedBeforeStateCommit { .. })
+                ));
+                assert_eq!(core.ledger().blocking_phase(), None);
+                assert_eq!(
+                    core.ledger().retry_directive(&operation_id),
+                    Some(RetryDirective::SafeToRetryNewOperation)
+                );
             }
         }
     }
@@ -996,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_operation_fences_new_generation_until_reconciled() {
+    fn unresolved_operation_fences_new_generation_until_provider_recovery() {
         let core = build_core(Some(3));
         assert!(core.is_ok());
         if let Ok(mut core) = core {
@@ -1006,19 +1137,16 @@ mod tests {
             if let (Ok(first_id), Ok(first_digest), Ok(first_secret)) =
                 (first_id, first_digest, first_secret)
             {
-                let first = core.persist_mutation(
-                    first_id.clone(),
-                    first_digest,
-                    None,
-                    first_secret,
-                    Vec::new(),
-                );
-                let commit = match first {
-                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { commit, .. }) => {
-                        Some(commit)
-                    }
-                    _ => None,
-                };
+                assert!(matches!(
+                    core.persist_mutation(
+                        first_id.clone(),
+                        first_digest,
+                        None,
+                        first_secret,
+                        Vec::new(),
+                    ),
+                    Err(JournaledCoreError::StateCommittedLedgerIncomplete { .. })
+                ));
                 let second_id = OperationId::new("journaled-operation-0002".to_owned());
                 let second_digest = OperationDigest::new([0x22; 32]);
                 let second_secret = SecretState::new(b"must-not-advance".to_vec());
@@ -1041,22 +1169,23 @@ mod tests {
                         core.state().store().current_generation(),
                         Some(Generation::INITIAL)
                     );
-                    if let Some(commit) = commit {
-                        assert!(core.reconcile_committed_state(&first_id, commit).is_ok());
-                        let second_secret = SecretState::new(b"second-committed-state".to_vec());
-                        assert!(second_secret.is_ok());
-                        if let Ok(second_secret) = second_secret {
-                            assert!(
-                                core.persist_mutation(
-                                    second_id,
-                                    second_digest,
-                                    Some(Generation::INITIAL),
-                                    second_secret,
-                                    Vec::new(),
-                                )
-                                .is_ok()
-                            );
-                        }
+                    assert!(matches!(
+                        core.recover_durable_intent(&first_id),
+                        Ok(DurableIntentRecovery::Committed(_))
+                    ));
+                    let second_secret = SecretState::new(b"second-committed-state".to_vec());
+                    assert!(second_secret.is_ok());
+                    if let Ok(second_secret) = second_secret {
+                        assert!(
+                            core.persist_mutation(
+                                second_id,
+                                second_digest,
+                                Some(Generation::INITIAL),
+                                second_secret,
+                                Vec::new(),
+                            )
+                            .is_ok()
+                        );
                     }
                 }
             }

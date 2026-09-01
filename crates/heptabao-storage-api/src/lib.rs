@@ -99,6 +99,13 @@ impl Generation {
         self.0
     }
 
+    pub const fn previous(self) -> Option<Self> {
+        match self.0.checked_sub(1) {
+            Some(0) | None => None,
+            Some(value) => Some(Self(value)),
+        }
+    }
+
     pub const fn checked_next(self) -> Result<Self, StorageContractError> {
         match self.0.checked_add(1) {
             Some(value) => Ok(Self(value)),
@@ -376,6 +383,7 @@ mod tests {
         assert!(digest.is_ok());
         if let Ok(digest) = digest {
             assert!(CommitIntent::new(None, Generation::INITIAL, digest).is_ok());
+            assert_eq!(Generation::INITIAL.previous(), None);
             assert_eq!(
                 CommitIntent::new(
                     None,
@@ -387,6 +395,7 @@ mod tests {
             let second = Generation::INITIAL.checked_next();
             assert!(second.is_ok());
             if let Ok(second) = second {
+                assert_eq!(second.previous(), Some(Generation::INITIAL));
                 assert!(CommitIntent::new(Some(Generation::INITIAL), second, digest).is_ok());
             }
         }
