@@ -333,8 +333,21 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, MutexGuard};
 
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    // `Command::spawn` may fork while another test owns a directory descriptor.
+    // `O_CLOEXEC` closes that descriptor only at exec, so serialize these tests
+    // to prevent transient inheritance from extending an unrelated writer lock.
+    static TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial_test() -> MutexGuard<'static, ()> {
+        match TEST_SERIAL.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
 
     #[derive(Debug)]
     struct TemporaryDirectory {
@@ -377,6 +390,7 @@ mod tests {
 
     #[test]
     fn root_is_descriptor_bound_and_leaf_names_are_closed() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         let temporary = TemporaryDirectory::new("basic")?;
         let guard = ExclusiveDirectory::open(&temporary.path)?;
         guard.verify()?;
@@ -399,6 +413,7 @@ mod tests {
 
     #[test]
     fn second_open_is_fenced_until_drop() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         let temporary = TemporaryDirectory::new("lock")?;
         let first = ExclusiveDirectory::open(&temporary.path)?;
         let second = ExclusiveDirectory::open(&temporary.path);
@@ -411,6 +426,7 @@ mod tests {
 
     #[test]
     fn cooperating_processes_observe_writer_fence() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         const ROOT_ENV: &str = "HEPTABAO_FILESYSTEM_GUARD_TEST_ROOT";
         const MODE_ENV: &str = "HEPTABAO_FILESYSTEM_GUARD_TEST_MODE";
         const TEST_NAME: &str = "tests::cooperating_processes_observe_writer_fence";
@@ -458,6 +474,7 @@ mod tests {
 
     #[test]
     fn descriptor_survives_root_path_replacement() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         let temporary = TemporaryDirectory::new("rename")?;
         let guard = ExclusiveDirectory::open(&temporary.path)?;
         let moved = temporary.path.with_file_name(format!(
@@ -481,6 +498,7 @@ mod tests {
 
     #[test]
     fn symlink_root_is_rejected() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         let target = TemporaryDirectory::new("target")?;
         let link_parent = TemporaryDirectory::new("link-parent")?;
         let link = link_parent.path.join("root-link");
@@ -492,6 +510,7 @@ mod tests {
 
     #[test]
     fn relative_root_is_rejected() {
+        let _serial = serial_test();
         let result = ExclusiveDirectory::open("relative-root");
         assert!(matches!(
             result,
@@ -501,6 +520,7 @@ mod tests {
 
     #[test]
     fn intermediate_symlink_is_rejected() -> Result<(), Box<dyn Error>> {
+        let _serial = serial_test();
         let target = TemporaryDirectory::new("ancestor-target")?;
         let link_parent = TemporaryDirectory::new("ancestor-link-parent")?;
         let ancestor_link = link_parent.path.join("redirected");

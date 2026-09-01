@@ -88,6 +88,7 @@ The caller must preserve single-writer or immutable-reader ownership declared by
 Detected crate-local tests:
 - `cooperating_processes_observe_writer_fence` (crates/heptabao-filesystem-guard/src/lib.rs)
 - `descriptor_survives_root_path_replacement` (crates/heptabao-filesystem-guard/src/lib.rs)
+- `intermediate_symlink_is_rejected` (crates/heptabao-filesystem-guard/src/lib.rs)
 - `relative_root_is_rejected` (crates/heptabao-filesystem-guard/src/lib.rs)
 - `root_is_descriptor_bound_and_leaf_names_are_closed` (crates/heptabao-filesystem-guard/src/lib.rs)
 - `second_open_is_fenced_until_drop` (crates/heptabao-filesystem-guard/src/lib.rs)
@@ -145,3 +146,13 @@ capability, opened with `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`, and checked for
 pre-open/opened/post-open device and inode equality. Intermediate symlinks and
 non-directory components fail closed. This is a descriptor walk, not a claim of
 `openat2` kernel-enforced `RESOLVE_*` semantics or mount-namespace immunity.
+
+### V1.4.6 fork/exec test isolation
+
+The Linux writer fence is intentionally fail closed. `O_CLOEXEC` closes inherited
+descriptors at exec rather than at fork, so a test subprocess created while an
+unrelated guard is live can retain that lock briefly between fork and exec. The
+crate-local tests therefore use one process-local `TEST_SERIAL` guard around all
+writer-fence scenarios. This prevents the subprocess test from extending another
+test's lock lifetime and makes exact-head and prospective-merge runs repeatable
+without weakening the public fail-closed `WriterBusy` behavior.

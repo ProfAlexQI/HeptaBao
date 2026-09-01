@@ -130,6 +130,18 @@ def validate(root: Path) -> list[str]:
     require_tokens(
         errors,
         root,
+        "crates/heptabao-filesystem-guard/src/lib.rs",
+        (
+            "static TEST_SERIAL: Mutex<()> = Mutex::new(());",
+            "fn serial_test() -> MutexGuard<'static, ()>",
+            "let _serial = serial_test();",
+            "cooperating_processes_observe_writer_fence",
+            "second_open_is_fenced_until_drop",
+        ),
+    )
+    require_tokens(
+        errors,
+        root,
         "crates/heptabao-journal-api/src/lib.rs",
         ("fn recover_authoritative", "AppendFailureDisposition::OutcomeUnknown"),
     )
@@ -183,7 +195,7 @@ def validate(root: Path) -> list[str]:
     blocker = load_yaml(root, "planning/HEPTABAO_BLOCKER_REGISTER_V1_4_6.yaml")
     status = load_yaml(root, "planning/HEPTABAO_V1_4_6_AUTHORITATIVE_RECOVERY_STATUS.yaml")
     manifest = load_yaml(root, "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_6.yaml")
-    expected_ids = [f"HB-BLK-REPO-{number:03d}" for number in range(49, 56)]
+    expected_ids = [f"HB-BLK-REPO-{number:03d}" for number in range(49, 57)]
     actual_ids = [item.get("id") for item in blocker.get("added_blockers", [])]
     if actual_ids != expected_ids:
         errors.append(f"V1.4.6 blocker set drifted: {actual_ids!r}")
@@ -201,6 +213,18 @@ def validate(root: Path) -> list[str]:
     for path in paths:
         if not isinstance(path, str) or not (root / path).is_file():
             errors.append(f"V1.4.6 manifest path missing: {path!r}")
+
+    require_tokens(
+        errors,
+        root,
+        "docs/modules/heptabao-filesystem-guard.md",
+        (
+            "V1.4.6 fork/exec test isolation",
+            "`O_CLOEXEC` closes inherited",
+            "descriptors at exec rather than at fork",
+            "fail-closed `WriterBusy`",
+        ),
+    )
 
     require_tokens(
         errors,

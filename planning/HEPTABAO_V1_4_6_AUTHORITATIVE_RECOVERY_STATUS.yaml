@@ -19,6 +19,7 @@ implementation:
   owner_only_store_files: IMPLEMENTED_SOURCE
   event_qualified_ci_contexts: IMPLEMENTED_SOURCE
   inherited_v145_checkpoint_binding: IMPLEMENTED_SOURCE
+  filesystem_guard_fork_exec_test_isolation: IMPLEMENTED_SOURCE
   clean_candidate_tree: IMPLEMENTED_SOURCE
   recovery_protocol_and_module_addenda: IMPLEMENTED_SOURCE
 execution:

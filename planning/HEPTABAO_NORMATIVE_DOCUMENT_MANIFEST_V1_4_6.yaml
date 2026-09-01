@@ -41,6 +41,12 @@ documents:
 - path: tests/plan/test_plan_v1_4_5.py
   role: INHERITED_GATE_HOSTILE_VALIDATOR_TEST
   source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: crates/heptabao-filesystem-guard/src/lib.rs
+  role: FILESYSTEM_GUARD_TEST_ISOLATION_SOURCE
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: docs/modules/heptabao-filesystem-guard.md
+  role: FILESYSTEM_GUARD_FORK_EXEC_SEMANTICS
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
 - path: crates/heptabao-storage-api/src/lib.rs
   role: STORAGE_RECOVERY_CONTRACT_SOURCE
   source_binding: RESOLVE_FROM_EXACT_SOURCE
