@@ -1,0 +1,604 @@
+name: v1.4.1-converge-final-source
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/v1.4-durable-single-node-foundation-v1
+    paths:
+      - .github/workflows/v1.4.1-converge-final-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  converge-verify-publish:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact source and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "${{ github.event.pull_request.head.ref }}" = "codex/plan-v1.4-full-gap-closure-v1"
+
+      - name: Converge complete V1.4.1 source state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          def replace_once(text: str, before: str, after: str, label: str) -> str:
+              if before in text:
+                  return text.replace(before, after, 1)
+              if after not in text:
+                  raise SystemExit(f'{label} is absent')
+              return text
+
+          journal = Path('crates/heptabao-single-node-journal/src/lib.rs')
+          source = journal.read_text(encoding='utf-8')
+          source = replace_once(
+              source,
+              '            let metadata = entry.metadata().map_err(FileJournalError::Io)?;',
+              '            let metadata = fs::symlink_metadata(entry.path())\n'
+              '                .map_err(FileJournalError::Io)?;',
+              'no-follow directory metadata',
+          )
+          source = source.replace(
+              'fs::symlink_metadata(entry.path())?.file_type().is_symlink()',
+              'metadata.file_type().is_symlink()',
+          )
+          source = replace_once(
+              source,
+              '            let sequence = parse_entry_file_name(name)?\n'
+              '                .ok_or(FileJournalError::UnexpectedEntry)?;',
+              '            let sequence = parse_entry_file_name(name)\n'
+              '                .map_err(|_| FileJournalError::CorruptJournal)?\n'
+              '                .ok_or(FileJournalError::UnexpectedEntry)?;',
+              'provider-neutral entry-name call',
+          )
+          old_signature = (
+              'fn parse_entry_file_name(name: &str) -> '
+              'Result<Option<JournalSequence>, FileJournalError<io::Error>> {'
+          )
+          new_signature = (
+              'fn parse_entry_file_name(name: &str) -> '
+              'Result<Option<JournalSequence>, DecodeError> {'
+          )
+          if old_signature in source:
+              pattern = re.compile(
+                  r'fn parse_entry_file_name\(name: &str\).*?\n}\n\nfn encode_marker',
+                  re.DOTALL,
+              )
+              replacement = '''fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, DecodeError> {
+                  let Some(digits) = name
+                      .strip_prefix("entry-")
+                      .and_then(|value| value.strip_suffix(".hbj"))
+                  else {
+                      return Ok(None);
+                  };
+                  if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                      return Err(DecodeError::InvalidLength);
+                  }
+                  let value = digits
+                      .parse::<u64>()
+                      .map_err(|_| DecodeError::InvalidSequence)?;
+                  let sequence =
+                      JournalSequence::new(value).map_err(|_| DecodeError::InvalidSequence)?;
+                  if entry_file_name(sequence) != name {
+                      return Err(DecodeError::InvalidSequence);
+                  }
+                  Ok(Some(sequence))
+              }
+
+              fn encode_marker'''
+              source, count = pattern.subn(replacement, source, count=1)
+              if count != 1:
+                  raise SystemExit('entry-name helper transformation failed')
+          if new_signature not in source:
+              raise SystemExit('provider-neutral entry-name helper is absent')
+          if 'entry.metadata()' in source:
+              raise SystemExit('directory enumeration still follows symlinks')
+
+          import_anchor = 'use std::path::{Path, PathBuf};\n'
+          unix_import = '#[cfg(unix)]\nuse std::os::unix::fs::OpenOptionsExt;\n'
+          if unix_import not in source:
+              if source.count(import_anchor) != 1:
+                  raise SystemExit('journal Unix import anchor drifted')
+              source = source.replace(import_anchor, unix_import + import_anchor, 1)
+          direct_entry = '''    let mut file = OpenOptions::new()
+              .write(true)
+              .create_new(true)
+              .open(path)?;'''
+          if direct_entry in source:
+              source = source.replace(direct_entry, '    let mut file = secure_create_new(path)?;', 1)
+          direct_temp = '''        let mut file = OpenOptions::new()
+                  .write(true)
+                  .create_new(true)
+                  .open(&temporary_path)?;'''
+          if direct_temp in source:
+              source = source.replace(
+                  direct_temp,
+                  '        let mut file = secure_create_new(&temporary_path)?;',
+                  1,
+              )
+          if 'fn secure_create_new(path: &Path) -> io::Result<File> {' not in source:
+              anchor = 'fn write_new_file_and_sync_parent(path: &Path, bytes: &[u8]) -> io::Result<()> {\n'
+              helper = '''fn secure_create_new(path: &Path) -> io::Result<File> {
+                  let mut options = OpenOptions::new();
+                  options.write(true).create_new(true);
+                  #[cfg(unix)]
+                  {
+                      options.mode(0o600);
+                  }
+                  options.open(path)
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('secure-create helper anchor drifted')
+              source = source.replace(anchor, helper + anchor, 1)
+          if 'secure_create_new(path)?' not in source or 'secure_create_new(&temporary_path)?' not in source:
+              raise SystemExit('journal secure-create calls are incomplete')
+          permission_test = '    fn journal_files_are_owner_only_on_unix() {'
+          if permission_test not in source:
+              addition = r'''
+
+              #[cfg(unix)]
+              #[test]
+              fn journal_files_are_owner_only_on_unix() {
+                  use std::os::unix::fs::PermissionsExt;
+
+                  let temporary = TempDirectory::new();
+                  let domain = domain();
+                  let authenticator = TestAuthenticator::new();
+                  if let (Ok(temporary), Ok(domain), Ok(authenticator)) =
+                      (temporary, domain, authenticator)
+                  {
+                      let journal =
+                          FileDurableJournal::create_new(&temporary.path, domain, authenticator);
+                      assert!(journal.is_ok());
+                      if let Ok(mut journal) = journal {
+                          let payload = JournalPayload::new(b"permission-check".to_vec());
+                          if let Ok(payload) = payload {
+                              assert!(journal.append(None, payload).is_ok());
+                          }
+                      }
+                      for path in [
+                          temporary.path.join(MARKER_NAME),
+                          temporary.path.join(TAIL_NAME),
+                          temporary.path.join(entry_file_name(JournalSequence::INITIAL)),
+                      ] {
+                          let metadata = fs::symlink_metadata(path);
+                          assert!(metadata.is_ok());
+                          if let Ok(metadata) = metadata {
+                              assert_eq!(metadata.permissions().mode() & 0o077, 0);
+                          }
+                      }
+                  }
+              }
+          '''
+              prefix, separator, suffix = source.rpartition('\n}')
+              if not separator:
+                  raise SystemExit('journal test module closing brace is missing')
+              source = prefix + addition + separator + suffix
+          journal.write_text(source, encoding='utf-8')
+
+          ledger = Path('crates/heptabao-operation-ledger/src/lib.rs')
+          source = ledger.read_text(encoding='utf-8')
+          if '    pub fn blocking_phase(&self) -> Option<OperationPhase> {' not in source:
+              anchor = '''    pub fn operation_count(&self) -> usize {
+                  self.operations.len()
+              }
+
+              '''
+              insertion = anchor + '''    pub fn blocking_phase(&self) -> Option<OperationPhase> {
+                  self.operations.values().find_map(|event| {
+                      let phase = event.phase();
+                      if phase_blocks_new_mutation(phase) {
+                          Some(phase)
+                      } else {
+                          None
+                      }
+                  })
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('operation-count anchor drifted')
+              source = source.replace(anchor, insertion, 1)
+          if 'const fn phase_blocks_new_mutation(' not in source:
+              anchor = 'const fn retry_directive_for_event(event: &OperationEvent) -> RetryDirective {\n'
+              helper = '''const fn phase_blocks_new_mutation(phase: OperationPhase) -> bool {
+                  matches!(
+                      phase,
+                      OperationPhase::Accepted
+                          | OperationPhase::IntentCommitted
+                          | OperationPhase::EffectStarted
+                          | OperationPhase::EffectSucceeded
+                          | OperationPhase::EffectUnknown
+                  )
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('phase-block helper anchor drifted')
+              source = source.replace(anchor, helper + anchor, 1)
+          ledger.write_text(source, encoding='utf-8')
+
+          core = Path('crates/heptabao-journaled-core/src/lib.rs')
+          source = core.read_text(encoding='utf-8')
+          generic_marker = 'fn detail_code<S, B, J>('
+          if generic_marker in source:
+              source, call_count = re.subn(
+                  r'detail_code\(([^)\n]+)\)\?',
+                  r'detail_code(\1).map_err(JournaledCoreError::OperationContract)?',
+                  source,
+              )
+              if call_count < 4:
+                  raise SystemExit(f'detail-code call count drifted: {call_count}')
+              pattern = re.compile(
+                  r'fn detail_code<S, B, J>\(.*?\n}\n\n#\[derive\(Clone, Debug, Eq, PartialEq\)\]',
+                  re.DOTALL,
+              )
+              replacement = '''fn detail_code(value: &str) -> Result<StableDetailCode, OperationContractError> {
+                  StableDetailCode::new(value.to_owned())
+              }
+
+              #[derive(Clone, Debug, Eq, PartialEq)]'''
+              source, count = pattern.subn(replacement, source, count=1)
+              if count != 1:
+                  raise SystemExit('detail-code helper transformation failed')
+          narrow_helper = 'fn detail_code(value: &str) -> Result<StableDetailCode, OperationContractError>'
+          if narrow_helper not in source or generic_marker in source:
+              raise SystemExit('narrow detail-code helper is absent')
+
+          if '            return Err(JournaledCoreError::UnresolvedOperationBlocksMutation {' not in source:
+              anchor = '''        if let Some(existing) = self.ledger.current(&operation_id) {
+                  return Err(JournaledCoreError::ExistingOperation {
+                      phase: existing.phase(),
+                      directive: self
+                          .ledger
+                          .retry_directive(&operation_id)
+                          .unwrap_or(RetryDirective::ManualHold),
+                  });
+              }
+
+              '''
+              insertion = anchor + '''        if let Some(phase) = self.ledger.blocking_phase() {
+                  return Err(JournaledCoreError::UnresolvedOperationBlocksMutation { phase });
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('existing-operation guard anchor drifted')
+              source = source.replace(anchor, insertion, 1)
+          if '    pub fn record_rejected_before_dispatch(' not in source:
+              anchor = '    pub fn reconcile_committed_state(\n'
+              if anchor not in source:
+                  anchor = '    pub fn record_response_audited(\n'
+              method = '''    pub fn record_rejected_before_dispatch(
+                  &mut self,
+                  operation_id: &OperationId,
+                  detail: StableDetailCode,
+              ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+                  let current = self
+                      .ledger
+                      .current(operation_id)
+                      .cloned()
+                      .ok_or(JournaledCoreError::OperationMissing)?;
+                  let rejected = current
+                      .next(
+                          OperationPhase::RejectedBeforeDispatch,
+                          None,
+                          None,
+                          None,
+                          detail,
+                      )
+                      .map_err(JournaledCoreError::OperationContract)?;
+                  self.ledger
+                      .record(rejected)
+                      .map_err(JournaledCoreError::Ledger)?;
+                  Ok(())
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('pre-dispatch rejection method anchor drifted')
+              source = source.replace(anchor, method + anchor, 1)
+          if '    pub fn reconcile_committed_state(' not in source:
+              anchor = '    pub fn record_response_audited(\n'
+              method = '''    pub fn reconcile_committed_state(
+                  &mut self,
+                  operation_id: &OperationId,
+                  commit: CommitReceipt,
+              ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+                  let current = self
+                      .ledger
+                      .current(operation_id)
+                      .cloned()
+                      .ok_or(JournaledCoreError::OperationMissing)?;
+                  if current.phase() != OperationPhase::IntentCommitted {
+                      return Err(JournaledCoreError::OperationContract(
+                          OperationContractError::InvalidTransition,
+                      ));
+                  }
+                  let snapshot = self
+                      .state
+                      .store()
+                      .load_current()
+                      .map_err(|error| {
+                          JournaledCoreError::DurableState(DurableCoreError::Storage(error))
+                      })?;
+                  let observed = snapshot.map(|value| (value.generation, value.digest));
+                  if observed != Some((commit.committed, commit.digest)) {
+                      return Err(JournaledCoreError::DurableState(
+                          DurableCoreError::CommitReceiptMismatch,
+                      ));
+                  }
+                  let committed = current
+                      .next(
+                          OperationPhase::StateCommitted,
+                          Some((commit.committed, commit.digest)),
+                          None,
+                          None,
+                          detail_code("state-commit-reconciled")
+                              .map_err(JournaledCoreError::OperationContract)?,
+                      )
+                      .map_err(JournaledCoreError::OperationContract)?;
+                  self.ledger
+                      .record(committed)
+                      .map_err(JournaledCoreError::Ledger)?;
+                  Ok(())
+              }
+
+              '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('committed-state reconciliation anchor drifted')
+              source = source.replace(anchor, method + anchor, 1)
+          enum_anchor = '''    ExistingOperation {
+                  phase: OperationPhase,
+                  directive: RetryDirective,
+              },
+              '''
+          if '    UnresolvedOperationBlocksMutation {' not in source:
+              insertion = enum_anchor + '''    UnresolvedOperationBlocksMutation {
+                  phase: OperationPhase,
+              },
+              '''
+              if source.count(enum_anchor) != 1:
+                  raise SystemExit('unresolved-operation error anchor drifted')
+              source = source.replace(enum_anchor, insertion, 1)
+          display_anchor = '''            Self::ExistingOperation { phase, directive } => write!(
+                      formatter,
+                      "operation already exists at phase {phase:?}; retry directive is {directive:?}"
+                  ),
+              '''
+          if 'Self::UnresolvedOperationBlocksMutation' not in source:
+              insertion = display_anchor + '''            Self::UnresolvedOperationBlocksMutation { phase } => write!(
+                      formatter,
+                      "unresolved operation at phase {phase:?} fences every new mutation"
+                  ),
+              '''
+              if source.count(display_anchor) != 1:
+                  raise SystemExit('unresolved-operation display anchor drifted')
+              source = source.replace(display_anchor, insertion, 1)
+          core.write_text(source, encoding='utf-8')
+
+          status = Path('planning/HEPTABAO_V1_4_1_DURABLE_OPERATION_LEDGER_STATUS.yaml')
+          text = status.read_text(encoding='utf-8')
+          profile_anchor = '  id: HB-P1-DEV-JOURNALED-SINGLE-PROCESS\n'
+          os_line = '  operating_system: linux\n'
+          if os_line not in text:
+              if text.count(profile_anchor) != 1:
+                  raise SystemExit('status profile anchor drifted')
+              text = text.replace(profile_anchor, profile_anchor + os_line, 1)
+          status.write_text(text, encoding='utf-8')
+
+          plan = Path('docs/plan/HEPTABAO_PLAN_V1_4_1_DURABLE_JOURNAL_AND_OPERATION_LEDGER.md')
+          text = plan.read_text(encoding='utf-8')
+          if 'The executable filesystem profile is Linux-only.' not in text:
+              anchor = (
+                  'production audit device, multi-process writer fencing, a selected MAC/KMS/HSM\n'
+                  'provider, remote replication, retention policy, OpenBao compatibility,\n'
+                  'qualification or operational authority.\n'
+              )
+              addition = anchor + (
+                  '\nThe executable filesystem profile is Linux-only. Every marker, entry and tail\n'
+                  'temporary file is created with owner-only mode `0600`; other operating-system\n'
+                  'profiles remain unsupported until they prove equivalent access and durability\n'
+                  'semantics.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('plan Linux-profile anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          if '`reconcile_committed_state` first rereads the authoritative storage snapshot' not in text:
+              anchor = '`ReconcileOnly` until a separately validated reconciliation transition is\nwritten.\n'
+              if text.count(anchor) != 1:
+                  raise SystemExit('plan reconciliation anchor drifted')
+              text = text.replace(
+                  anchor,
+                  anchor
+                  + '\n`reconcile_committed_state` first rereads the authoritative storage snapshot and\n'
+                  + 'requires its generation and digest to equal the supplied commit receipt. Only\n'
+                  + 'then may the ledger append the missing `StateCommitted` transition. A forged,\n'
+                  + 'stale or mismatched receipt fails closed and leaves the operation unresolved.\n',
+                  1,
+              )
+          if 'An unresolved operation globally fences every later mutation' not in text:
+              anchor = (
+                  'stale or mismatched receipt fails closed and leaves the operation unresolved.\n'
+              )
+              addition = anchor + (
+                  '\nAn unresolved operation globally fences every later mutation whose state could\n'
+                  'advance the authoritative generation. `Accepted`, `IntentCommitted`,\n'
+                  '`EffectStarted`, `EffectSucceeded` and `EffectUnknown` must be durably\n'
+                  'resolved before a new operation ID reaches the barrier or storage. A known\n'
+                  'pre-dispatch failure closes through `record_rejected_before_dispatch`; a\n'
+                  'postcommit gap closes only through exact stored-snapshot reconciliation.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('plan global-fence anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          plan.write_text(text, encoding='utf-8')
+
+          audit = Path('docs/audit/HEPTABAO_DURABLE_OPERATION_LEDGER_V1.md')
+          text = audit.read_text(encoding='utf-8')
+          if 'Journal files are created with owner-only mode `0600` on Linux.' not in text:
+              anchor = (
+                  'The directory scan uses no-follow metadata. Symlinked or non-regular marker,\n'
+                  'tail and entry paths are corruption. Unknown entries, gaps, duplicate sequence,\n'
+                  'more than one future entry and unresolved `.tmp-` artifacts fail closed.\n'
+              )
+              addition = anchor + (
+                  '\nJournal files are created with owner-only mode `0600` on Linux. The containing\n'
+                  'directory remains an operator-controlled boundary and must not be writable by\n'
+                  'untrusted principals.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('audit permission anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          if 'Receipt text alone is insufficient.' not in text:
+              anchor = 'external effect can still be reconciled.\n'
+              if text.count(anchor) != 1:
+                  raise SystemExit('audit reconciliation anchor drifted')
+              text = text.replace(
+                  anchor,
+                  anchor
+                  + '\nA missing post-commit transition is repaired only by rereading the authoritative\n'
+                  + 'storage snapshot and matching both generation and digest to the returned commit\n'
+                  + 'receipt before appending `StateCommitted`. Receipt text alone is insufficient.\n',
+                  1,
+              )
+          if 'An unresolved intent is also a global writer fence.' not in text:
+              anchor = 'receipt before appending `StateCommitted`. Receipt text alone is insufficient.\n'
+              addition = anchor + (
+                  '\nAn unresolved intent is also a global writer fence. No later operation may\n'
+                  'advance the authoritative generation until that intent is either bound to the\n'
+                  'exact stored commit or durably classified as rejected before dispatch.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('audit global-fence anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          audit.write_text(text, encoding='utf-8')
+
+          validator = Path('scripts/validate_plan_v1_4_1.py')
+          text = validator.read_text(encoding='utf-8')
+          profile_anchor = '            "id": "HB-P1-DEV-JOURNALED-SINGLE-PROCESS",\n'
+          os_entry = '            "operating_system": "linux",\n'
+          if os_entry not in text:
+              if text.count(profile_anchor) != 1:
+                  raise SystemExit('validator profile anchor drifted')
+              text = text.replace(profile_anchor, profile_anchor + os_entry, 1)
+          journal_anchor = '            "fs::symlink_metadata(entry.path())",\n'
+          if '            "secure_create_new",\n' not in text:
+              if text.count(journal_anchor) != 1:
+                  raise SystemExit('validator secure-create token anchor drifted')
+              text = text.replace(journal_anchor, journal_anchor + '            "secure_create_new",\n', 1)
+          core_anchor = '            "record_response_audit_failure_after_commit",\n'
+          required_tokens = [
+              '            "reconcile_committed_state",\n',
+              '            "blocking_phase",\n',
+              '            "record_rejected_before_dispatch",\n',
+              '            "UnresolvedOperationBlocksMutation",\n',
+          ]
+          insertion = ''.join(token for token in required_tokens if token not in text)
+          if insertion:
+              if text.count(core_anchor) != 1:
+                  raise SystemExit('validator core token anchor drifted')
+              text = text.replace(core_anchor, core_anchor + insertion, 1)
+          validator.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Remove all temporary write-capable workflows before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/v1.4.1-source-export.yml \
+            .github/workflows/v1.4.1-rust-materializer.yml \
+            .github/workflows/v1.4.1-rust-materializer-v2.yml \
+            .github/workflows/v1.4.1-final-source-materializer.yml \
+            .github/workflows/v1.4.1-finalize-source.yml \
+            .github/workflows/v1.4.1-postcommit-reconcile-fix.yml \
+            .github/workflows/v1.4.1-final-reconcile-v2.yml \
+            .github/workflows/v1.4.1-unresolved-operation-fence.yml \
+            .github/workflows/v1.4.1-secure-journal-permissions.yml \
+            .github/workflows/v1.4.1-converge-final-source.yml
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Format and validate converged current source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all
+          python scripts/validate_plan_v1_4_1.py
+          python scripts/validate_v1_4_1_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_1.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Replay complete frozen V1.4 gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="33e1c14c3e417ea1c9ea181e2181751736c7bce5"
+          historical_root="$RUNNER_TEMP/v1.4-baseline"
+          cleanup() {
+            git worktree remove --force "$historical_root" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$historical_root" "$baseline"
+          (
+            cd "$historical_root"
+            python scripts/validate_plan_v1_4.py
+            python scripts/validate_v1_4_inherited_surface.py
+            python -m unittest discover -s tests/plan -p 'test_plan_v1_4.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+            cargo +1.98.0 fmt --all -- --check
+            cargo +1.98.0 test --locked --workspace --all-targets
+            cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          )
+          cleanup
+          trap - EXIT
+
+      - name: Publish exact verified final source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v1.4.1): converge verified journal ledger source"
+          git push origin HEAD:codex/plan-v1.4-full-gap-closure-v1
