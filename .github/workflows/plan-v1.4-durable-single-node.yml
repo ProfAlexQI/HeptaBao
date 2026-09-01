@@ -19,6 +19,7 @@ on:
       - planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4.yaml
       - schemas/heptabao_normative_document_manifest_v1_4.schema.json
       - scripts/validate_plan_v1_4.py
+      - scripts/validate_v1_4_inherited_surface.py
       - tests/plan/test_plan_v1_4.py
       - .github/workflows/plan-v1.4-durable-single-node.yml
   workflow_dispatch:
@@ -62,15 +63,36 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-plan.txt
 
-      - name: Validate V1.4 plan and all inherited Python regressions
+      - name: Validate current V1.4 source and current non-historical regressions
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
           python scripts/validate_plan_v1_4.py
-          python -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python scripts/validate_v1_4_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4.py' -v
           python -m unittest discover -s tests/platform -p 'test_*.py' -v
           python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Replay the complete inherited test suites on the frozen V1.3.1 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="a5b9739e46f4bed54dbb3edd0e32400481b3b12f"
+          historical_root="$RUNNER_TEMP/v1.3.1-baseline"
+          cleanup() {
+            git worktree remove --force "$historical_root" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$historical_root" "$baseline"
+          (
+            cd "$historical_root"
+            python -m unittest discover -s tests/plan -p 'test_*.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          )
+          cleanup
+          trap - EXIT
 
       - name: Install exact Rust 1.98 toolchain
         shell: bash
@@ -125,7 +147,8 @@ jobs:
             echo "- commit: \`$(git rev-parse HEAD)\`"
             echo "- tree: \`$(git rev-parse HEAD^{tree})\`"
             echo '- V1.4 semantic validation: PASS'
-            echo '- inherited Python regressions: PASS'
+            echo '- frozen V1.3.1 baseline replay: PASS'
+            echo '- current platform and Oracle regressions: PASS'
             echo '- Rust 1.98 fmt/test/strict-Clippy: PASS'
             echo '- qualification: false'
             echo '- production authority: false'

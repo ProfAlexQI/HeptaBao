@@ -53,6 +53,9 @@ documents:
 - path: scripts/validate_plan_v1_4.py
   role: VALIDATOR
   source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: scripts/validate_v1_4_inherited_surface.py
+  role: VALIDATOR
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
 - path: tests/plan/test_plan_v1_4.py
   role: TEST
   source_binding: RESOLVE_FROM_EXACT_SOURCE

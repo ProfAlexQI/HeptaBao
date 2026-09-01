@@ -10,6 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_plan_v1_4 import ValidationFailure, validate  # noqa: E402
+from validate_v1_4_inherited_surface import (  # noqa: E402
+    EXPECTED_DELTA,
+    InheritedSurfaceFailure,
+    validate_delta,
+)
 
 
 class PlanV14Tests(unittest.TestCase):
@@ -77,6 +82,18 @@ class PlanV14Tests(unittest.TestCase):
             stream.write("\nrevision: '1.4'\n")
         with self.assertRaisesRegex(ValidationFailure, "duplicate key"):
             validate(target)
+
+    def test_unmanifested_or_inherited_path_change_fails_closed(self) -> None:
+        observed = dict(EXPECTED_DELTA)
+        observed["crates/heptabao-policy/src/lib.rs"] = "A"
+        with self.assertRaisesRegex(InheritedSurfaceFailure, "inherited or unmanifested"):
+            validate_delta(observed)
+
+    def test_expected_delta_status_cannot_be_changed_to_deletion(self) -> None:
+        observed = dict(EXPECTED_DELTA)
+        observed["Cargo.toml"] = "D"
+        with self.assertRaisesRegex(InheritedSurfaceFailure, "status drifted"):
+            validate_delta(observed)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,9 @@ This revision does not select a production cryptographic provider, does not
 claim OpenBao compatibility, and grants no qualification, production,
 migration, release or mixed-cluster authority.
 
-The immutable implementation baseline is the V1.3.1 candidate
-`a5b9739e46f4bed54dbb3edd0e32400481b3b12f`. Runtime execution and review
+The frozen V1.3.1 baseline is
+`a5b9739e46f4bed54dbb3edd0e32400481b3b12f`, tree
+`1727b9498258883b2504c53ac501c415a07218e2`. Runtime execution and review
 results for V1.4 are resolved from the exact Git commit and GitHub event; they
 are never inferred from this static document.
 
@@ -127,22 +128,35 @@ V1.4 introduces and addresses at source level:
 - `HB-BLK-REPO-022`: no exact-head V1.4 plan/Rust gate.
 
 Source presence is not execution. These blockers reach technical closure only
-after the V1.4 exact-head workflow passes on the exact head and the inherited
-V1.3.1 head/merge technical matrix remains terminal and non-empty.
+after the V1.4 exact-head workflow passes and a final designated-ratifier head
+runs the inherited V1.3.1 source/merge matrix without changing any authority
+claim.
 
 ## 8. Exact execution gates
 
-### Gate A — plan and structure
+### Gate A — version-aware plan and regression execution
 
-- the V1.4 manifest validates against its Draft 2020-12 schema;
-- the four crates are present in the root workspace and committed lock graph;
-- V1.4 status, blockers, documents, workflow and tests agree;
-- source tokens bind explicit lifecycle, checked generations, strict envelopes,
-  persist-before-publish ordering and outcome-unknown behavior;
-- every qualification and authority field remains false/NONE;
-- all inherited plan, platform and Oracle Python regressions pass.
+Historical V1.3/V1.3.1 validators intentionally describe a closed world with
+seven workspace crates and one canonical V1.3.1 pull-request workflow. V1.4
+does not weaken or reinterpret those rules against an expanded tree. Instead,
+the exact V1.4 workflow must:
+
+- verify that the current branch is a descendant of the frozen V1.3.1 baseline;
+- compare the complete Git name/status delta against the closed V1.4 extension
+  allowlist and reject any inherited-file modification;
+- create a detached temporary worktree at the exact V1.3.1 baseline and rerun
+  its complete plan, platform and Oracle Python suites there;
+- validate the V1.4 manifest against its Draft 2020-12 schema;
+- run the V1.4 closed-world source and mutation tests on the current head;
+- run current platform and Oracle regressions against the expanded workspace;
+- keep every qualification and authority field false/NONE.
+
+This preserves the old proof on the old exact source while proving that V1.4 is
+an additive extension rather than silently relaxing the historical contract.
 
 ### Gate B — Rust 1.98 workspace
+
+On the exact V1.4 head and committed lock graph:
 
 ```text
 cargo +1.98.0 fmt --all -- --check
@@ -152,10 +166,13 @@ cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 
 ### Gate C — inherited exact-source technical controls
 
-The V1.3.1 canonical head/merge workflow must execute against the final
-no-tree-change source-ratification head. It must retain exact source/merge
-identity, P0 typed evidence, OpenRaft dual-toolchain checks, H02 24/24 and lane
-arbitration without changing any authority field.
+After implementation source stops moving, the designated `ProfHepta` ratifier
+must publish the required one-parent, no-tree-change ratification commit. The
+V1.3.1 canonical head/merge workflow must then execute on that exact head and
+its distinct GitHub synthetic merge. It must retain source/merge identity, P0
+typed evidence, OpenRaft dual-toolchain checks, H02 24/24 and lane arbitration
+without changing any qualification or authority field. No other identity may
+be substituted or inferred from repository ownership.
 
 ### Gate D — independent review
 

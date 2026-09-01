@@ -15,6 +15,7 @@ source_baseline:
   repository_id: 1349115072
   repository: TrillionniumFoundation/HeptaBao
   inherited_head: a5b9739e46f4bed54dbb3edd0e32400481b3b12f
+  inherited_tree: 1727b9498258883b2504c53ac501c415a07218e2
   source_identity: RESOLVE_FROM_EXACT_GIT_HEAD
 implementation:
   provider_neutral_storage_api: IMPLEMENTED_SOURCE
@@ -29,10 +30,12 @@ implementation:
   explicit_commit_outcome_unknown: IMPLEMENTED_SOURCE
   barrier_before_storage_core: IMPLEMENTED_SOURCE
 execution_required:
-  plan_v1_4_validator: REQUIRED_EXACT_HEAD
-  all_python_regressions: REQUIRED_EXACT_HEAD
+  v1_4_plan_and_mutation_tests: REQUIRED_EXACT_HEAD
+  v1_4_inherited_surface_diff: REQUIRED_EXACT_HEAD
+  frozen_v1_3_1_baseline_replay: REQUIRED_EXACT_HEAD
+  current_platform_and_oracle_regressions: REQUIRED_EXACT_HEAD
   rust_1_98_fmt_test_strict_clippy: REQUIRED_EXACT_HEAD
-  inherited_v1_3_1_head_and_merge_matrix: REQUIRED_EXACT_HEAD
+  inherited_v1_3_1_head_and_merge_matrix: REQUIRED_DESIGNATED_RATIFIER_HEAD
   independent_storage_security_review: REQUIRED_EXTERNAL_IDENTITY
 remaining_product_work:
   production_crypto_and_key_custody: OPEN

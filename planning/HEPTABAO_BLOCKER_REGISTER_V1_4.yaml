@@ -7,6 +7,7 @@ source_baseline:
   repository_id: 1349115072
   repository: TrillionniumFoundation/HeptaBao
   commit: a5b9739e46f4bed54dbb3edd0e32400481b3b12f
+  tree: 1727b9498258883b2504c53ac501c415a07218e2
 added_blockers:
 - id: HB-BLK-REPO-018
   class: REPOSITORY_CONTROLLED
@@ -84,9 +85,11 @@ added_blockers:
   state: IMPLEMENTED_SOURCE
   closure_criteria:
   - V1.4 plan manifest status blockers and source agree
-  - all inherited Python suites pass
+  - exact Git delta proves no inherited V1.3.1 file was changed
+  - the complete historical suites pass in a detached frozen-baseline worktree
+  - current V1.4 mutation platform and Oracle regressions pass
   - exact Rust 1.98 fmt workspace tests and strict Clippy pass
-  - inherited V1.3.1 head merge P0 and H02 arbitration remains terminal
+  - a final designated-ratifier head and distinct merge retain P0 H02 and arbitration
   - authority and qualification fields remain false
   required_execution:
   - plan-v1.4-durable-single-node/durable-single-node
@@ -94,6 +97,7 @@ added_blockers:
   - plan-v1.3.1-head-and-merge-closure/arbitrate-head-and-merge-evidence
   evidence:
   - scripts/validate_plan_v1_4.py
+  - scripts/validate_v1_4_inherited_surface.py
   - tests/plan/test_plan_v1_4.py
   - .github/workflows/plan-v1.4-durable-single-node.yml
   closure_receipt_required: true

@@ -42,6 +42,7 @@ EXPECTED_DOCUMENTS = {
     "crates/heptabao-durable-core/Cargo.toml": "RUST_CRATE",
     "crates/heptabao-durable-core/src/lib.rs": "RUST_CRATE",
     "scripts/validate_plan_v1_4.py": "VALIDATOR",
+    "scripts/validate_v1_4_inherited_surface.py": "VALIDATOR",
     "tests/plan/test_plan_v1_4.py": "TEST",
     ".github/workflows/plan-v1.4-durable-single-node.yml": "WORKFLOW",
 }
@@ -376,6 +377,7 @@ def validate_documents(root: Path) -> None:
             "CommitOutcomeUnknown",
             "qualification=false",
             "production_authority=false",
+            "frozen V1.3.1 baseline",
         ],
         "V1.4 plan",
     )
@@ -423,7 +425,8 @@ def validate_workflow(root: Path) -> None:
     commands = "\n".join(str(step.get("run", "")) for step in steps)
     for command in (
         "python scripts/validate_plan_v1_4.py",
-        "python -m unittest discover -s tests/plan -p 'test_*.py' -v",
+        "python scripts/validate_v1_4_inherited_surface.py",
+        "python -m unittest discover -s tests/plan -p 'test_plan_v1_4.py' -v",
         "python -m unittest discover -s tests/platform -p 'test_*.py' -v",
         "python -m unittest discover -s tests/oracle -p 'test_*.py' -v",
         "cargo +1.98.0 fmt --all -- --check",
@@ -431,6 +434,15 @@ def validate_workflow(root: Path) -> None:
         "cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings",
     ):
         require(command in commands, f"V1.4 workflow does not execute required command: {command}")
+    require(
+        'baseline="a5b9739e46f4bed54dbb3edd0e32400481b3b12f"' in commands,
+        "V1.4 workflow does not pin the historical replay baseline",
+    )
+    require("git worktree add --detach" in commands, "V1.4 workflow does not replay the frozen baseline")
+    require(
+        "python -m unittest discover -s tests/plan -p 'test_*.py' -v" in commands,
+        "V1.4 workflow does not run the complete historical plan suite in the frozen worktree",
+    )
     require("contents: write" not in workflow_text, "V1.4 workflow gained write permission")
     require("git push" not in workflow_text, "V1.4 workflow gained source publication")
 
