@@ -82,10 +82,14 @@ added_blockers:
   closure_criteria:
   - permanent V1.4.6 workflow is pull-request-only and read-only
   - exact-head and prospective-merge checks have distinct names and immutable refs
+  - inherited V1.4.5 change-surface proof is bound to immutable V1.4.5 checkpoint while current head and merge regressions still execute
   - materializer workflows diagnostics and apply scripts are absent from candidate source
   evidence:
   - .github/workflows/plan-v1.4.6-authoritative-recovery-closure.yml
+  - .github/workflows/plan-v1.4.5-security-invariant-closure.yml
   - scripts/validate_plan_v1_4_6.py
+  - scripts/validate_plan_v1_4_5.py
+  - tests/plan/test_plan_v1_4_5.py
   closure_receipt_required: true
 - id: HB-BLK-REPO-055
   class: REPOSITORY_CONTROLLED
