@@ -229,6 +229,14 @@ pub trait DurableJournal: fmt::Debug + Send {
 
     fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error>;
 
+    /// Re-establishes the provider's authoritative in-memory view after an
+    /// append whose outcome was unknown, then returns the fully authenticated
+    /// committed prefix. Providers with cached tails or exact-next orphan
+    /// records must override this method and reconcile them fail-closed.
+    fn recover_authoritative(&mut self) -> Result<Vec<JournalRecord>, Self::Error> {
+        self.replay()
+    }
+
     fn append(
         &mut self,
         expected_tail: Option<JournalSequence>,

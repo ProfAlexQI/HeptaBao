@@ -328,8 +328,10 @@ impl<J: DurableJournal> fmt::Debug for KeyRingLedger<J> {
 }
 
 impl<J: DurableJournal> KeyRingLedger<J> {
-    pub fn open(journal: J) -> Result<Self, KeyLifecycleError<J::Error>> {
-        let records = journal.replay().map_err(KeyLifecycleError::Journal)?;
+    pub fn open(mut journal: J) -> Result<Self, KeyLifecycleError<J::Error>> {
+        let records = journal
+            .recover_authoritative()
+            .map_err(KeyLifecycleError::Journal)?;
         let mut state = KeyRingState::default();
         for record in records {
             let event = KeyRingEvent::decode(record.payload.as_bytes())
@@ -425,8 +427,33 @@ impl<J: DurableJournal> KeyRingLedger<J> {
         )?)
     }
 
+    pub fn recover_after_append_failure(&mut self) -> Result<(), KeyLifecycleError<J::Error>> {
+        if !self.replay_required() {
+            return Err(KeyLifecycleError::RecoveryNotRequired);
+        }
+        let records = self
+            .journal
+            .recover_authoritative()
+            .map_err(KeyLifecycleError::Journal)?;
+        let mut state = KeyRingState::default();
+        for record in records {
+            let event = KeyRingEvent::decode(record.payload.as_bytes())
+                .map_err(KeyLifecycleError::Contract)?;
+            state.apply(&event).map_err(KeyLifecycleError::Contract)?;
+        }
+        self.state = state;
+        self.write_state = KeyLedgerWriteState::Writable;
+        Ok(())
+    }
+
     pub fn reopen(self) -> Result<Self, KeyLifecycleError<J::Error>> {
-        Self::open(self.journal)
+        let mut ledger = self;
+        if ledger.replay_required() {
+            ledger.recover_after_append_failure()?;
+            Ok(ledger)
+        } else {
+            Self::open(ledger.journal)
+        }
     }
 
     fn record(
@@ -466,6 +493,7 @@ where
     Contract(KeyLifecycleContractError),
     Journal(E),
     ReplayRequiredAfterAppendFailure,
+    RecoveryNotRequired,
 }
 
 impl<E> fmt::Display for KeyLifecycleError<E>
@@ -477,7 +505,10 @@ where
             Self::Contract(error) => write!(formatter, "key lifecycle contract failure: {error}"),
             Self::Journal(error) => write!(formatter, "key lifecycle journal failure: {error}"),
             Self::ReplayRequiredAfterAppendFailure => formatter.write_str(
-                "key lifecycle append outcome was unknown; close and reopen before writing",
+                "key lifecycle append outcome was unknown; recover authoritative replay before writing",
+            ),
+            Self::RecoveryNotRequired => formatter.write_str(
+                "key lifecycle recovery was requested while the ledger was writable",
             ),
         }
     }
@@ -800,6 +831,9 @@ mod tests {
             Err(KeyLifecycleError::ReplayRequiredAfterAppendFailure)
         ));
 
+        ledger.recover_after_append_failure()?;
+        assert_eq!(ledger.write_state(), KeyLedgerWriteState::Writable);
+        assert_eq!(ledger.state().active_epoch(), Some(KeyEpoch::INITIAL));
         let reopened = ledger.reopen()?;
         assert_eq!(reopened.state().active_epoch(), Some(KeyEpoch::INITIAL));
         Ok(())

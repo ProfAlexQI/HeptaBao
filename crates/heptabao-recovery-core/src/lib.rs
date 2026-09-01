@@ -637,7 +637,7 @@ impl RecoveryRestorer {
                 RecoveryRestoreError::Authenticator(error)
             }
         })?;
-        let anchored_checkpoint = anchor.verify_current(verified.checkpoint()).map_err(|_| {
+        anchor.verify_current(verified.checkpoint()).map_err(|_| {
             RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
         })?;
         if !target.is_empty().map_err(RecoveryRestoreError::Target)? {
@@ -645,12 +645,10 @@ impl RecoveryRestorer {
                 RecoveryContractError::TargetNotEmpty,
             ));
         }
-        let anchored_checkpoint = anchor
-            .verify_current(anchored_checkpoint.checkpoint())
-            .map_err(|_| {
-                RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
-            })?;
-        let anchor_revision = anchored_checkpoint.checkpoint().revision();
+        let anchored_checkpoint = anchor.verify_current(verified.checkpoint()).map_err(|_| {
+            RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
+        })?;
+        let anchor_revision = anchored_checkpoint.revision();
         let expected = RestoreReceipt {
             archive_id: verified.archive_id().clone(),
             observation: verified.observation().clone(),

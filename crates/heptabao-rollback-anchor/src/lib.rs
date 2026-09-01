@@ -249,8 +249,16 @@ pub struct VerifiedRecoveryCheckpoint {
 }
 
 impl VerifiedRecoveryCheckpoint {
-    pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
-        &self.checkpoint
+    pub const fn revision(&self) -> AnchorRevision {
+        self.checkpoint.revision()
+    }
+
+    pub const fn digest(&self) -> CheckpointDigest {
+        self.checkpoint.digest()
+    }
+
+    pub const fn observation(&self) -> &CheckpointObservation {
+        self.checkpoint.observation()
     }
 }
 

@@ -438,8 +438,10 @@ impl<J: DurableJournal> fmt::Debug for OperationLedger<J> {
 }
 
 impl<J: DurableJournal> OperationLedger<J> {
-    pub fn open(journal: J) -> Result<Self, OperationLedgerError<J::Error>> {
-        let records = journal.replay().map_err(OperationLedgerError::Journal)?;
+    pub fn open(mut journal: J) -> Result<Self, OperationLedgerError<J::Error>> {
+        let records = journal
+            .recover_authoritative()
+            .map_err(OperationLedgerError::Journal)?;
         let mut operations = BTreeMap::new();
         for record in records {
             let event = OperationEvent::decode(record.payload.as_bytes())
@@ -506,8 +508,33 @@ impl<J: DurableJournal> OperationLedger<J> {
         Ok(receipt)
     }
 
+    pub fn recover_after_append_failure(&mut self) -> Result<(), OperationLedgerError<J::Error>> {
+        if !self.replay_required() {
+            return Err(OperationLedgerError::RecoveryNotRequired);
+        }
+        let records = self
+            .journal
+            .recover_authoritative()
+            .map_err(OperationLedgerError::Journal)?;
+        let mut operations = BTreeMap::new();
+        for record in records {
+            let event = OperationEvent::decode(record.payload.as_bytes())
+                .map_err(OperationLedgerError::Contract)?;
+            apply_replayed_event(&mut operations, event).map_err(OperationLedgerError::Contract)?;
+        }
+        self.operations = operations;
+        self.write_state = LedgerWriteState::Writable;
+        Ok(())
+    }
+
     pub fn reopen(self) -> Result<Self, OperationLedgerError<J::Error>> {
-        Self::open(self.journal)
+        let mut ledger = self;
+        if ledger.replay_required() {
+            ledger.recover_after_append_failure()?;
+            Ok(ledger)
+        } else {
+            Self::open(ledger.journal)
+        }
     }
 }
 
@@ -519,6 +546,7 @@ where
     Contract(OperationContractError),
     Journal(E),
     ReplayRequiredAfterAppendFailure,
+    RecoveryNotRequired,
 }
 
 impl<E> fmt::Display for OperationLedgerError<E>
@@ -532,8 +560,10 @@ where
             }
             Self::Journal(error) => write!(formatter, "durable journal failure: {error}"),
             Self::ReplayRequiredAfterAppendFailure => formatter.write_str(
-                "journal append outcome was unknown; close and reopen the ledger before writing",
+                "journal append outcome was unknown; recover authoritative replay before writing",
             ),
+            Self::RecoveryNotRequired => formatter
+                .write_str("operation ledger recovery was requested while the ledger was writable"),
         }
     }
 }
@@ -1179,9 +1209,13 @@ mod tests {
                     ));
                     assert_eq!(ledger.write_state(), LedgerWriteState::ReplayRequired);
                     assert!(matches!(
-                        ledger.record(event),
+                        ledger.record(event.clone()),
                         Err(OperationLedgerError::ReplayRequiredAfterAppendFailure)
                     ));
+                    assert!(ledger.recover_after_append_failure().is_ok());
+                    assert_eq!(ledger.write_state(), LedgerWriteState::Writable);
+                    assert_eq!(ledger.operation_count(), 0);
+                    assert!(ledger.record(event).is_ok());
                 }
             }
         }

@@ -69,6 +69,14 @@ where
     B: BarrierProvider,
     J: DurableJournal,
 {
+    pub fn recover_ledger_after_append_failure(
+        &mut self,
+    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {
+        self.ledger
+            .recover_after_append_failure()
+            .map_err(JournaledCoreError::Ledger)
+    }
+
     pub fn persist_mutation(
         &mut self,
         operation_id: OperationId,
