@@ -10,8 +10,8 @@ permissions:
 
 jobs:
   materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-phase-a-fixed]' }}"
-    runs-on: ubuntu-latest
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-phase-a-fixed-2]' }}"
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,6 +21,7 @@ jobs:
       - name: Extract and apply audited patch
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
@@ -35,20 +36,30 @@ jobs:
           exec(compile(script, 'materialize-v1.4.6-phase-a.py', 'exec'))
           PY
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt clippy
+      - name: Install exact Rust 1.98 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
 
       - name: Validate source and hostile tests
+        shell: bash
         run: |
+          set -euo pipefail
           python3 -m pip install --disable-pip-version-check pyyaml
+          cargo +1.98.0 fmt --all
           cargo +1.98.0 fmt --all -- --check
-          cargo +1.98.0 test --workspace --all-targets
-          cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
           python3 scripts/validate_plan_v1_4_5.py --root .
           python3 tests/plan/test_plan_v1_4_5.py
 
       - name: Commit materialized source
+        shell: bash
         run: |
+          set -euo pipefail
           git config user.name "heptabao-v1.4.6-materializer"
           git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
           git add crates
