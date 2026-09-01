@@ -1,0 +1,58 @@
+name: v1.4.2-exact-source-export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.4.2-recovery-foundation-v1
+    paths:
+      - .github/workflows/v1.4.2-exact-source-export.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact export head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind base and create deterministic exact source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          export_head="${{ github.event.pull_request.head.sha || github.sha }}"
+          base_head="34e8dc0caceb84288d4ef61f79cd7ca062718b63"
+          test "$(git rev-parse HEAD)" = "$export_head"
+          test "$(git rev-parse HEAD^)" = "$base_head"
+          test "$(git diff --name-only "$base_head" HEAD)" = ".github/workflows/v1.4.2-exact-source-export.yml"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'repository=%s\nbase_commit=%s\nbase_tree=%s\nexport_commit=%s\nrun_id=%s\nrun_attempt=%s\n' \
+            "$GITHUB_REPOSITORY" "$base_head" "$(git rev-parse "$base_head^{tree}")" \
+            "$export_head" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            >"$RUNNER_TEMP/source-binding.txt"
+          git archive --format=tar --prefix=HeptaBao/ "$base_head" \
+            >"$RUNNER_TEMP/heptabao-v1.4.2-exact-source.tar"
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum heptabao-v1.4.2-exact-source.tar \
+              >heptabao-v1.4.2-exact-source.tar.sha256
+          )
+
+      - name: Upload exact V1.4.2 source snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.2-exact-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source-binding.txt
+            ${{ runner.temp }}/heptabao-v1.4.2-exact-source.tar
+            ${{ runner.temp }}/heptabao-v1.4.2-exact-source.tar.sha256
+          if-no-files-found: error
+          retention-days: 3
