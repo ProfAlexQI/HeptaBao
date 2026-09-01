@@ -1,0 +1,121 @@
+name: v1.4-source-blob-materializer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.3-gap-closure-v2
+    paths:
+      - .github/workflows/v1.4-source-blob-materializer.yml
+      - crates/heptabao-storage-api/src/lib.rs
+      - crates/heptabao-barrier-api/src/lib.rs
+      - crates/heptabao-durable-core/src/lib.rs
+      - crates/heptabao-single-node-store/src/lib.rs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  materialize-unreferenced-blobs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact source head without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install Rust 1.98 formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+
+      - name: Produce exact formatted and Rust-1.98-compatible source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/heptabao-storage-api/src/lib.rs')
+          source = path.read_text(encoding='utf-8')
+          before = '    pub const fn new(value: [u8; 32]) -> Result<Self, StorageContractError> {'
+          after = '    pub fn new(value: [u8; 32]) -> Result<Self, StorageContractError> {'
+          if source.count(before) != 1:
+              raise SystemExit('StateDigest::new source shape drifted')
+          path.write_text(source.replace(before, after, 1), encoding='utf-8')
+          PY
+          cargo +1.98.0 fmt --all
+
+      - name: Create unreferenced Git blobs and emit digest-bound manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/v1.4-source-blobs.tsv"
+          : >"$output"
+          create_blob() {
+            local path="$1"
+            local payload="$RUNNER_TEMP/blob-payload.json"
+            local response="$RUNNER_TEMP/blob-response.json"
+            python - "$path" "$payload" <<'PY'
+          import base64
+          import json
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1]).read_bytes()
+          Path(sys.argv[2]).write_text(
+              json.dumps({
+                  'content': base64.b64encode(source).decode('ascii'),
+                  'encoding': 'base64',
+              }, separators=(',', ':')),
+              encoding='utf-8',
+          )
+          PY
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --data-binary "@$payload" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/git/blobs" \
+              >"$response"
+            local sha
+            sha="$(python - "$response" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          value = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          sha = value.get('sha')
+          if not isinstance(sha, str) or len(sha) != 40:
+              raise SystemExit('GitHub did not return a blob SHA')
+          print(sha)
+          PY
+          )"
+            local local_sha
+            local_sha="$(git hash-object "$path")"
+            test "$sha" = "$local_sha"
+            printf '%s\t%s\n' "$path" "$sha" | tee -a "$output"
+          }
+          create_blob crates/heptabao-storage-api/src/lib.rs
+          create_blob crates/heptabao-barrier-api/src/lib.rs
+          create_blob crates/heptabao-durable-core/src/lib.rs
+          create_blob crates/heptabao-single-node-store/src/lib.rs
+          sha256sum "$output"
