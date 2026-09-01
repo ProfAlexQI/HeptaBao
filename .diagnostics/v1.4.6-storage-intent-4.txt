@@ -1,0 +1,221 @@
+
+===== cargo-test =====
+   Compiling heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+   Compiling heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+   Compiling heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+   Compiling heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+   Compiling heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+   Compiling heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+   Compiling heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+   Compiling heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+   Compiling heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+   Compiling heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+   Compiling heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+   Compiling heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+   Compiling heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+   Compiling heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+   Compiling heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+error[E0369]: binary operation `==` cannot be applied to type `Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1171:25
+     |
+1171 | /                         assert_eq!(
+1172 | |                             store.recover_commit(intent),
+1173 | |                             Ok(CommitRecovery::NotCommitted)
+1174 | |                         );
+     | |                         ^
+     | |                         |
+     | |_________________________Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                           Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `PartialEq` might be missing for `FileStoreError<TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `FileStoreError<TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1177:25
+     |
+1177 | /                         assert_eq!(
+1178 | |                             store.recover_commit(intent),
+1179 | |                             Ok(CommitRecovery::Committed(intent.receipt()))
+1180 | |                         );
+     | |                         ^
+     | |                         |
+     | |_________________________Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                           Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `PartialEq` might be missing for `FileStoreError<TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `FileStoreError<TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1217:29
+     |
+1217 | / ...                   assert_eq!(
+1218 | | ...                       store.recover_commit(intent),
+1219 | | ...                       Ok(CommitRecovery::Committed(intent.receipt()))
+1220 | | ...                   );
+     | |                       ^
+     | |                       |
+     | |_______________________Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                         Result<heptabao_storage_api::CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `PartialEq` might be missing for `FileStoreError<TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `FileStoreError<TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `heptabao-single-node-store` (lib test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+exit_status=101
+
+===== cargo-clippy =====
+    Checking heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+    Checking heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+    Checking heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+    Checking heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+    Checking heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+    Checking heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+    Checking heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+    Checking heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+    Checking heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+    Checking heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+    Checking heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+    Checking heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+    Checking heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+    Checking heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+    Checking heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+error[E0369]: binary operation `==` cannot be applied to type `Result<CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1171:25
+     |
+1171 | /                         assert_eq!(
+1172 | |                             store.recover_commit(intent),
+1173 | |                             Ok(CommitRecovery::NotCommitted)
+1174 | |                         );
+     | |                         ^
+     | |                         |
+     | |_________________________Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                           Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `std::cmp::PartialEq` might be missing for `FileStoreError<tests::TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `std::cmp::PartialEq`
+     = note: the full name for the type has been written to '/home/runner/work/HeptaBao/HeptaBao/target/debug/deps/heptabao_single_node_store-f1c41b66b17aaf93.long-type-6320044497360400540.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `FileStoreError<tests::TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `Result<CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1177:25
+     |
+1177 | /                         assert_eq!(
+1178 | |                             store.recover_commit(intent),
+1179 | |                             Ok(CommitRecovery::Committed(intent.receipt()))
+1180 | |                         );
+     | |                         ^
+     | |                         |
+     | |_________________________Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                           Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `std::cmp::PartialEq` might be missing for `FileStoreError<tests::TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `std::cmp::PartialEq`
+     = note: the full name for the type has been written to '/home/runner/work/HeptaBao/HeptaBao/target/debug/deps/heptabao_single_node_store-f1c41b66b17aaf93.long-type-6320044497360400540.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `FileStoreError<tests::TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `Result<CommitRecovery, FileStoreError<TestIntegrityError>>`
+    --> crates/heptabao-single-node-store/src/lib.rs:1217:29
+     |
+1217 | / ...                   assert_eq!(
+1218 | | ...                       store.recover_commit(intent),
+1219 | | ...                       Ok(CommitRecovery::Committed(intent.receipt()))
+1220 | | ...                   );
+     | |                       ^
+     | |                       |
+     | |_______________________Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |                         Result<CommitRecovery, FileStoreError<TestIntegrityError>>
+     |
+note: an implementation of `std::cmp::PartialEq` might be missing for `FileStoreError<tests::TestIntegrityError>`
+    --> crates/heptabao-single-node-store/src/lib.rs:519:1
+     |
+ 519 | pub enum FileStoreError<E>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `std::cmp::PartialEq`
+     = note: the full name for the type has been written to '/home/runner/work/HeptaBao/HeptaBao/target/debug/deps/heptabao_single_node_store-f1c41b66b17aaf93.long-type-6320044497360400540.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `FileStoreError<tests::TestIntegrityError>` with `#[derive(PartialEq)]`
+     |
+ 519 + #[derive(PartialEq)]
+ 520 | pub enum FileStoreError<E>
+     |
+
+    Checking heptabao-oracle-observer v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-oracle-observer)
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `heptabao-single-node-store` (lib test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: this `if` statement can be collapsed
+   --> crates/heptabao-single-node-store/src/lib.rs:380:17
+    |
+380 | /                 if intent.previous().is_none() && !marker_exists {
+381 | |                     if self.publish_marker().is_err() {
+382 | |                         return Err(FileStoreError::CommitOutcomeUnknown);
+383 | |                     }
+384 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+380 ~                 if intent.previous().is_none() && !marker_exists
+381 ~                     && self.publish_marker().is_err() {
+382 |                         return Err(FileStoreError::CommitOutcomeUnknown);
+383 ~                     }
+    |
+
+error: could not compile `heptabao-single-node-store` (lib) due to 1 previous error
+exit_status=101
+
+===== validator-v145 =====
+V1.4.5 security invariant validation: PASS
+exit_status=0
+
+===== hostile-v145 =====
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 0.453s
+
+OK
+exit_status=0
