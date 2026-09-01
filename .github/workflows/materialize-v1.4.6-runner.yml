@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-phase-a-fixed-2]' }}"
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-storage-intent]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -18,23 +18,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Extract and apply audited patch
+      - name: Apply audited storage-intent patch
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source = Path('.github/workflows/materialize-v1.4.6-phase-a.yml').read_text(encoding='utf-8')
-          prefix = "          python3 - <<'PY'\n"
-          suffix = "\n          PY\n"
-          payload = source.split(prefix, 1)[1].split(suffix, 1)[0]
-          script = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in payload.splitlines()
-          )
-          exec(compile(script, 'materialize-v1.4.6-phase-a.py', 'exec'))
-          PY
+          python3 scripts/apply_v1_4_6_storage_intent.py
 
       - name: Install exact Rust 1.98 toolchain
         shell: bash
@@ -63,5 +51,5 @@ jobs:
           git config user.name "heptabao-v1.4.6-materializer"
           git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
           git add crates
-          git commit -m "fix(v1.4.6): make journal poison recoverable"
+          git commit -m "feat(v1.4.6): bind durable mutations to storage intent"
           git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
