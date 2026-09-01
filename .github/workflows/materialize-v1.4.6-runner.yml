@@ -1,0 +1,56 @@
+name: Materialize V1.4.6 authoritative recovery runner
+
+on:
+  push:
+    branches:
+      - codex/plan-v1.4.6-authoritative-recovery-closure-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-phase-a-fixed]' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Extract and apply audited patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/materialize-v1.4.6-phase-a.yml').read_text(encoding='utf-8')
+          prefix = "          python3 - <<'PY'\n"
+          suffix = "\n          PY\n"
+          payload = source.split(prefix, 1)[1].split(suffix, 1)[0]
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in payload.splitlines()
+          )
+          exec(compile(script, 'materialize-v1.4.6-phase-a.py', 'exec'))
+          PY
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt clippy
+
+      - name: Validate source and hostile tests
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --workspace --all-targets
+          cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
+          python3 scripts/validate_plan_v1_4_5.py --root .
+          python3 tests/plan/test_plan_v1_4_5.py
+
+      - name: Commit materialized source
+        run: |
+          git config user.name "heptabao-v1.4.6-materializer"
+          git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
+          git add crates
+          git commit -m "fix(v1.4.6): make journal poison recoverable"
+          git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
