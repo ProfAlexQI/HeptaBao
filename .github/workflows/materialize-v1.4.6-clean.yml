@@ -183,7 +183,7 @@ jobs:
           test -z "$(find scripts -maxdepth 1 -type f \( -name 'apply_v1_4_6*.py' -o -name 'fix_apply_v1_4_6*.py' \) -print)"
           test -z "$(find .github/workflows -maxdepth 1 -type f -name 'materialize-v1.4.6*.yml' -print)"
 
-      - name: Publish tested commit to staging ref
+      - name: Create tested commit and export bundle
         working-directory: repo
         shell: bash
         run: |
@@ -193,6 +193,26 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "fix(v1.4.6): close authoritative recovery blockers"
+          git bundle create "$RUNNER_TEMP/heptabao-v1.4.6-clean.bundle" HEAD
+          printf 'commit=%s\ntree=%s\nparent=%s\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$(git rev-parse HEAD^)" \
+            >"$RUNNER_TEMP/heptabao-v1.4.6-clean.txt"
+
+      - name: Upload tested clean candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: heptabao-v1.4.6-clean-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/heptabao-v1.4.6-clean.bundle
+            ${{ runner.temp }}/heptabao-v1.4.6-clean.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish tested commit to staging ref
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
           git push --force origin HEAD:refs/heads/exec/materialized-v1.4.6-authoritative-recovery-v1
           {
             echo '## Clean V1.4.6 candidate'
