@@ -7,18 +7,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use heptabao_barrier_api::{
-    BarrierContext, BarrierProvider, KeyEpoch, SealedEnvelope, SecretState,
-    SEALED_ENVELOPE_VERSION,
+    BarrierContext, BarrierProvider, KeyEpoch, SEALED_ENVELOPE_VERSION, SealedEnvelope, SecretState,
 };
 use heptabao_durable_core::DurableStateEngine;
 use heptabao_journal_api::{
-    AppendFailureDisposition, AppendReceipt, AuthenticatorId, DurableJournal,
-    JournalAuthenticator, JournalDomain, JournalOpenMode, JournalPayload, JournalRecord,
-    JournalSequence, JournalTag, JournalTail,
+    AppendFailureDisposition, AppendReceipt, AuthenticatorId, DurableJournal, JournalAuthenticator,
+    JournalDomain, JournalOpenMode, JournalPayload, JournalRecord, JournalSequence, JournalTag,
+    JournalTail,
 };
-use heptabao_journaled_core::{
-    DurableIntentRecovery, JournaledCoreError, JournaledDurableCore,
-};
+use heptabao_journaled_core::{DurableIntentRecovery, JournaledCoreError, JournaledDurableCore};
 use heptabao_operation_ledger::{
     OperationDigest, OperationId, OperationLedger, OperationPhase, RetryDirective,
 };
@@ -326,10 +323,7 @@ struct FaultJournal {
 }
 
 impl FaultJournal {
-    const fn new(
-        inner: FileDurableJournal<TestJournalAuthenticator>,
-        fault: JournalFault,
-    ) -> Self {
+    const fn new(inner: FileDurableJournal<TestJournalAuthenticator>, fault: JournalFault) -> Self {
         Self {
             inner,
             fault,
@@ -452,11 +446,8 @@ fn create_core(
     store_fault: StoreFault,
     journal_fault: JournalFault,
 ) -> Result<TestCore, Box<dyn Error>> {
-    let store = FileGenerationStore::create_new(
-        tree.store_path(),
-        store_domain()?,
-        TestIntegrity::new()?,
-    )?;
+    let store =
+        FileGenerationStore::create_new(tree.store_path(), store_domain()?, TestIntegrity::new()?)?;
     let journal = FileDurableJournal::create_new(
         tree.journal_path(),
         journal_domain()?,
@@ -477,11 +468,7 @@ fn reopen_core(tree: &TempTree, store_initialized: bool) -> Result<TestCore, Box
             TestIntegrity::new()?,
         )?
     } else {
-        FileGenerationStore::create_new(
-            tree.store_path(),
-            store_domain()?,
-            TestIntegrity::new()?,
-        )?
+        FileGenerationStore::create_new(tree.store_path(), store_domain()?, TestIntegrity::new()?)?
     };
     let journal = FileDurableJournal::reopen_existing(
         tree.journal_path(),
@@ -503,8 +490,8 @@ fn operation(value: u8) -> Result<(OperationId, OperationDigest), Box<dyn Error>
 }
 
 #[test]
-fn storage_outcome_unknown_recovers_from_persisted_intent_after_reopen(
-) -> Result<(), Box<dyn Error>> {
+fn storage_outcome_unknown_recovers_from_persisted_intent_after_reopen()
+-> Result<(), Box<dyn Error>> {
     let tree = TempTree::new()?;
     let mut core = create_core(&tree, StoreFault::AfterCommitOnce, JournalFault::None)?;
     let (operation_id, request_digest) = operation(1)?;
@@ -540,14 +527,10 @@ fn storage_outcome_unknown_recovers_from_persisted_intent_after_reopen(
 }
 
 #[test]
-fn journal_outcome_unknown_after_state_event_is_idempotent_after_reopen(
-) -> Result<(), Box<dyn Error>> {
+fn journal_outcome_unknown_after_state_event_is_idempotent_after_reopen()
+-> Result<(), Box<dyn Error>> {
     let tree = TempTree::new()?;
-    let mut core = create_core(
-        &tree,
-        StoreFault::None,
-        JournalFault::AfterAppendOnce(3),
-    )?;
+    let mut core = create_core(&tree, StoreFault::None, JournalFault::AfterAppendOnce(3))?;
     let (operation_id, request_digest) = operation(2)?;
     let result = core.persist_mutation(
         operation_id.clone(),
@@ -565,7 +548,10 @@ fn journal_outcome_unknown_after_state_event_is_idempotent_after_reopen(
 
     let mut reopened = reopen_core(&tree, true)?;
     assert_eq!(
-        reopened.ledger().current(&operation_id).map(|event| event.phase()),
+        reopened
+            .ledger()
+            .current(&operation_id)
+            .map(|event| event.phase()),
         Some(OperationPhase::StateCommitted)
     );
     assert!(matches!(
@@ -577,14 +563,10 @@ fn journal_outcome_unknown_after_state_event_is_idempotent_after_reopen(
 }
 
 #[test]
-fn definitely_missing_state_event_is_reconstructed_from_file_store_after_reopen(
-) -> Result<(), Box<dyn Error>> {
+fn definitely_missing_state_event_is_reconstructed_from_file_store_after_reopen()
+-> Result<(), Box<dyn Error>> {
     let tree = TempTree::new()?;
-    let mut core = create_core(
-        &tree,
-        StoreFault::None,
-        JournalFault::BeforeAppendOnce(3),
-    )?;
+    let mut core = create_core(&tree, StoreFault::None, JournalFault::BeforeAppendOnce(3))?;
     let (operation_id, request_digest) = operation(3)?;
     let result = core.persist_mutation(
         operation_id.clone(),
@@ -611,15 +593,17 @@ fn definitely_missing_state_event_is_reconstructed_from_file_store_after_reopen(
             if receipt.committed == Generation::INITIAL
     ));
     assert_eq!(
-        reopened.ledger().current(&operation_id).map(|event| event.phase()),
+        reopened
+            .ledger()
+            .current(&operation_id)
+            .map(|event| event.phase()),
         Some(OperationPhase::StateCommitted)
     );
     Ok(())
 }
 
 #[test]
-fn definitely_uncommitted_file_intent_is_aborted_after_reopen(
-) -> Result<(), Box<dyn Error>> {
+fn definitely_uncommitted_file_intent_is_aborted_after_reopen() -> Result<(), Box<dyn Error>> {
     let tree = TempTree::new()?;
     let mut core = create_core(&tree, StoreFault::BeforeCommitOnce, JournalFault::None)?;
     let (operation_id, request_digest) = operation(4)?;
