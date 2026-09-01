@@ -102,44 +102,7 @@ jobs:
           rustc +1.98.0 --version --verbose
           cargo +1.98.0 --version --verbose
 
-      - name: Materialize exact Rust 1.98 formatter output for source repair
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifact="$RUNNER_TEMP/v1.4-rustfmt"
-          mkdir -p \
-            "$artifact/crates/heptabao-barrier-api/src" \
-            "$artifact/crates/heptabao-durable-core/src" \
-            "$artifact/crates/heptabao-single-node-store/src"
-          cargo +1.98.0 fmt --all
-          cp crates/heptabao-barrier-api/src/lib.rs \
-            "$artifact/crates/heptabao-barrier-api/src/lib.rs"
-          cp crates/heptabao-durable-core/src/lib.rs \
-            "$artifact/crates/heptabao-durable-core/src/lib.rs"
-          cp crates/heptabao-single-node-store/src/lib.rs \
-            "$artifact/crates/heptabao-single-node-store/src/lib.rs"
-          git diff --binary -- \
-            crates/heptabao-barrier-api/src/lib.rs \
-            crates/heptabao-durable-core/src/lib.rs \
-            crates/heptabao-single-node-store/src/lib.rs \
-            >"$artifact/rustfmt.patch"
-          git diff --name-only -- \
-            crates/heptabao-barrier-api/src/lib.rs \
-            crates/heptabao-durable-core/src/lib.rs \
-            crates/heptabao-single-node-store/src/lib.rs \
-            >"$artifact/changed-files.txt"
-          test -s "$artifact/rustfmt.patch"
-
-      - name: Upload exact Rust 1.98 formatted source
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: v1.4-rustfmt-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/v1.4-rustfmt/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Compile test and strictly lint the formatted diagnostic workspace
+      - name: Format test and strictly lint the complete workspace
         shell: bash
         run: |
           set -euo pipefail
@@ -147,10 +110,6 @@ jobs:
           cargo +1.98.0 fmt --all -- --check
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
-          git diff --exit-code -- \
-            crates/heptabao-barrier-api/src/lib.rs \
-            crates/heptabao-durable-core/src/lib.rs \
-            crates/heptabao-single-node-store/src/lib.rs
 
       - name: Confirm V1.4 remains non-authoritative
         shell: bash

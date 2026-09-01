@@ -187,10 +187,8 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
     }
 
     fn publish_marker(&self) -> Result<(), FileStoreError<P::Error>> {
-        let mut bytes = encode_marker(
-            self.domain.as_str(),
-            self.integrity.algorithm_id().as_str(),
-        )?;
+        let mut bytes =
+            encode_marker(self.domain.as_str(), self.integrity.algorithm_id().as_str())?;
         let result = atomic_replace(&self.root, MARKER_NAME, &bytes);
         bytes.fill(0);
         match result {
@@ -389,9 +387,7 @@ where
             Self::Io(error) => write!(formatter, "storage I/O failure: {error}"),
             Self::RootMustBeAbsolute => formatter.write_str("storage root must be absolute"),
             Self::UnsafeRoot => formatter.write_str("storage root path is unsafe"),
-            Self::DirectoryNotEmpty => {
-                formatter.write_str("create-new storage root must be empty")
-            }
+            Self::DirectoryNotEmpty => formatter.write_str("create-new storage root must be empty"),
             Self::AlreadyInitialized => formatter.write_str("storage root is already initialized"),
             Self::UnexpectedInitializedState => {
                 formatter.write_str("storage root changed after create-new open")
@@ -587,7 +583,9 @@ where
         .ok_or(FileStoreError::CorruptState)?;
     let mut limited = file.take(take_bound);
     let mut bytes = Vec::new();
-    limited.read_to_end(&mut bytes).map_err(FileStoreError::Io)?;
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(FileStoreError::Io)?;
     if bytes.len() > maximum {
         bytes.fill(0);
         return Err(FileStoreError::CorruptState);
@@ -596,16 +594,13 @@ where
 }
 
 fn write_new_file_and_sync_parent(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.flush()?;
     file.sync_all()?;
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "generation has no parent")
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "generation has no parent"))?;
     sync_directory(parent)
 }
 
@@ -660,8 +655,7 @@ where
     E: Error + Send + Sync + 'static,
 {
     let domain_len = u16::try_from(domain.len()).map_err(|_| FileStoreError::CorruptState)?;
-    let algorithm_len =
-        u16::try_from(algorithm.len()).map_err(|_| FileStoreError::CorruptState)?;
+    let algorithm_len = u16::try_from(algorithm.len()).map_err(|_| FileStoreError::CorruptState)?;
     let mut output = Vec::new();
     output.extend_from_slice(MARKER_MAGIC);
     output.extend_from_slice(&domain_len.to_be_bytes());
@@ -709,8 +703,8 @@ fn decode_current(bytes: &[u8]) -> Result<CurrentRecord, DecodeError> {
     if cursor.take(CURRENT_MAGIC.len())? != CURRENT_MAGIC {
         return Err(DecodeError::InvalidMagic);
     }
-    let generation = Generation::new(cursor.take_u64()?)
-        .map_err(|_| DecodeError::InvalidGeneration)?;
+    let generation =
+        Generation::new(cursor.take_u64()?).map_err(|_| DecodeError::InvalidGeneration)?;
     let digest_bytes = cursor.take(32)?;
     let mut digest = [0_u8; 32];
     digest.copy_from_slice(digest_bytes);
@@ -732,8 +726,7 @@ where
     E: Error + Send + Sync + 'static,
 {
     let domain_len = u16::try_from(domain.len()).map_err(|_| FileStoreError::CorruptState)?;
-    let algorithm_len =
-        u16::try_from(algorithm.len()).map_err(|_| FileStoreError::CorruptState)?;
+    let algorithm_len = u16::try_from(algorithm.len()).map_err(|_| FileStoreError::CorruptState)?;
     let state_len = u64::try_from(state.len()).map_err(|_| FileStoreError::CorruptState)?;
     let mut output = Vec::new();
     output.extend_from_slice(BUNDLE_MAGIC);
@@ -753,8 +746,8 @@ fn decode_bundle(bytes: &[u8]) -> Result<DecodedBundle, DecodeError> {
     if cursor.take(BUNDLE_MAGIC.len())? != BUNDLE_MAGIC {
         return Err(DecodeError::InvalidMagic);
     }
-    let generation = Generation::new(cursor.take_u64()?)
-        .map_err(|_| DecodeError::InvalidGeneration)?;
+    let generation =
+        Generation::new(cursor.take_u64()?).map_err(|_| DecodeError::InvalidGeneration)?;
     let domain_len = usize::from(cursor.take_u16()?);
     let algorithm_len = usize::from(cursor.take_u16()?);
     let state_len = usize::try_from(cursor.take_u64()?).map_err(|_| DecodeError::InvalidLength)?;
@@ -955,11 +948,12 @@ mod tests {
                 }
             }
             let reopened = TestIntegrity::new().and_then(|integrity| {
-                FileGenerationStore::reopen_existing(&temporary.path, domain, integrity)
-                    .map_err(|error| match error {
+                FileGenerationStore::reopen_existing(&temporary.path, domain, integrity).map_err(
+                    |error| match error {
                         FileStoreError::Contract(contract) => contract,
                         _ => StorageContractError::InvalidOpaqueState,
-                    })
+                    },
+                )
             });
             assert!(reopened.is_ok());
             if let Ok(reopened) = reopened {

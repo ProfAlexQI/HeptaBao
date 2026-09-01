@@ -111,7 +111,7 @@ impl Generation {
 pub struct StateDigest([u8; 32]);
 
 impl StateDigest {
-    pub const fn new(value: [u8; 32]) -> Result<Self, StorageContractError> {
+    pub fn new(value: [u8; 32]) -> Result<Self, StorageContractError> {
         if value == [0; 32] {
             return Err(StorageContractError::ZeroStateDigest);
         }

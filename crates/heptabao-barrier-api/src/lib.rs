@@ -252,8 +252,8 @@ impl SealedEnvelope {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, BarrierContractError> {
-        let nonce_len = u32::try_from(self.nonce.len())
-            .map_err(|_| BarrierContractError::LengthOverflow)?;
+        let nonce_len =
+            u32::try_from(self.nonce.len()).map_err(|_| BarrierContractError::LengthOverflow)?;
         let ciphertext_len = u64::try_from(self.ciphertext.len())
             .map_err(|_| BarrierContractError::LengthOverflow)?;
         let tag_len = u32::try_from(self.authentication_tag.len())
@@ -367,12 +367,12 @@ fn decode_envelope(encoded: &[u8]) -> Result<SealedEnvelope, BarrierContractErro
         return Err(BarrierContractError::UnsupportedEnvelopeVersion);
     }
     let key_epoch = KeyEpoch::new(cursor.take_u64()?)?;
-    let nonce_len = usize::try_from(cursor.take_u32()?)
-        .map_err(|_| BarrierContractError::LengthOverflow)?;
-    let ciphertext_len = usize::try_from(cursor.take_u64()?)
-        .map_err(|_| BarrierContractError::LengthOverflow)?;
-    let tag_len = usize::try_from(cursor.take_u32()?)
-        .map_err(|_| BarrierContractError::LengthOverflow)?;
+    let nonce_len =
+        usize::try_from(cursor.take_u32()?).map_err(|_| BarrierContractError::LengthOverflow)?;
+    let ciphertext_len =
+        usize::try_from(cursor.take_u64()?).map_err(|_| BarrierContractError::LengthOverflow)?;
+    let tag_len =
+        usize::try_from(cursor.take_u32()?).map_err(|_| BarrierContractError::LengthOverflow)?;
     if nonce_len == 0
         || ciphertext_len == 0
         || tag_len == 0
@@ -388,13 +388,7 @@ fn decode_envelope(encoded: &[u8]) -> Result<SealedEnvelope, BarrierContractErro
     if !cursor.is_finished() {
         return Err(BarrierContractError::TrailingEnvelopeBytes);
     }
-    SealedEnvelope::new(
-        version,
-        key_epoch,
-        nonce,
-        ciphertext,
-        authentication_tag,
-    )
+    SealedEnvelope::new(version, key_epoch, nonce, ciphertext, authentication_tag)
 }
 
 #[derive(Debug)]

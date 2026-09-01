@@ -331,9 +331,7 @@ mod tests {
                 return Err(MemoryStoreError::Conflict);
             }
             let generation = match self.current {
-                Some(value) => value
-                    .checked_next()
-                    .map_err(MemoryStoreError::Contract)?,
+                Some(value) => value.checked_next().map_err(MemoryStoreError::Contract)?,
                 None => Generation::INITIAL,
             };
             let bytes = candidate.into_bytes();
@@ -351,10 +349,7 @@ mod tests {
         }
     }
 
-    fn test_digest(
-        generation: Generation,
-        bytes: &[u8],
-    ) -> Result<StateDigest, MemoryStoreError> {
+    fn test_digest(generation: Generation, bytes: &[u8]) -> Result<StateDigest, MemoryStoreError> {
         let mut output = [0_u8; 32];
         for (index, byte) in generation
             .get()
@@ -364,7 +359,9 @@ mod tests {
             .enumerate()
         {
             let slot = index % output.len();
-            output[slot] = output[slot].wrapping_add(byte).rotate_left((slot % 5) as u32);
+            output[slot] = output[slot]
+                .wrapping_add(byte)
+                .rotate_left((slot % 5) as u32);
         }
         if output == [0; 32] {
             output[0] = 1;
@@ -487,7 +484,13 @@ mod tests {
                 let receipt = engine.persist(None, secret, b"namespace-a".to_vec());
                 assert!(receipt.is_ok());
             }
-            assert!(!engine.store().bytes.windows(15).any(|window| window == b"plaintext-state"));
+            assert!(
+                !engine
+                    .store()
+                    .bytes
+                    .windows(15)
+                    .any(|window| window == b"plaintext-state")
+            );
             let loaded = engine.load_current(b"namespace-a".to_vec());
             assert!(loaded.is_ok());
             if let Ok(Some(loaded)) = loaded {
@@ -506,7 +509,11 @@ mod tests {
             let mut engine = DurableStateEngine::new(store, MockBarrier);
             let secret = SecretState::new(b"plaintext-state".to_vec());
             if let Ok(secret) = secret {
-                assert!(engine.persist(None, secret, b"namespace-a".to_vec()).is_ok());
+                assert!(
+                    engine
+                        .persist(None, secret, b"namespace-a".to_vec())
+                        .is_ok()
+                );
             }
             assert!(matches!(
                 engine.load_current(b"namespace-b".to_vec()),
