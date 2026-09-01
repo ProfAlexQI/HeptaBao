@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
 
-      - name: Apply exact lifetime and error-source repair
+      - name: Apply exact lifetime error-source and dead-code repair
         shell: bash
         run: |
           set -euo pipefail
@@ -76,7 +76,11 @@ jobs:
           """
           if source.count(old_error) != 1:
               raise SystemExit('FileStoreError source implementation drifted')
-          path.write_text(source.replace(old_error, new_error, 1), encoding='utf-8')
+          source = source.replace(old_error, new_error, 1)
+          dead_variant = "    InvalidVersion,\n"
+          if source.count(dead_variant) != 1:
+              raise SystemExit('DecodeError::InvalidVersion source shape drifted')
+          path.write_text(source.replace(dead_variant, '', 1), encoding='utf-8')
           PY
           cargo +1.98.0 fmt --all
           cargo +1.98.0 fmt --all -- --check
