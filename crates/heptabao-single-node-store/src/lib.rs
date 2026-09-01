@@ -237,7 +237,7 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
 
 impl<P> DurableGenerationStore for FileGenerationStore<P>
 where
-    P: IntegrityProvider,
+    P: IntegrityProvider + 'static,
 {
     type Error = FileStoreError<P::Error>;
 
@@ -411,19 +411,7 @@ where
     }
 }
 
-impl<E> Error for FileStoreError<E>
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Contract(error) => Some(error),
-            Self::IntegrityProvider(error) => Some(error),
-            Self::Io(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+impl<E> Error for FileStoreError<E> where E: Error + Send + Sync + 'static {}
 
 impl<E> From<StorageContractError> for FileStoreError<E>
 where
@@ -487,7 +475,6 @@ enum DecodeError {
     Truncated,
     Trailing,
     InvalidMagic,
-    InvalidVersion,
     InvalidLength,
     InvalidUtf8,
     InvalidGeneration,
