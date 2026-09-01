@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   diagnose:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [diagnose-v1.4.6-storage-intent-2]' }}"
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [diagnose-v1.4.6-storage-intent-3]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -28,19 +28,19 @@ jobs:
           python3 -m pip install --disable-pip-version-check pyyaml
           cargo +1.98.0 fmt --all
           mkdir -p .diagnostics
-          log=.diagnostics/v1.4.6-storage-intent-2.txt
+          log=.diagnostics/v1.4.6-storage-intent-3.txt
           : > "$log"
           failed=0
           run_check() {
             label="$1"
             shift
-            {
+            (
               printf '\n===== %s =====\n' "$label"
               "$@"
               status=$?
               printf 'exit_status=%s\n' "$status"
               exit "$status"
-            } >> "$log" 2>&1 || failed=1
+            ) >> "$log" 2>&1 || failed=1
           }
           run_check cargo-test cargo +1.98.0 test --locked --workspace --all-targets
           run_check cargo-clippy cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
