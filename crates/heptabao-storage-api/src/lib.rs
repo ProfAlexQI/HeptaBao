@@ -206,6 +206,63 @@ pub struct CommitReceipt {
     pub digest: StateDigest,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitIntent {
+    previous: Option<Generation>,
+    committed: Generation,
+    digest: StateDigest,
+}
+
+impl CommitIntent {
+    pub fn new(
+        previous: Option<Generation>,
+        committed: Generation,
+        digest: StateDigest,
+    ) -> Result<Self, StorageContractError> {
+        let expected = match previous {
+            Some(value) => value.checked_next()?,
+            None => Generation::INITIAL,
+        };
+        if committed != expected {
+            return Err(StorageContractError::InvalidCommitIntent);
+        }
+        Ok(Self {
+            previous,
+            committed,
+            digest,
+        })
+    }
+
+    pub const fn previous(self) -> Option<Generation> {
+        self.previous
+    }
+
+    pub const fn committed(self) -> Generation {
+        self.committed
+    }
+
+    pub const fn digest(self) -> StateDigest {
+        self.digest
+    }
+
+    pub const fn receipt(self) -> CommitReceipt {
+        CommitReceipt {
+            previous: self.previous,
+            committed: self.committed,
+            digest: self.digest,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitRecovery {
+    Committed(CommitReceipt),
+    NotCommitted,
+    Conflict {
+        actual: Option<(Generation, StateDigest)>,
+    },
+}
+
 pub trait IntegrityProvider: fmt::Debug + Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
@@ -228,6 +285,19 @@ pub trait DurableGenerationStore: fmt::Debug + Send {
 
     fn load_current(&self) -> Result<Option<GenerationSnapshot>, Self::Error>;
 
+    /// Computes the exact generation and digest that a subsequent commit
+    /// must publish, without mutating authoritative storage.
+    fn prepare_commit(
+        &self,
+        expected_current: Option<Generation>,
+        candidate: &OpaqueState,
+    ) -> Result<CommitIntent, Self::Error>;
+
+    /// Re-reads authoritative provider state and classifies an interrupted
+    /// prepared commit. Implementations may complete publication only when
+    /// the persisted candidate exactly matches the supplied intent.
+    fn recover_commit(&mut self, intent: CommitIntent) -> Result<CommitRecovery, Self::Error>;
+
     fn commit(
         &mut self,
         expected_current: Option<Generation>,
@@ -243,6 +313,7 @@ pub enum StorageContractError {
     GenerationOverflow,
     ZeroStateDigest,
     InvalidOpaqueState,
+    InvalidCommitIntent,
 }
 
 impl fmt::Display for StorageContractError {
@@ -254,6 +325,9 @@ impl fmt::Display for StorageContractError {
             Self::GenerationOverflow => "generation overflow",
             Self::ZeroStateDigest => "state digest must be non-zero",
             Self::InvalidOpaqueState => "opaque state is empty or exceeds the bounded size",
+            Self::InvalidCommitIntent => {
+                "commit intent generation is not the exact successor of its previous generation"
+            }
         })
     }
 }
@@ -293,6 +367,28 @@ mod tests {
             let rendered = format!("{value:?}");
             assert!(!rendered.contains("secret-state"));
             assert_eq!(value.into_bytes(), b"secret-state");
+        }
+    }
+
+    #[test]
+    fn commit_intent_requires_exact_generation_successor() {
+        let digest = StateDigest::new([7; 32]);
+        assert!(digest.is_ok());
+        if let Ok(digest) = digest {
+            assert!(CommitIntent::new(None, Generation::INITIAL, digest).is_ok());
+            assert_eq!(
+                CommitIntent::new(
+                    None,
+                    Generation::new(2).unwrap_or(Generation::INITIAL),
+                    digest
+                ),
+                Err(StorageContractError::InvalidCommitIntent)
+            );
+            let second = Generation::INITIAL.checked_next();
+            assert!(second.is_ok());
+            if let Ok(second) = second {
+                assert!(CommitIntent::new(Some(Generation::INITIAL), second, digest).is_ok());
+            }
         }
     }
 

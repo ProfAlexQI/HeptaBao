@@ -1108,7 +1108,9 @@ mod tests {
         AnchorAdvanceReceipt, AnchorContractError, AnchorCoordinator, CheckpointAuthenticator,
         RollbackAnchor,
     };
-    use heptabao_storage_api::{CommitReceipt, GenerationSnapshot, OpaqueState, StoreOpenMode};
+    use heptabao_storage_api::{
+        CommitIntent, CommitReceipt, CommitRecovery, GenerationSnapshot, OpaqueState, StoreOpenMode,
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TestError {
@@ -1209,6 +1211,18 @@ mod tests {
                 digest: self.digest,
                 state,
             }))
+        }
+
+        fn prepare_commit(
+            &self,
+            _expected_current: Option<Generation>,
+            _candidate: &OpaqueState,
+        ) -> Result<CommitIntent, Self::Error> {
+            Err(TestError::Contract)
+        }
+
+        fn recover_commit(&mut self, _intent: CommitIntent) -> Result<CommitRecovery, Self::Error> {
+            Err(TestError::Contract)
         }
 
         fn commit(

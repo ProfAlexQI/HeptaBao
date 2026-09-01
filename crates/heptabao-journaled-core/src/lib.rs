@@ -425,8 +425,8 @@ mod tests {
         JournalOpenMode, JournalPayload, JournalRecord, JournalSequence, JournalTag, JournalTail,
     };
     use heptabao_storage_api::{
-        GenerationSnapshot, OpaqueState, StateDigest, StorageContractError, StoreDomain,
-        StoreOpenMode,
+        CommitIntent, CommitRecovery, GenerationSnapshot, OpaqueState, StateDigest,
+        StorageContractError, StoreDomain, StoreOpenMode,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -496,6 +496,40 @@ mod tests {
                 digest,
                 state,
             }))
+        }
+
+        fn prepare_commit(
+            &self,
+            expected_current: Option<Generation>,
+            candidate: &OpaqueState,
+        ) -> Result<CommitIntent, Self::Error> {
+            if expected_current != self.current {
+                return Err(MemoryStoreError::Conflict);
+            }
+            let committed = match self.current {
+                Some(value) => value.checked_next().map_err(MemoryStoreError::Contract)?,
+                None => Generation::INITIAL,
+            };
+            let digest = state_digest(committed, candidate.as_bytes())?;
+            CommitIntent::new(expected_current, committed, digest)
+                .map_err(MemoryStoreError::Contract)
+        }
+
+        fn recover_commit(&mut self, intent: CommitIntent) -> Result<CommitRecovery, Self::Error> {
+            match (self.current, self.digest) {
+                (Some(generation), Some(digest))
+                    if generation == intent.committed() && digest == intent.digest() =>
+                {
+                    Ok(CommitRecovery::Committed(intent.receipt()))
+                }
+                (generation, _) if generation == intent.previous() => {
+                    Ok(CommitRecovery::NotCommitted)
+                }
+                (Some(generation), Some(digest)) => Ok(CommitRecovery::Conflict {
+                    actual: Some((generation, digest)),
+                }),
+                _ => Ok(CommitRecovery::Conflict { actual: None }),
+            }
         }
 
         fn commit(
