@@ -1,0 +1,3 @@
+trigger: v1.4.5-review-blocker-materialization-v1
+base_materializer: 32623ade7e2c118f0cbc55dd1c0ad8eb55811ebd
+candidate_head: 936cb5599d206cea895de2ae04a1289a0b3a0326
