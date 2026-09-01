@@ -1,0 +1,97 @@
+
+===== cargo-fmt =====
+exit_status=0
+
+===== cargo-test =====
+   Compiling heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+   Compiling heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+   Compiling heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+   Compiling heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+   Compiling heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+   Compiling heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+   Compiling heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+   Compiling heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+   Compiling heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+   Compiling heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+   Compiling heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+   Compiling heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+   Compiling heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+   Compiling heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+error[E0283]: type annotations needed
+    --> crates/heptabao-single-node-store/src/lib.rs:1202:39
+     |
+1202 |                         let encoded = encode_bundle(
+     |                                       ^^^^^^^^^^^^^ cannot infer type of the type parameter `E` declared on the function `encode_bundle`
+     |
+     = note: the type must implement `std::error::Error`
+note: required by a bound in `encode_bundle`
+    --> crates/heptabao-single-node-store/src/lib.rs:915:8
+     |
+ 907 | fn encode_bundle<E>(
+     |    ------------- required by a bound in this function
+...
+ 915 |     E: Error + Send + Sync + 'static,
+     |        ^^^^^ required by this bound in `encode_bundle`
+help: consider specifying a concrete type for the type parameter `E`
+     |
+1202 |                         let encoded = encode_bundle::</* Type */>(
+     |                                                    ++++++++++++++
+
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `heptabao-single-node-store` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+exit_status=101
+
+===== cargo-clippy =====
+    Checking heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+    Checking heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+    Checking heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+    Checking heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+    Checking heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+    Checking heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+    Checking heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+    Checking heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+    Checking heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+    Checking heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+    Checking heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+    Checking heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+    Checking heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+    Checking heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+    Checking heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+error[E0283]: type annotations needed
+    --> crates/heptabao-single-node-store/src/lib.rs:1202:39
+     |
+1202 |                         let encoded = encode_bundle(
+     |                                       ^^^^^^^^^^^^^ cannot infer type of the type parameter `E` declared on the function `encode_bundle`
+     |
+     = note: the type must implement `std::error::Error`
+note: required by a bound in `encode_bundle`
+    --> crates/heptabao-single-node-store/src/lib.rs:915:8
+     |
+ 907 | fn encode_bundle<E>(
+     |    ------------- required by a bound in this function
+...
+ 915 |     E: Error + Send + Sync + 'static,
+     |        ^^^^^ required by this bound in `encode_bundle`
+help: consider specifying a concrete type for the type parameter `E`
+     |
+1202 |                         let encoded = encode_bundle::</* Type */>(
+     |                                                    ++++++++++++++
+
+    Checking heptabao-platform-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-platform-contracts)
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `heptabao-single-node-store` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+exit_status=101
+
+===== validator-v145 =====
+V1.4.5 security invariant validation: PASS
+exit_status=0
+
+===== hostile-v145 =====
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 0.460s
+
+OK
+exit_status=0
