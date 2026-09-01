@@ -134,23 +134,25 @@ jobs:
 
           validator = Path('scripts/validate_plan_v1_4_2.py')
           source = validator.read_text(encoding='utf-8')
-          anchor = '''def require_tokens(source: str, tokens: list[str], location: str) -> None:
-              missing = [token for token in tokens if token not in source]
-              require(not missing, f"{location} lost required invariants: {missing}")
-
-
-'''
-          replacement = anchor + '''def require_rust_tokens(source: str, tokens: list[str], location: str) -> None:
-              compact_source = re.sub(r"\s+", "", source)
-              missing = [
-                  token
-                  for token in tokens
-                  if re.sub(r"\s+", "", token) not in compact_source
-              ]
-              require(not missing, f"{location} lost required invariants: {missing}")
-
-
-'''
+          anchor = (
+              'def require_tokens(source: str, tokens: list[str], location: str) -> None:\n'
+              '    missing = [token for token in tokens if token not in source]\n'
+              '    require(not missing, f"{location} lost required invariants: {missing}")\n'
+              '\n'
+              '\n'
+          )
+          replacement = anchor + (
+              'def require_rust_tokens(source: str, tokens: list[str], location: str) -> None:\n'
+              '    compact_source = re.sub(r"\\s+", "", source)\n'
+              '    missing = [\n'
+              '        token\n'
+              '        for token in tokens\n'
+              '        if re.sub(r"\\s+", "", token) not in compact_source\n'
+              '    ]\n'
+              '    require(not missing, f"{location} lost required invariants: {missing}")\n'
+              '\n'
+              '\n'
+          )
           if source.count(anchor) != 1:
               raise SystemExit('validator token helper anchor drifted')
           source = source.replace(anchor, replacement, 1)
