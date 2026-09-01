@@ -36,6 +36,7 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
       V145_BASELINE: 489a104450ff48c49e7fb61e167e566ea5e0e6c7
+      V145_HEAD: 936cb5599d206cea895de2ae04a1289a0b3a0326
 
     steps:
       - name: Checkout exact head or GitHub merge candidate
@@ -51,7 +52,9 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          git merge-base --is-ancestor "$V145_BASELINE" "$HEAD_SHA"
+          test "$(git rev-parse "$V145_HEAD^{commit}")" = "$V145_HEAD"
+          git merge-base --is-ancestor "$V145_BASELINE" "$V145_HEAD"
+          git merge-base --is-ancestor "$V145_HEAD" "$HEAD_SHA"
           if [[ "$SOURCE_KIND" == "merge" ]]; then
             read -r merge_commit parent_one parent_two parent_extra <<<"$(git rev-list --parents -n 1 HEAD)"
             test "$merge_commit" = "$SOURCE_SHA"
@@ -94,7 +97,7 @@ jobs:
           EOF
           sed -i 's/^          //' "$allowed"
           changed="$RUNNER_TEMP/v1.4.5-changed-paths.txt"
-          git diff --name-only "$V145_BASELINE" "$HEAD_SHA" | LC_ALL=C sort -u >"$changed"
+          git diff --name-only "$V145_BASELINE" "$V145_HEAD" | LC_ALL=C sort -u >"$changed"
           test -s "$changed"
           unexpected="$RUNNER_TEMP/v1.4.5-unexpected-paths.txt"
           comm -23 "$changed" <(LC_ALL=C sort -u "$allowed") >"$unexpected"
@@ -107,9 +110,10 @@ jobs:
             echo "temporary generator/publisher path entered final source" >&2
             exit 1
           fi
-          git diff --check "$V145_BASELINE" "$HEAD_SHA"
-          printf 'source_kind=%s\nsource_sha=%s\nhead_sha=%s\nbase_sha=%s\ntree=%s\n' \
-            "$SOURCE_KIND" "$SOURCE_SHA" "$HEAD_SHA" "$BASE_SHA" "$(git rev-parse HEAD^{tree})" \
+          git diff --check "$V145_BASELINE" "$V145_HEAD"
+          printf 'source_kind=%s\nsource_sha=%s\nhead_sha=%s\nbase_sha=%s\nv145_baseline=%s\nv145_head=%s\ntree=%s\n' \
+            "$SOURCE_KIND" "$SOURCE_SHA" "$HEAD_SHA" "$BASE_SHA" "$V145_BASELINE" "$V145_HEAD" \
+            "$(git rev-parse HEAD^{tree})" \
             | tee "$RUNNER_TEMP/v1.4.5-source-binding.txt"
 
       - name: Install exact Python dependencies
@@ -187,6 +191,7 @@ jobs:
             echo "- source kind: \`$SOURCE_KIND\`"
             echo "- source SHA: \`$SOURCE_SHA\`"
             echo "- source tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo "- immutable V1.4.5 checkpoint: \`$V145_HEAD\`"
             echo '- semantic/hostile validation: PASS'
             echo '- Rust 1.98 fmt, locked workspace tests and strict Clippy: PASS'
             echo '- authority effect: NONE'
