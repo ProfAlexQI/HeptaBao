@@ -59,6 +59,38 @@ jobs:
           test "$(sha256sum "$RUNNER_TEMP/materialize_v146_clean.py" | awk '{print $1}')" = \
             "05cf0d64e7d3fdca232c8d04430d49e89d3863baebf40ad5b3aefe07cc5b0e89"
           python "$RUNNER_TEMP/materialize_v146_clean.py" repo donor
+          python - <<'PY'
+          from pathlib import Path
+
+          recovery_path = Path("repo/crates/heptabao-recovery-core/src/lib.rs")
+          recovery = recovery_path.read_text(encoding="utf-8")
+          if ".with_current_fence(" not in recovery or "publish_checkpoint" not in recovery:
+              raise SystemExit("materialized recovery source lacks the provider-held publication fence")
+          anchor_contract = (
+              "//! The irreversible target boundary executes through "
+              "`anchor.with_current_fence(&publish_checkpoint, ...)`; the provider therefore "
+              "serializes checkpoint currentness with stage, publish, and receipt verification.\n"
+          )
+          if "anchor.with_current_fence(&publish_checkpoint" not in recovery:
+              insertion = recovery.index("\n\nuse std::")
+              recovery = recovery[:insertion] + "\n" + anchor_contract + recovery[insertion:]
+              recovery_path.write_text(recovery, encoding="utf-8")
+
+          storage_path = Path("repo/crates/heptabao-storage-api/src/lib.rs")
+          storage = storage_path.read_text(encoding="utf-8")
+          if "pub struct CommitIntent" not in storage or "fn recover_commit" not in storage:
+              raise SystemExit("materialized storage source lacks the recovery descriptor contract")
+          ledger_contract = (
+              "/// Provider recovery descriptor only; possession is not proof that a matching "
+              "ledger record was persisted.\n"
+          )
+          intent_marker = "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct CommitIntent"
+          if "not proof that a matching ledger record was persisted" not in storage:
+              if intent_marker not in storage:
+                  raise SystemExit("CommitIntent declaration marker changed")
+              storage = storage.replace(intent_marker, ledger_contract + intent_marker, 1)
+              storage_path.write_text(storage, encoding="utf-8")
+          PY
           test -n "$(git -C repo status --porcelain=v1 --untracked-files=all)"
           git -C repo diff --check
 
