@@ -1,0 +1,51 @@
+schema: heptabao.repository-controlled-technical-pass.v1
+plan_id: HEPTABAO-PLAN-2026-08-28
+revision: '1.4.4'
+repository: TrillionniumFoundation/HeptaBao
+v1_4_2_baseline: 34e8dc0caceb84288d4ef61f79cd7ca062718b63
+v1_4_3_commit: 3582fda50cd9b03ca39713814cdd8229462bbbd2
+v1_4_3_tree: 123c99b71c7e33169bef6033eaefb71e386ed6ca
+v1_4_4_commit: 489a104450ff48c49e7fb61e167e566ea5e0e6c7
+v1_4_4_tree: a567e8feb90077de5e3a8e540f07a89192264338
+integration_branch: integration/v1.4.4-technical-candidate
+workflow_run_id: '33491322664'
+workflow_run_attempt: '1'
+workflow_job: 'observe-exact-heads'
+runner_name: 'GitHub Actions 1000055285'
+runner_os: 'Linux'
+repository_controlled_status: PASS
+executed:
+  v1_4_3_plan_and_hostile_tests: PASS
+  v1_4_3_platform_and_oracle_regressions: PASS
+  v1_4_3_rust_1_98_fmt_test_strict_clippy: PASS
+  frozen_v1_4_2_replay: PASS
+  v1_4_4_documentation_validator_and_mutation_tests: PASS
+  v1_4_4_platform_and_oracle_regressions: PASS
+  v1_4_4_rust_1_98_fmt_test_strict_clippy: PASS
+  exact_remote_head_rebind: PASS
+closed_repository_blockers:
+- HB-BLK-REPO-033
+- HB-BLK-REPO-034
+- HB-BLK-REPO-035
+- HB-BLK-REPO-036
+- HB-BLK-REPO-037
+- HB-BLK-REPO-038
+- HB-BLK-REPO-039
+- HB-BLK-REPO-040
+external_and_control_blockers:
+- HB-BLK-CTRL-001
+- HB-BLK-EXT-001
+- HB-BLK-EXT-002
+- HB-BLK-EXT-003
+- HB-BLK-EXT-004
+- HB-BLK-EXT-005
+- HB-BLK-EXT-006
+- HB-BLK-EXT-007
+qualification: false
+compatibility_claim: false
+selected_candidates: []
+selection_effect: NONE
+production_authority: false
+migration_authority: false
+release_authority: false
+authority_effect: NONE
