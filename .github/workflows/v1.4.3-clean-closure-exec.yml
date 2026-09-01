@@ -1,0 +1,266 @@
+name: v1.4.3-clean-closure-exec
+
+on:
+  push:
+    branches:
+      - exec/v1.4.3-clean-closure-canonical
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.3-clean-closure-exec
+  cancel-in-progress: false
+
+jobs:
+  materialize-verify-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASELINE: 34e8dc0caceb84288d4ef61f79cd7ca062718b63
+      TRANSPORT: 69b51b829262ff9ef19913846f09449fc6efd921
+      ARCHIVE_SHA256: df44545eae17432e584fb5743089ebadd7a17347716beadcc5da702972bd225d
+      TARGET_BRANCH: codex/plan-v1.4.3-descriptor-fencing-clean-v1
+    steps:
+      - name: Checkout exact execution head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact Python and Rust dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Reconstruct, repair, verify and publish clean candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$BASELINE"
+          git cat-file -e "$TRANSPORT^{commit}"
+
+          archive="$RUNNER_TEMP/heptabao-v1.4.3-candidate.tar.gz"
+          for part in 00 01 02 03 04; do
+            git show "$TRANSPORT:.bootstrap/v1.4.3/part-$part.b64"
+          done | tr -d '\r\n' | base64 --decode >"$archive"
+          echo "$ARCHIVE_SHA256  $archive" | sha256sum --check --strict
+
+          candidate="$RUNNER_TEMP/heptabao-v1.4.3-clean"
+          git worktree add --detach "$candidate" "$BASELINE"
+          export CANDIDATE_ROOT="$candidate"
+          python - "$archive" <<'PY'
+          import os
+          import stat
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          expected = {
+              '.github/workflows/plan-v1.4.3-descriptor-fencing.yml',
+              'Cargo.lock',
+              'Cargo.toml',
+              'crates/heptabao-filesystem-guard/Cargo.toml',
+              'crates/heptabao-filesystem-guard/src/lib.rs',
+              'crates/heptabao-single-node-journal/Cargo.toml',
+              'crates/heptabao-single-node-journal/src/lib.rs',
+              'crates/heptabao-single-node-store/Cargo.toml',
+              'crates/heptabao-single-node-store/src/lib.rs',
+              'docs/plan/HEPTABAO_PLAN_V1_4_3_DESCRIPTOR_ANCHOR_AND_WRITER_FENCING.md',
+              'docs/storage/HEPTABAO_DESCRIPTOR_ANCHOR_AND_WRITER_FENCE_V1.md',
+              'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_3.yaml',
+              'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_3.yaml',
+              'planning/HEPTABAO_V1_4_3_DESCRIPTOR_FENCING_STATUS.yaml',
+              'schemas/heptabao_normative_document_manifest_v1_4_3.schema.json',
+              'scripts/validate_plan_v1_4_3.py',
+              'scripts/validate_v1_4_3_inherited_surface.py',
+              'tests/plan/test_plan_v1_4_3.py',
+          }
+          root = Path(os.environ['CANDIDATE_ROOT']).resolve()
+          archive = Path(sys.argv[1])
+          with tarfile.open(archive, 'r:gz') as handle:
+              members = handle.getmembers()
+              names = [m.name for m in members]
+              if len(names) != len(expected) or set(names) != expected:
+                  raise SystemExit(f'archive member set drifted: {names!r}')
+              if len(names) != len(set(names)):
+                  raise SystemExit('archive contains duplicate paths')
+              total = 0
+              for member in members:
+                  pure = PurePosixPath(member.name)
+                  if pure.is_absolute() or '..' in pure.parts or '.' in pure.parts:
+                      raise SystemExit(f'unsafe archive path: {member.name!r}')
+                  if not member.isfile() or member.issym() or member.islnk():
+                      raise SystemExit(f'non-regular archive member: {member.name!r}')
+                  if member.size < 0 or member.size > 2 * 1024 * 1024:
+                      raise SystemExit(f'invalid member size: {member.name!r}')
+                  total += member.size
+              if total > 8 * 1024 * 1024:
+                  raise SystemExit('archive expands beyond candidate budget')
+              by_name = {m.name: m for m in members}
+              for name in sorted(expected):
+                  pure = PurePosixPath(name)
+                  target = root.joinpath(*pure.parts)
+                  current = root
+                  for part in pure.parts[:-1]:
+                      current = current / part
+                      if current.exists():
+                          mode = os.lstat(current).st_mode
+                          if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                              raise SystemExit(f'unsafe candidate parent: {current}')
+                      else:
+                          current.mkdir()
+                  resolved_parent = target.parent.resolve()
+                  if root != resolved_parent and root not in resolved_parent.parents:
+                      raise SystemExit(f'candidate target escapes repository: {name!r}')
+                  if target.exists() and stat.S_ISLNK(os.lstat(target).st_mode):
+                      raise SystemExit(f'candidate target is a symlink: {name!r}')
+                  stream = handle.extractfile(by_name[name])
+                  if stream is None:
+                      raise SystemExit(f'cannot read archive member: {name!r}')
+                  data = stream.read()
+                  if len(data) != by_name[name].size:
+                      raise SystemExit(f'truncated archive member: {name!r}')
+                  target.write_bytes(data)
+          PY
+
+          cd "$candidate"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/heptabao-filesystem-guard/src/lib.rs')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          outer = '                if let Some(prefix) = moved_prefix {'
+          inner = '                    if let Ok(entries) = fs::read_dir(parent) {'
+          try:
+              start = next(i for i in range(len(lines) - 1) if lines[i] == outer and lines[i + 1] == inner)
+          except StopIteration:
+              if not any('&& let Ok(entries) = fs::read_dir(parent)' in line for line in lines):
+                  raise SystemExit('expected strict-Clippy repair target is absent')
+          else:
+              end = None
+              for i in range(start + 2, len(lines) - 1):
+                  if lines[i] == '                    }' and lines[i + 1] == '                }':
+                      end = i
+                      break
+              if end is None:
+                  raise SystemExit('cannot locate nested-if closing braces')
+              replacement = [
+                  '                if let Some(prefix) = moved_prefix',
+                  '                    && let Ok(entries) = fs::read_dir(parent)',
+                  '                {',
+                  *lines[start + 2:end],
+                  '                }',
+              ]
+              lines[start:end + 2] = replacement
+              path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+
+          cargo +1.98.0 fmt --all
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(v1.4.3): publish clean descriptor fencing candidate'
+          test "$(git rev-parse HEAD^)" = "$BASELINE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+          git diff --name-status --no-renames "$BASELINE" HEAD >"$RUNNER_TEMP/v1.4.3-delta.tsv"
+          python - "$RUNNER_TEMP/v1.4.3-delta.tsv" <<'PY'
+          import sys
+          from pathlib import Path
+
+          expected = {
+              '.github/workflows/plan-v1.4.3-descriptor-fencing.yml': 'A',
+              'Cargo.lock': 'M',
+              'Cargo.toml': 'M',
+              'crates/heptabao-filesystem-guard/Cargo.toml': 'A',
+              'crates/heptabao-filesystem-guard/src/lib.rs': 'A',
+              'crates/heptabao-single-node-journal/Cargo.toml': 'M',
+              'crates/heptabao-single-node-journal/src/lib.rs': 'M',
+              'crates/heptabao-single-node-store/Cargo.toml': 'M',
+              'crates/heptabao-single-node-store/src/lib.rs': 'M',
+              'docs/plan/HEPTABAO_PLAN_V1_4_3_DESCRIPTOR_ANCHOR_AND_WRITER_FENCING.md': 'A',
+              'docs/storage/HEPTABAO_DESCRIPTOR_ANCHOR_AND_WRITER_FENCE_V1.md': 'A',
+              'planning/HEPTABAO_BLOCKER_REGISTER_V1_4_3.yaml': 'A',
+              'planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_3.yaml': 'A',
+              'planning/HEPTABAO_V1_4_3_DESCRIPTOR_FENCING_STATUS.yaml': 'A',
+              'schemas/heptabao_normative_document_manifest_v1_4_3.schema.json': 'A',
+              'scripts/validate_plan_v1_4_3.py': 'A',
+              'scripts/validate_v1_4_3_inherited_surface.py': 'A',
+              'tests/plan/test_plan_v1_4_3.py': 'A',
+          }
+          actual = {}
+          for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+              status, path = line.split('\t', 1)
+              if path in actual:
+                  raise SystemExit(f'duplicate delta path: {path}')
+              actual[path] = status
+          if actual != expected:
+              raise SystemExit(f'clean V1.4.3 delta drifted: {actual!r}')
+          PY
+
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+          historical="$RUNNER_TEMP/v1.4.2-baseline"
+          git worktree add --detach "$historical" "$BASELINE"
+          (
+            cd "$historical"
+            python scripts/validate_plan_v1_4_2.py
+            python scripts/validate_v1_4_2_inherited_surface.py
+            python -m unittest discover -s tests/plan -p 'test_plan_v1_4_2.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+            cargo +1.98.0 fmt --all -- --check
+            cargo +1.98.0 test --locked --workspace --all-targets
+            cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          )
+          git worktree remove --force "$historical"
+
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.3-cargo-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          status = yaml.safe_load(Path('planning/HEPTABAO_V1_4_3_DESCRIPTOR_FENCING_STATUS.yaml').read_text(encoding='utf-8'))
+          expected = {
+              'qualification': False,
+              'compatibility_claim': False,
+              'selected_candidates': [],
+              'selection_effect': 'NONE',
+              'production_authority': False,
+              'migration_authority': False,
+              'release_authority': False,
+              'authority_effect': 'NONE',
+          }
+          if status.get('claims') != expected:
+              raise SystemExit('authority boundary drifted')
+          PY
+
+          git push origin "+HEAD:refs/heads/$TARGET_BRANCH"
+          printf 'candidate_commit=%s\ncandidate_tree=%s\ntarget_branch=%s\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$TARGET_BRANCH" \
+            | tee "$RUNNER_TEMP/v1.4.3-clean-receipt.txt"
+
+      - name: Upload closure diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.3-clean-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/v1.4.3-delta.tsv
+            ${{ runner.temp }}/v1.4.3-cargo-metadata.json
+            ${{ runner.temp }}/v1.4.3-clean-receipt.txt
