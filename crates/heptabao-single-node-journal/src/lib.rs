@@ -1,13 +1,15 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
-//! Fail-closed single-process chained journal implementation.
+//! Fail-closed descriptor-anchored chained journal implementation.
 //!
 //! Every committed record is an immutable file. A separately synchronized
 //! `TAIL` pointer publishes the contiguous authenticated prefix. One exact next
 //! orphan may be reconciled explicitly after a crash between entry persistence
-//! and tail publication. This development profile is not a production audit
-//! device, multi-process writer or rollback anchor.
+//! and tail publication. The Linux development profile holds an exclusive
+//! directory writer fence and resolves every journal object through the opened
+//! directory descriptor. It is not a production audit device or rollback
+//! anchor.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -19,6 +21,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use heptabao_filesystem_guard::{DirectoryGuardError, ExclusiveDirectory};
 use heptabao_journal_api::{
     AppendReceipt, AuthenticatorId, DurableJournal, JournalAuthenticator, JournalContractError,
     JournalDomain, JournalOpenMode, JournalPayload, JournalRecord, JournalSequence, JournalTag,
@@ -32,12 +35,16 @@ const TAIL_MAGIC: &[u8] = b"HEPTABAO-JOURNAL-TAIL-V1\0";
 const ENTRY_MAGIC: &[u8] = b"HEPTABAO-JOURNAL-ENTRY-V1\0";
 const MAX_CONTROL_FILE_BYTES: usize = 64 * 1024;
 const ENTRY_OVERHEAD_BOUND: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const O_NOFOLLOW: i32 = 0o400000;
+#[cfg(target_os = "linux")]
+const O_CLOEXEC: i32 = 0o2000000;
 pub const MAX_JOURNAL_RECORDS: u64 = 65_536;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub struct FileDurableJournal<A: JournalAuthenticator> {
-    root: PathBuf,
+    root: ExclusiveDirectory,
     domain: JournalDomain,
     authenticator: A,
     open_mode: JournalOpenMode,
@@ -63,9 +70,8 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
         domain: JournalDomain,
         authenticator: A,
     ) -> Result<Self, FileJournalError<A::Error>> {
-        let root = root.as_ref().to_path_buf();
-        validate_root(&root)?;
-        if !directory_is_empty(&root)? {
+        let root = ExclusiveDirectory::open(root).map_err(map_directory_guard_error)?;
+        if !directory_is_empty(root.access_path())? {
             return Err(FileJournalError::DirectoryNotEmpty);
         }
         let mut marker = encode_marker(&domain, authenticator.authenticator_id())?;
@@ -92,8 +98,7 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
         domain: JournalDomain,
         authenticator: A,
     ) -> Result<Self, FileJournalError<A::Error>> {
-        let root = root.as_ref().to_path_buf();
-        validate_root(&root)?;
+        let root = ExclusiveDirectory::open(root).map_err(map_directory_guard_error)?;
         let mut journal = Self {
             root,
             domain,
@@ -112,10 +117,15 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        self.root.original_path()
+    }
+
+    pub fn root_identity(&self) -> heptabao_filesystem_guard::DirectoryIdentity {
+        self.root.identity()
     }
 
     pub fn reconcile_next_orphan(&mut self) -> Result<AppendReceipt, FileJournalError<A::Error>> {
+        self.root.verify().map_err(map_directory_guard_error)?;
         self.validate_marker()?;
         let disk_tail = self.read_optional_tail()?;
         if disk_tail != self.tail {
@@ -148,15 +158,15 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
     }
 
     fn marker_path(&self) -> PathBuf {
-        self.root.join(MARKER_NAME)
+        self.root.access_path().join(MARKER_NAME)
     }
 
     fn tail_path(&self) -> PathBuf {
-        self.root.join(TAIL_NAME)
+        self.root.access_path().join(TAIL_NAME)
     }
 
     fn entry_path(&self, sequence: JournalSequence) -> PathBuf {
-        self.root.join(entry_file_name(sequence))
+        self.root.access_path().join(entry_file_name(sequence))
     }
 
     fn validate_marker(&self) -> Result<(), FileJournalError<A::Error>> {
@@ -186,16 +196,16 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
 
     fn validate_layout(&self) -> Result<Option<JournalSequence>, FileJournalError<A::Error>> {
         let mut sequences = BTreeSet::new();
-        for entry in fs::read_dir(&self.root).map_err(FileJournalError::Io)? {
+        for entry in fs::read_dir(self.root.access_path()).map_err(FileJournalError::Io)? {
             let entry = entry.map_err(FileJournalError::Io)?;
-            let metadata = fs::symlink_metadata(entry.path()).map_err(FileJournalError::Io)?;
+            let file_type = entry.file_type().map_err(FileJournalError::Io)?;
             let name = entry.file_name();
             let name = name.to_str().ok_or(FileJournalError::UnexpectedEntry)?;
             if name.contains(".tmp-") {
                 return Err(FileJournalError::UnresolvedTemporaryArtifact);
             }
             if name == MARKER_NAME || name == TAIL_NAME {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                if file_type.is_symlink() || !file_type.is_file() {
                     return Err(FileJournalError::UnsafeFileType);
                 }
                 continue;
@@ -203,7 +213,7 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
             let sequence = parse_entry_file_name(name)
                 .map_err(|_| FileJournalError::CorruptJournal)?
                 .ok_or(FileJournalError::UnexpectedEntry)?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
+            if file_type.is_symlink() || !file_type.is_file() {
                 return Err(FileJournalError::UnsafeFileType);
             }
             if !sequences.insert(sequence) {
@@ -239,6 +249,7 @@ impl<A: JournalAuthenticator> FileDurableJournal<A> {
     fn inspect_current_layout(
         &self,
     ) -> Result<Option<JournalSequence>, FileJournalError<A::Error>> {
+        self.root.verify().map_err(map_directory_guard_error)?;
         self.validate_marker()?;
         let disk_tail = self.read_optional_tail()?;
         if disk_tail != self.tail {
@@ -372,8 +383,8 @@ where
             payload,
         };
         let mut encoded = encode_entry(&record)?;
-        let entry_path = self.entry_path(sequence);
-        let write_result = write_new_file_and_sync_parent(&entry_path, &encoded);
+        let entry_name = entry_file_name(sequence);
+        let write_result = write_new_file_and_sync_parent(&self.root, &entry_name, &encoded);
         encoded.fill(0);
         if let Err(error) = write_result {
             if error.kind() == io::ErrorKind::AlreadyExists {
@@ -407,7 +418,9 @@ where
     Authenticator(E),
     Io(io::Error),
     RootMustBeAbsolute,
+    UnsupportedPlatform,
     UnsafeRoot,
+    WriterBusy,
     DirectoryNotEmpty,
     MarkerMissing,
     MarkerMismatch,
@@ -442,7 +455,13 @@ where
             }
             Self::Io(error) => write!(formatter, "journal I/O failure: {error}"),
             Self::RootMustBeAbsolute => formatter.write_str("journal root must be absolute"),
+            Self::UnsupportedPlatform => {
+                formatter.write_str("descriptor-anchored journal is unsupported on this platform")
+            }
             Self::UnsafeRoot => formatter.write_str("journal root path is unsafe"),
+            Self::WriterBusy => {
+                formatter.write_str("another process holds the journal writer fence")
+            }
             Self::DirectoryNotEmpty => formatter.write_str("new journal root must be empty"),
             Self::MarkerMissing => formatter.write_str("journal marker is missing"),
             Self::MarkerMismatch => formatter.write_str("journal marker is invalid"),
@@ -529,25 +548,20 @@ enum DecodeError {
     InvalidPayload,
 }
 
-fn validate_root<E>(root: &Path) -> Result<(), FileJournalError<E>>
+fn map_directory_guard_error<E>(error: DirectoryGuardError) -> FileJournalError<E>
 where
     E: Error + Send + Sync + 'static,
 {
-    if !root.is_absolute() {
-        return Err(FileJournalError::RootMustBeAbsolute);
+    match error {
+        DirectoryGuardError::RootMustBeAbsolute => FileJournalError::RootMustBeAbsolute,
+        DirectoryGuardError::UnsupportedPlatform => FileJournalError::UnsupportedPlatform,
+        DirectoryGuardError::WriterBusy => FileJournalError::WriterBusy,
+        DirectoryGuardError::UnsafeRoot
+        | DirectoryGuardError::RootIdentityChanged
+        | DirectoryGuardError::DescriptorPathUnavailable
+        | DirectoryGuardError::InvalidLeafName => FileJournalError::UnsafeRoot,
+        DirectoryGuardError::Io(error) => FileJournalError::Io(error),
     }
-    let mut current = PathBuf::new();
-    for component in root.components() {
-        current.push(component.as_os_str());
-        if current.parent().is_none() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current).map_err(FileJournalError::Io)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(FileJournalError::UnsafeRoot);
-        }
-    }
-    Ok(())
 }
 
 fn directory_is_empty<E>(root: &Path) -> Result<bool, FileJournalError<E>>
@@ -578,15 +592,19 @@ fn read_regular_file<E>(path: &Path, maximum: usize) -> Result<Vec<u8>, FileJour
 where
     E: Error + Send + Sync + 'static,
 {
-    let metadata = fs::symlink_metadata(path).map_err(FileJournalError::Io)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(O_NOFOLLOW | O_CLOEXEC);
+    let file = options.open(path).map_err(FileJournalError::Io)?;
+    let metadata = file.metadata().map_err(FileJournalError::Io)?;
+    if !metadata.is_file() {
         return Err(FileJournalError::UnsafeFileType);
     }
     let maximum_u64 = u64::try_from(maximum).map_err(|_| FileJournalError::CorruptJournal)?;
     if metadata.len() > maximum_u64 {
         return Err(FileJournalError::CorruptJournal);
     }
-    let file = File::open(path).map_err(FileJournalError::Io)?;
     let bound = maximum_u64
         .checked_add(1)
         .ok_or(FileJournalError::CorruptJournal)?;
@@ -606,28 +624,57 @@ fn secure_create_new(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
+    options.mode(0o600);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(O_NOFOLLOW | O_CLOEXEC);
     options.open(path)
 }
 
-fn write_new_file_and_sync_parent(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = secure_create_new(path)?;
+fn write_new_file_and_sync_parent(
+    root: &ExclusiveDirectory,
+    leaf_name: &str,
+    bytes: &[u8],
+) -> io::Result<()> {
+    root.verify().map_err(io::Error::other)?;
+    let path = root.leaf_path(leaf_name).map_err(io::Error::other)?;
+    let mut file = secure_create_new(&path)?;
     file.write_all(bytes)?;
     file.flush()?;
     file.sync_all()?;
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "journal entry has no parent")
-    })?;
-    sync_directory(parent)
+    root.sync_all().map_err(io::Error::other)
 }
 
-fn atomic_replace(root: &Path, target_name: &str, bytes: &[u8]) -> Result<(), AtomicReplaceError> {
+fn atomic_replace(
+    root: &ExclusiveDirectory,
+    target_name: &str,
+    bytes: &[u8],
+) -> Result<(), AtomicReplaceError> {
+    if let Err(error) = root.verify() {
+        return Err(AtomicReplaceError {
+            source: io::Error::other(error),
+            published: false,
+        });
+    }
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temporary_name = format!(".{target_name}.tmp-{}-{sequence:016x}", std::process::id());
-    let temporary_path = root.join(temporary_name);
-    let target_path = root.join(target_name);
+    let temporary_path = match root.leaf_path(&temporary_name) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(AtomicReplaceError {
+                source: io::Error::other(error),
+                published: false,
+            });
+        }
+    };
+    let target_path = match root.leaf_path(target_name) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(AtomicReplaceError {
+                source: io::Error::other(error),
+                published: false,
+            });
+        }
+    };
     let write_result = (|| -> io::Result<()> {
         let mut file = secure_create_new(&temporary_path)?;
         file.write_all(bytes)?;
@@ -648,17 +695,13 @@ fn atomic_replace(root: &Path, target_name: &str, bytes: &[u8]) -> Result<(), At
             published: false,
         });
     }
-    if let Err(source) = sync_directory(root) {
+    if let Err(error) = root.sync_all() {
         return Err(AtomicReplaceError {
-            source,
+            source: io::Error::other(error),
             published: true,
         });
     }
     Ok(())
-}
-
-fn sync_directory(path: &Path) -> io::Result<()> {
-    OpenOptions::new().read(true).open(path)?.sync_all()
 }
 
 fn entry_file_name(sequence: JournalSequence) -> String {
@@ -1145,6 +1188,56 @@ mod tests {
                 if let Ok(metadata) = metadata {
                     assert_eq!(metadata.permissions().mode() & 0o077, 0);
                 }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn second_journal_writer_is_fenced() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let authenticator = TestAuthenticator::new();
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let first =
+                FileDurableJournal::create_new(&temporary.path, domain.clone(), authenticator);
+            assert!(first.is_ok());
+            let second = TestAuthenticator::new().map(|authenticator| {
+                FileDurableJournal::reopen_existing(&temporary.path, domain, authenticator)
+            });
+            assert!(matches!(second, Ok(Err(FileJournalError::WriterBusy))));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_journal_remains_bound_after_root_path_replacement() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let authenticator = TestAuthenticator::new();
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal = FileDurableJournal::create_new(&temporary.path, domain, authenticator);
+            assert!(journal.is_ok());
+            if let Ok(mut journal) = journal {
+                let moved = temporary.path.with_file_name(format!(
+                    "{}-moved",
+                    temporary
+                        .path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("heptabao-journal")
+                ));
+                assert!(fs::rename(&temporary.path, &moved).is_ok());
+                assert!(fs::create_dir(&temporary.path).is_ok());
+                let payload = JournalPayload::new(b"descriptor-bound".to_vec());
+                assert!(payload.is_ok());
+                if let Ok(payload) = payload {
+                    assert!(journal.append(None, payload).is_ok());
+                    assert!(moved.join(TAIL_NAME).is_file());
+                    assert!(!temporary.path.join(TAIL_NAME).exists());
+                }
+                drop(journal);
+                let _ = fs::remove_dir_all(&moved);
             }
         }
     }

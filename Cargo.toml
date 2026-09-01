@@ -3,6 +3,7 @@ members = [
     "crates/heptabao-authbus-contracts",
     "crates/heptabao-barrier-api",
     "crates/heptabao-durable-core",
+    "crates/heptabao-filesystem-guard",
     "crates/heptabao-governance",
     "crates/heptabao-journal-api",
     "crates/heptabao-journaled-core",

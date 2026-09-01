@@ -1,21 +1,26 @@
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
-//! Fail-closed single-process durable generation store.
+//! Fail-closed descriptor-anchored durable generation store.
 //!
-//! This implementation is a development foundation for exercising explicit
-//! create/reopen/adopt lifecycle, immutable generation bundles, compare-and-
-//! swap commits and persist-before-publish ordering. It is not a multi-process
-//! store, does not provide rollback protection outside its directory and has no
-//! production authority.
+//! The Linux development profile holds one exclusive directory writer fence
+//! for the store lifetime and resolves all durable objects through the opened
+//! directory descriptor. It exercises explicit create/reopen/adopt lifecycle,
+//! immutable generation bundles, compare-and-swap commits and
+//! persist-before-publish ordering. It does not provide rollback protection
+//! outside its directory and has no production authority.
 
 use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use heptabao_filesystem_guard::{DirectoryGuardError, ExclusiveDirectory};
 use heptabao_storage_api::{
     CommitReceipt, DurableGenerationStore, Generation, GenerationSnapshot, IntegrityProvider,
     OpaqueState, StateDigest, StorageContractError, StoreDomain, StoreOpenMode,
@@ -28,11 +33,15 @@ const CURRENT_MAGIC: &[u8; 20] = b"HEPTABAO-CURRENT-V1\0";
 const BUNDLE_MAGIC: &[u8; 19] = b"HEPTABAO-BUNDLE-V1\0";
 const MAX_CONTROL_FILE_BYTES: usize = 64 * 1024;
 const BUNDLE_OVERHEAD_BOUND: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const O_NOFOLLOW: i32 = 0o400000;
+#[cfg(target_os = "linux")]
+const O_CLOEXEC: i32 = 0o2000000;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub struct FileGenerationStore<P: IntegrityProvider> {
-    root: PathBuf,
+    root: ExclusiveDirectory,
     domain: StoreDomain,
     integrity: P,
     open_mode: StoreOpenMode,
@@ -58,9 +67,8 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
         domain: StoreDomain,
         integrity: P,
     ) -> Result<Self, FileStoreError<P::Error>> {
-        let root = root.as_ref().to_path_buf();
-        validate_root(&root)?;
-        if !directory_is_empty(&root)? {
+        let root = ExclusiveDirectory::open(root).map_err(map_directory_guard_error)?;
+        if !directory_is_empty(root.access_path())? {
             return Err(FileStoreError::DirectoryNotEmpty);
         }
         Ok(Self {
@@ -77,8 +85,7 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
         domain: StoreDomain,
         integrity: P,
     ) -> Result<Self, FileStoreError<P::Error>> {
-        let root = root.as_ref().to_path_buf();
-        validate_root(&root)?;
+        let root = ExclusiveDirectory::open(root).map_err(map_directory_guard_error)?;
         let mut store = Self {
             root,
             domain,
@@ -101,10 +108,9 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
         domain: StoreDomain,
         integrity: P,
     ) -> Result<Self, FileStoreError<P::Error>> {
-        let root = root.as_ref().to_path_buf();
-        validate_root(&root)?;
-        reject_unresolved_temporary_artifacts(&root)?;
-        let marker_path = root.join(MARKER_NAME);
+        let root = ExclusiveDirectory::open(root).map_err(map_directory_guard_error)?;
+        reject_unresolved_temporary_artifacts(root.access_path())?;
+        let marker_path = root.access_path().join(MARKER_NAME);
         match fs::symlink_metadata(&marker_path) {
             Ok(_) => return Err(FileStoreError::AlreadyInitialized),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -132,14 +138,18 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        self.root.original_path()
+    }
+
+    pub fn root_identity(&self) -> heptabao_filesystem_guard::DirectoryIdentity {
+        self.root.identity()
     }
 
     fn ensure_disk_matches_memory(&self) -> Result<(), FileStoreError<P::Error>> {
-        validate_root(&self.root)?;
+        self.root.verify().map_err(map_directory_guard_error)?;
         match self.current {
             None => {
-                if !directory_is_empty(&self.root)? {
+                if !directory_is_empty(self.root.access_path())? {
                     return Err(FileStoreError::UnexpectedInitializedState);
                 }
                 Ok(())
@@ -163,15 +173,15 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
     }
 
     fn marker_path(&self) -> PathBuf {
-        self.root.join(MARKER_NAME)
+        self.root.access_path().join(MARKER_NAME)
     }
 
     fn current_path(&self) -> PathBuf {
-        self.root.join(CURRENT_NAME)
+        self.root.access_path().join(CURRENT_NAME)
     }
 
     fn bundle_path(&self, generation: Generation) -> PathBuf {
-        self.root.join(bundle_file_name(generation))
+        self.root.access_path().join(bundle_file_name(generation))
     }
 
     fn validate_marker(&self) -> Result<(), FileStoreError<P::Error>> {
@@ -294,12 +304,7 @@ where
             .digest(&self.domain, generation, candidate.as_bytes())
             .map_err(FileStoreError::IntegrityProvider)?;
 
-        let bundle_path = self.bundle_path(generation);
-        match fs::symlink_metadata(&bundle_path) {
-            Ok(_) => return Err(FileStoreError::GenerationAlreadyExists(generation)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(FileStoreError::Io(error)),
-        }
+        let bundle_name = bundle_file_name(generation);
 
         let mut bundle_bytes = encode_bundle(
             generation,
@@ -308,9 +313,14 @@ where
             digest,
             candidate.as_bytes(),
         )?;
-        let bundle_result = write_new_file_and_sync_parent(&bundle_path, &bundle_bytes);
+        let bundle_result = write_new_file_and_sync_parent(&self.root, &bundle_name, &bundle_bytes);
         bundle_bytes.fill(0);
-        bundle_result?;
+        if let Err(error) = bundle_result {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                return Err(FileStoreError::GenerationAlreadyExists(generation));
+            }
+            return Err(FileStoreError::Io(error));
+        }
 
         let mut current_bytes = encode_current(CurrentRecord { generation, digest });
         let current_result = atomic_replace(&self.root, CURRENT_NAME, &current_bytes);
@@ -357,7 +367,9 @@ where
     IntegrityProvider(E),
     Io(io::Error),
     RootMustBeAbsolute,
+    UnsupportedPlatform,
     UnsafeRoot,
+    WriterBusy,
     DirectoryNotEmpty,
     AlreadyInitialized,
     UnexpectedInitializedState,
@@ -386,7 +398,13 @@ where
             }
             Self::Io(error) => write!(formatter, "storage I/O failure: {error}"),
             Self::RootMustBeAbsolute => formatter.write_str("storage root must be absolute"),
+            Self::UnsupportedPlatform => {
+                formatter.write_str("descriptor-anchored storage is unsupported on this platform")
+            }
             Self::UnsafeRoot => formatter.write_str("storage root path is unsafe"),
+            Self::WriterBusy => {
+                formatter.write_str("another process holds the storage writer fence")
+            }
             Self::DirectoryNotEmpty => formatter.write_str("create-new storage root must be empty"),
             Self::AlreadyInitialized => formatter.write_str("storage root is already initialized"),
             Self::UnexpectedInitializedState => {
@@ -481,25 +499,20 @@ enum DecodeError {
     InvalidDigest,
 }
 
-fn validate_root<E>(root: &Path) -> Result<(), FileStoreError<E>>
+fn map_directory_guard_error<E>(error: DirectoryGuardError) -> FileStoreError<E>
 where
     E: Error + Send + Sync + 'static,
 {
-    if !root.is_absolute() {
-        return Err(FileStoreError::RootMustBeAbsolute);
+    match error {
+        DirectoryGuardError::RootMustBeAbsolute => FileStoreError::RootMustBeAbsolute,
+        DirectoryGuardError::UnsupportedPlatform => FileStoreError::UnsupportedPlatform,
+        DirectoryGuardError::WriterBusy => FileStoreError::WriterBusy,
+        DirectoryGuardError::UnsafeRoot
+        | DirectoryGuardError::RootIdentityChanged
+        | DirectoryGuardError::DescriptorPathUnavailable
+        | DirectoryGuardError::InvalidLeafName => FileStoreError::UnsafeRoot,
+        DirectoryGuardError::Io(error) => FileStoreError::Io(error),
     }
-    let mut current = PathBuf::new();
-    for component in root.components() {
-        current.push(component.as_os_str());
-        if current.parent().is_none() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current).map_err(FileStoreError::Io)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(FileStoreError::UnsafeRoot);
-        }
-    }
-    Ok(())
 }
 
 fn directory_is_empty<E>(root: &Path) -> Result<bool, FileStoreError<E>>
@@ -556,15 +569,19 @@ fn read_regular_file<E>(path: &Path, maximum: usize) -> Result<Vec<u8>, FileStor
 where
     E: Error + Send + Sync + 'static,
 {
-    let metadata = fs::symlink_metadata(path).map_err(FileStoreError::Io)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(O_NOFOLLOW | O_CLOEXEC);
+    let file = options.open(path).map_err(FileStoreError::Io)?;
+    let metadata = file.metadata().map_err(FileStoreError::Io)?;
+    if !metadata.is_file() {
         return Err(FileStoreError::UnsafeFileType);
     }
     let maximum_u64 = u64::try_from(maximum).map_err(|_| FileStoreError::CorruptState)?;
     if metadata.len() > maximum_u64 {
         return Err(FileStoreError::CorruptState);
     }
-    let file = File::open(path).map_err(FileStoreError::Io)?;
     let take_bound = maximum_u64
         .checked_add(1)
         .ok_or(FileStoreError::CorruptState)?;
@@ -580,28 +597,62 @@ where
     Ok(bytes)
 }
 
-fn write_new_file_and_sync_parent(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+fn secure_create_new(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(O_NOFOLLOW | O_CLOEXEC);
+    options.open(path)
+}
+
+fn write_new_file_and_sync_parent(
+    root: &ExclusiveDirectory,
+    leaf_name: &str,
+    bytes: &[u8],
+) -> io::Result<()> {
+    root.verify().map_err(io::Error::other)?;
+    let path = root.leaf_path(leaf_name).map_err(io::Error::other)?;
+    let mut file = secure_create_new(&path)?;
     file.write_all(bytes)?;
     file.flush()?;
     file.sync_all()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "generation has no parent"))?;
-    sync_directory(parent)
+    root.sync_all().map_err(io::Error::other)
 }
 
-fn atomic_replace(root: &Path, target_name: &str, bytes: &[u8]) -> Result<(), AtomicReplaceError> {
+fn atomic_replace(
+    root: &ExclusiveDirectory,
+    target_name: &str,
+    bytes: &[u8],
+) -> Result<(), AtomicReplaceError> {
+    if let Err(error) = root.verify() {
+        return Err(AtomicReplaceError {
+            source: io::Error::other(error),
+            published: false,
+        });
+    }
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temporary_name = format!(".{target_name}.tmp-{}-{sequence:016x}", std::process::id());
-    let temporary_path = root.join(temporary_name);
-    let target_path = root.join(target_name);
+    let temporary_path = match root.leaf_path(&temporary_name) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(AtomicReplaceError {
+                source: io::Error::other(error),
+                published: false,
+            });
+        }
+    };
+    let target_path = match root.leaf_path(target_name) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(AtomicReplaceError {
+                source: io::Error::other(error),
+                published: false,
+            });
+        }
+    };
 
     let write_result = (|| -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)?;
+        let mut file = secure_create_new(&temporary_path)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()
@@ -620,17 +671,13 @@ fn atomic_replace(root: &Path, target_name: &str, bytes: &[u8]) -> Result<(), At
             published: false,
         });
     }
-    if let Err(source) = sync_directory(root) {
+    if let Err(error) = root.sync_all() {
         return Err(AtomicReplaceError {
-            source,
+            source: io::Error::other(error),
             published: true,
         });
     }
     Ok(())
-}
-
-fn sync_directory(path: &Path) -> io::Result<()> {
-    OpenOptions::new().read(true).open(path)?.sync_all()
 }
 
 fn bundle_file_name(generation: Generation) -> String {
@@ -1077,6 +1124,55 @@ mod tests {
             assert!(symlink(&target.path, &link).is_ok());
             let store = FileGenerationStore::create_new(link, domain, integrity);
             assert!(matches!(store, Err(FileStoreError::UnsafeRoot)));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn second_store_writer_is_fenced() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let integrity = TestIntegrity::new();
+        if let (Ok(temporary), Ok(domain), Ok(integrity)) = (temporary, domain, integrity) {
+            let first = FileGenerationStore::create_new(&temporary.path, domain.clone(), integrity);
+            assert!(first.is_ok());
+            let second = TestIntegrity::new().map(|integrity| {
+                FileGenerationStore::create_new(&temporary.path, domain, integrity)
+            });
+            assert!(matches!(second, Ok(Err(FileStoreError::WriterBusy))));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_store_remains_bound_after_root_path_replacement() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let integrity = TestIntegrity::new();
+        if let (Ok(temporary), Ok(domain), Ok(integrity)) = (temporary, domain, integrity) {
+            let store = FileGenerationStore::create_new(&temporary.path, domain, integrity);
+            assert!(store.is_ok());
+            if let Ok(mut store) = store {
+                let moved = temporary.path.with_file_name(format!(
+                    "{}-moved",
+                    temporary
+                        .path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("heptabao-store")
+                ));
+                assert!(fs::rename(&temporary.path, &moved).is_ok());
+                assert!(fs::create_dir(&temporary.path).is_ok());
+                let candidate = OpaqueState::new(b"descriptor-bound".to_vec());
+                assert!(candidate.is_ok());
+                if let Ok(candidate) = candidate {
+                    assert!(store.commit(None, candidate).is_ok());
+                    assert!(moved.join(CURRENT_NAME).is_file());
+                    assert!(!temporary.path.join(CURRENT_NAME).exists());
+                }
+                drop(store);
+                let _ = fs::remove_dir_all(&moved);
+            }
         }
     }
 }
