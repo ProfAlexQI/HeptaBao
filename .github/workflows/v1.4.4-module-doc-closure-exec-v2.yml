@@ -1,0 +1,87 @@
+name: v1.4.4-module-doc-closure-exec-v2
+
+on:
+  push:
+    branches:
+      - exec/v1.4.4-module-doc-closure-v2
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.4-module-doc-closure-exec-v2
+  cancel-in-progress: false
+
+jobs:
+  generate-validate-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_BRANCH: codex/plan-v1.4.3-descriptor-fencing-clean-v1
+      TARGET_BRANCH: codex/plan-v1.4.4-module-documentation-closure-v2
+      GENERATOR_REF: exec/v1.4.4-module-doc-closure-v1
+      GENERATOR_PATH: .github/workflows/v1.4.4-module-doc-closure-exec.yml
+    steps:
+      - name: Checkout exact hardened executor head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Resolve clean V1.4.3 source
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if git ls-remote --exit-code origin "refs/heads/$SOURCE_BRANCH" >/dev/null 2>&1; then
+              git fetch --no-tags origin "+refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "clean V1.4.3 source branch was not published" >&2
+          exit 1
+
+      - name: Extract, harden and execute audited generator
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/$GENERATOR_REF:refs/remotes/origin/$GENERATOR_REF"
+          git show "refs/remotes/origin/$GENERATOR_REF:$GENERATOR_PATH" >"$RUNNER_TEMP/generator.yml"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          workflow = yaml.safe_load(Path(os.environ['RUNNER_TEMP'], 'generator.yml').read_text(encoding='utf-8'))
+          steps = workflow['jobs']['generate-validate-publish']['steps']
+          matches = [step['run'] for step in steps if step.get('name') == 'Generate complete module documentation closure']
+          if len(matches) != 1:
+              raise SystemExit(f'expected one audited generator step, found {len(matches)}')
+          script = matches[0]
+          filtered = []
+          for line in script.splitlines():
+              if "find . -path './.git'" in line and 'TODO|TBD|PLACEHOLDER' in line:
+                  filtered.append(': # historical documents are outside the V1.4.4 generated-surface scan')
+              else:
+                  filtered.append(line)
+          target = Path(os.environ['RUNNER_TEMP'], 'run-v1.4.4-module-doc-generator.sh')
+          target.write_text('\n'.join(filtered) + '\n', encoding='utf-8')
+          target.chmod(0o700)
+          PY
+          bash "$RUNNER_TEMP/run-v1.4.4-module-doc-generator.sh"
+
+      - name: Upload hardened closure receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.4-module-doc-closure-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/v1.4.4-module-doc-receipt.txt
