@@ -1,0 +1,126 @@
+name: materialize-clean-v1.4.6-authoritative-recovery
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - exec/v1.4.6-clean-materializer-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-clean-v1.4.6-authoritative-recovery
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout immutable materializer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: materializer
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout immutable V1.4.5 baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TrillionniumFoundation/HeptaBao
+          ref: 936cb5599d206cea895de2ae04a1289a0b3a0326
+          path: repo
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Checkout V1.4.6 donor source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TrillionniumFoundation/HeptaBao
+          ref: 6dd945c3c2d9709d0749033dcd32ea2fa78bc0ac
+          path: donor
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Materialize clean source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part00 \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part01 \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part02 \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part03 \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part04 \
+            materializer/tools/materialize_v146_clean.py.gz.b64.part05 \
+            | base64 --decode | gzip --decompress >"$RUNNER_TEMP/materialize_v146_clean.py"
+          test "$(sha256sum "$RUNNER_TEMP/materialize_v146_clean.py" | awk '{print $1}')" = \
+            "05cf0d64e7d3fdca232c8d04430d49e89d3863baebf40ad5b3aefe07cc5b0e89"
+          python "$RUNNER_TEMP/materialize_v146_clean.py" repo donor
+          test -n "$(git -C repo status --porcelain=v1 --untracked-files=all)"
+          git -C repo diff --check
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: repo/requirements-plan.txt
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Format and validate clean V1.4.6 candidate
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          cargo +1.98.0 fmt --all
+          git diff --check
+          python scripts/validate_plan_v1_4_6.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_6.py' -v
+          python scripts/validate_plan_v1_4_5.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_5.py' -v
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Prove development residue is absent
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(find .diagnostics -maxdepth 1 -type f -name 'v1.4.6*' -print 2>/dev/null || true)"
+          test -z "$(find scripts -maxdepth 1 -type f \( -name 'apply_v1_4_6*.py' -o -name 'fix_apply_v1_4_6*.py' \) -print)"
+          test -z "$(find .github/workflows -maxdepth 1 -type f -name 'materialize-v1.4.6*.yml' -print)"
+
+      - name: Publish tested commit to staging ref
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "heptabao-v1.4.6-clean-materializer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v1.4.6): close authoritative recovery blockers"
+          git push --force origin HEAD:refs/heads/exec/materialized-v1.4.6-authoritative-recovery-v1
+          {
+            echo '## Clean V1.4.6 candidate'
+            echo
+            echo "- commit: \`$(git rev-parse HEAD)\`"
+            echo "- tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo '- V1.4.6/V1.4.5/V1.4.4 validators: PASS'
+            echo '- workspace tests, rustfmt and strict Clippy: PASS'
+            echo '- candidate source contains no diagnostics/materializers/apply scripts'
+          } >>"$GITHUB_STEP_SUMMARY"
