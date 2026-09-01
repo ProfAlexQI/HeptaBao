@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-storage-intent-7]' }}"
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-operation-recovery-1]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -22,16 +22,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/apply_v1_4_6_storage_intent.py
-          python3 scripts/apply_v1_4_6_storage_intent_fix1.py
-          python3 scripts/apply_v1_4_6_storage_intent_fix2.py
-          python3 scripts/apply_v1_4_6_storage_intent_fix3.py
-          python3 scripts/apply_v1_4_6_storage_intent_fix4.py
+          python3 scripts/apply_v1_4_6_operation_recovery.py
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           python3 -m pip install --disable-pip-version-check pyyaml
           cargo +1.98.0 fmt --all
           mkdir -p .diagnostics
-          log=.diagnostics/v1.4.6-storage-intent-7.txt
+          log=.diagnostics/v1.4.6-operation-recovery-1.txt
           : > "$log"
           failed=0
           run_check() {
@@ -54,11 +50,11 @@ jobs:
           git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
           if [ "$failed" -eq 0 ]; then
             rm -f "$log"
-            git add crates
-            git commit -m "feat(v1.4.6): bind durable mutations to storage intent"
+            git add crates scripts/validate_plan_v1_4_5.py
+            git commit -m "feat(v1.4.6): recover durable intents from provider proof"
           else
             git add "$log"
-            git commit -m "chore(diagnostics): capture V1.4.6 storage intent failure"
+            git commit -m "chore(diagnostics): capture V1.4.6 operation recovery failure"
           fi
           git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
           exit "$failed"
