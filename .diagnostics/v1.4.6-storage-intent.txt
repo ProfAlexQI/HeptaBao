@@ -1,0 +1,24 @@
+exit_status=101
+   Compiling heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+   Compiling heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+   Compiling heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+   Compiling heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+   Compiling heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+   Compiling heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+   Compiling heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+   Compiling heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+   Compiling heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+   Compiling heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+error[E0046]: not all trait items implemented, missing: `prepare_commit`, `recover_commit`
+    --> crates/heptabao-recovery-core/src/lib.rs:1190:5
+     |
+1190 |     impl DurableGenerationStore for MemoryStore {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `prepare_commit`, `recover_commit` in implementation
+     |
+     = help: implement the missing item: `fn prepare_commit(&self, _: Option<heptabao_storage_api::Generation>, _: &OpaqueState) -> Result<CommitIntent, <Self as heptabao_storage_api::DurableGenerationStore>::Error> { todo!() }`
+     = help: implement the missing item: `fn recover_commit(&mut self, _: CommitIntent) -> Result<CommitRecovery, <Self as heptabao_storage_api::DurableGenerationStore>::Error> { todo!() }`
+
+   Compiling heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+For more information about this error, try `rustc --explain E0046`.
+error: could not compile `heptabao-recovery-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
