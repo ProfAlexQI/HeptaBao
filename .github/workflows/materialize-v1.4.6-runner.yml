@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [diagnose-v1.4.6-operation-recovery-1]' }}"
+  materialize:
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-operation-recovery-2]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -18,20 +18,44 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Capture materializer precondition failure
+      - name: Apply patch, validate, and persist source or diagnostics
         shell: bash
         run: |
-          set -u
+          set -euo pipefail
+          python3 scripts/fix_apply_v1_4_6_operation_recovery.py
+          python3 scripts/apply_v1_4_6_operation_recovery.py
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          python3 -m pip install --disable-pip-version-check pyyaml
+          cargo +1.98.0 fmt --all
           mkdir -p .diagnostics
-          log=.diagnostics/v1.4.6-operation-recovery-materializer-1.txt
-          set +e
-          python3 scripts/apply_v1_4_6_operation_recovery.py > "$log" 2>&1
-          status=$?
-          set -e
-          printf '\nexit_status=%s\n' "$status" >> "$log"
-          git config user.name "heptabao-v1.4.6-diagnostics"
-          git config user.email "heptabao-v1.4.6-diagnostics@users.noreply.github.com"
-          git add "$log"
-          git commit -m "chore(diagnostics): capture V1.4.6 operation materializer failure"
+          log=.diagnostics/v1.4.6-operation-recovery-2.txt
+          : > "$log"
+          failed=0
+          run_check() {
+            label="$1"
+            shift
+            (
+              printf '\n===== %s =====\n' "$label"
+              "$@"
+              status=$?
+              printf 'exit_status=%s\n' "$status"
+              exit "$status"
+            ) >> "$log" 2>&1 || failed=1
+          }
+          run_check cargo-fmt cargo +1.98.0 fmt --all -- --check
+          run_check cargo-test cargo +1.98.0 test --locked --workspace --all-targets
+          run_check cargo-clippy cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          run_check validator-v145 python3 scripts/validate_plan_v1_4_5.py --root .
+          run_check hostile-v145 python3 tests/plan/test_plan_v1_4_5.py
+          git config user.name "heptabao-v1.4.6-materializer"
+          git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
+          if [ "$failed" -eq 0 ]; then
+            rm -f "$log"
+            git add crates scripts/validate_plan_v1_4_5.py
+            git commit -m "feat(v1.4.6): recover durable intents from provider proof"
+          else
+            git add "$log"
+            git commit -m "chore(diagnostics): capture V1.4.6 operation recovery failure"
+          fi
           git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
-          exit "$status"
+          exit "$failed"
