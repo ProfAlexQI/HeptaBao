@@ -1,0 +1,212 @@
+name: v1.4.1-final-rescue
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/v1.4-durable-single-node-foundation-v1
+    paths:
+      - .github/workflows/v1.4.1-final-rescue.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rescue-verify-publish:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact source and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "${{ github.event.pull_request.head.ref }}" = "codex/plan-v1.4-full-gap-closure-v1"
+          printf '%s\n' "$expected" >"$RUNNER_TEMP/source-head.txt"
+
+      - name: Construct the exact clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import os
+          from pathlib import Path
+
+          ledger = Path('crates/heptabao-operation-ledger/src/lib.rs')
+          source = ledger.read_text(encoding='utf-8')
+          old_helper = (
+              '    fn detail(value: &str) -> '
+              'Result<StableDetailCode, OperationContractError> {'
+          )
+          new_helper = (
+              '    fn stable_detail(value: &str) -> '
+              'Result<StableDetailCode, OperationContractError> {'
+          )
+          if old_helper in source:
+              if source.count(old_helper) != 1:
+                  raise SystemExit('test detail helper is ambiguous')
+              source = source.replace(old_helper, new_helper, 1)
+              source = source.replace('detail("', 'stable_detail("')
+          if new_helper not in source or 'let detail = detail("' in source:
+              raise SystemExit('test detail helper shadowing remains')
+          ledger.write_text(source, encoding='utf-8')
+
+          convergence = Path('.github/workflows/v1.4.1-converge-final-source.yml')
+          workflow = convergence.read_text(encoding='utf-8')
+          start_marker = "<<'PATCH_B64'\n"
+          end_marker = '\n          PATCH_B64\n'
+          if workflow.count(start_marker) != 1 or workflow.count(end_marker) != 1:
+              raise SystemExit('convergence patch envelope drifted')
+          encoded = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          encoded = ''.join(line.strip() for line in encoded.splitlines())
+          compressed = base64.b64decode(encoded, validate=True)
+          patch = gzip.decompress(compressed)
+          digest = hashlib.sha256(patch).hexdigest()
+          expected_digest = '7fa90331f27fb0cf6409d7ede6048a362ce9e267683d546f78e19bc912b86195'
+          if digest != expected_digest:
+              raise SystemExit(f'convergence patch digest drifted: {digest}')
+          patch_path = Path(os.environ['RUNNER_TEMP']) / 'v1.4.1-final.patch'
+          patch_path.write_bytes(patch)
+          PY
+          git apply --check "$RUNNER_TEMP/v1.4.1-final.patch"
+          git apply "$RUNNER_TEMP/v1.4.1-final.patch"
+          rm -f \
+            .github/workflows/v1.4.1-source-export.yml \
+            .github/workflows/v1.4.1-rust-materializer.yml \
+            .github/workflows/v1.4.1-rust-materializer-v2.yml \
+            .github/workflows/v1.4.1-final-source-materializer.yml \
+            .github/workflows/v1.4.1-finalize-source.yml \
+            .github/workflows/v1.4.1-postcommit-reconcile-fix.yml \
+            .github/workflows/v1.4.1-final-reconcile-v2.yml \
+            .github/workflows/v1.4.1-unresolved-operation-fence.yml \
+            .github/workflows/v1.4.1-secure-journal-permissions.yml \
+            .github/workflows/v1.4.1-converge-final-source.yml \
+            .github/workflows/v1.4.1-final-rescue.yml
+          test -z "$(find .github/workflows -maxdepth 1 -type f -name 'v1.4.1-*' -print -quit)"
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install exact Rust 1.98 toolchain and freeze local candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          cargo +1.98.0 fmt --all
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v1.4.1): close final journal ledger build blocker"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Validate current exact V1.4.1 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_4_1.py
+          python scripts/validate_v1_4_1_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_1.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Replay frozen V1.4 Python and Rust gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="33e1c14c3e417ea1c9ea181e2181751736c7bce5"
+          historical_root="$RUNNER_TEMP/v1.4-baseline"
+          cleanup() {
+            git worktree remove --force "$historical_root" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$historical_root" "$baseline"
+          (
+            cd "$historical_root"
+            python scripts/validate_plan_v1_4.py
+            python scripts/validate_v1_4_inherited_surface.py
+            python -m unittest discover -s tests/plan -p 'test_plan_v1_4.py' -v
+            python -m unittest discover -s tests/platform -p 'test_*.py' -v
+            python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+            cargo +1.98.0 fmt --all -- --check
+            cargo +1.98.0 test --locked --workspace --all-targets
+            cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          )
+          cleanup
+          trap - EXIT
+
+      - name: Test and strictly lint current V1.4.1 workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 \
+            >"$RUNNER_TEMP/v1.4.1-cargo-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Confirm non-authority and fast-forward publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          status = yaml.safe_load(
+              Path('planning/HEPTABAO_V1_4_1_DURABLE_OPERATION_LEDGER_STATUS.yaml')
+              .read_text(encoding='utf-8')
+          )
+          expected = {
+              'qualification': False,
+              'compatibility_claim': False,
+              'selected_candidates': [],
+              'selection_effect': 'NONE',
+              'production_authority': False,
+              'migration_authority': False,
+              'release_authority': False,
+              'authority_effect': 'NONE',
+          }
+          if status.get('claims') != expected:
+              raise SystemExit('V1.4.1 authority boundary drifted')
+          PY
+          source_head="$(cat "$RUNNER_TEMP/source-head.txt")"
+          remote_head="$(git ls-remote origin refs/heads/codex/plan-v1.4-full-gap-closure-v1 | cut -f1)"
+          test "$remote_head" = "$source_head"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin HEAD:codex/plan-v1.4-full-gap-closure-v1
+
+      - name: Emit exact result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## V1.4.1 exact clean candidate published'
+            echo
+            echo "- commit: `$(git rev-parse HEAD)`"
+            echo "- tree: `$(git rev-parse HEAD^{tree})`"
+            echo '- exact 20-path surface: PASS'
+            echo '- current and frozen Python regressions: PASS'
+            echo '- current and frozen Rust 1.98 gates: PASS'
+            echo '- temporary write workflows: absent'
+            echo '- authority effect: NONE'
+          } >>"$GITHUB_STEP_SUMMARY"
