@@ -1,0 +1,102 @@
+
+===== cargo-test =====
+   Compiling heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+   Compiling heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+   Compiling heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+   Compiling heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+   Compiling heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+   Compiling heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+   Compiling heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+   Compiling heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+   Compiling heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+   Compiling heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+error[E0369]: binary operation `==` cannot be applied to type `Result<Generation, DurableCoreError<MemoryStoreError, ...>>`
+   --> crates/heptabao-durable-core/src/lib.rs:574:21
+    |
+574 | /                     assert_eq!(
+575 | |                         engine
+576 | |                             .commit_prepared(prepared)
+577 | |                             .map(|value| value.committed),
+578 | |                         Ok(Generation::INITIAL)
+579 | |                     );
+    | |                     ^
+    | |                     |
+    | |_____________________Result<Generation, DurableCoreError<MemoryStoreError, ...>>
+    |                       Result<Generation, DurableCoreError<MemoryStoreError, ...>>
+    |
+note: an implementation of `PartialEq` might be missing for `DurableCoreError<MemoryStoreError, MockBarrierError>`
+   --> crates/heptabao-durable-core/src/lib.rs:229:1
+    |
+229 | pub enum DurableCoreError<S, B>
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+    = note: the full name for the type has been written to '/home/runner/work/HeptaBao/HeptaBao/target/debug/deps/heptabao_durable_core-77466529dcbe5767.long-type-8658853606634466889.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `DurableCoreError<MemoryStoreError, MockBarrierError>` with `#[derive(PartialEq)]`
+    |
+229 + #[derive(PartialEq)]
+230 | pub enum DurableCoreError<S, B>
+    |
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `heptabao-durable-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+exit_status=101
+
+===== cargo-clippy =====
+    Checking heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+    Checking heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+    Checking heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+    Checking heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+    Checking heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+    Checking heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+    Checking heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+    Checking heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+    Checking heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+    Checking heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+    Checking heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+    Checking heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+    Checking heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+error[E0369]: binary operation `==` cannot be applied to type `Result<Generation, DurableCoreError<MemoryStoreError, ...>>`
+   --> crates/heptabao-durable-core/src/lib.rs:574:21
+    |
+574 | /                     assert_eq!(
+575 | |                         engine
+576 | |                             .commit_prepared(prepared)
+577 | |                             .map(|value| value.committed),
+578 | |                         Ok(Generation::INITIAL)
+579 | |                     );
+    | |                     ^
+    | |                     |
+    | |_____________________Result<Generation, DurableCoreError<MemoryStoreError, ...>>
+    |                       Result<Generation, DurableCoreError<MemoryStoreError, ...>>
+    |
+note: an implementation of `std::cmp::PartialEq` might be missing for `DurableCoreError<tests::MemoryStoreError, tests::MockBarrierError>`
+   --> crates/heptabao-durable-core/src/lib.rs:229:1
+    |
+229 | pub enum DurableCoreError<S, B>
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `std::cmp::PartialEq`
+    = note: the full name for the type has been written to '/home/runner/work/HeptaBao/HeptaBao/target/debug/deps/heptabao_durable_core-a102d8d1b20bb29c.long-type-14513246048865915569.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `DurableCoreError<tests::MemoryStoreError, tests::MockBarrierError>` with `#[derive(PartialEq)]`
+    |
+229 + #[derive(PartialEq)]
+230 | pub enum DurableCoreError<S, B>
+    |
+
+    Checking heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `heptabao-durable-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+exit_status=101
+
+===== validator-v145 =====
+V1.4.5 security invariant validation: PASS
+exit_status=0
+
+===== hostile-v145 =====
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 0.453s
+
+OK
+exit_status=0
