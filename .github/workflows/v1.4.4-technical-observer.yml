@@ -1,0 +1,220 @@
+name: v1.4.4-technical-observer
+
+on:
+  push:
+    branches:
+      - exec/v1.4.4-technical-observer-v1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v1.4.4-technical-observer
+  cancel-in-progress: false
+
+jobs:
+  observe-exact-heads:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      V142_SHA: 34e8dc0caceb84288d4ef61f79cd7ca062718b63
+      V143_BRANCH: codex/plan-v1.4.3-descriptor-fencing-clean-v1
+      V144_BRANCH: codex/plan-v1.4.4-module-documentation-closure-v2
+      INTEGRATION_BRANCH: integration/v1.4.4-technical-candidate
+      EVIDENCE_BRANCH: evidence/v1.4.4-repository-controlled-pass-v1
+    steps:
+      - name: Checkout observer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install exact dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Bind remote exact heads
+        id: bind
+        run: |
+          set -euo pipefail
+          for branch in "$V143_BRANCH" "$V144_BRANCH" "$INTEGRATION_BRANCH"; do
+            git fetch --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+          done
+          v143="$(git rev-parse "refs/remotes/origin/$V143_BRANCH")"
+          v144="$(git rev-parse "refs/remotes/origin/$V144_BRANCH")"
+          integration="$(git rev-parse "refs/remotes/origin/$INTEGRATION_BRANCH")"
+          test "$integration" = "$v144"
+          test "$(git rev-parse "$v143^")" = "$V142_SHA"
+          test "$(git rev-parse "$v144^")" = "$v143"
+          printf 'v143=%s\nv143_tree=%s\nv144=%s\nv144_tree=%s\nintegration=%s\n' \
+            "$v143" "$(git rev-parse "$v143^{tree}")" \
+            "$v144" "$(git rev-parse "$v144^{tree}")" "$integration" \
+            | tee "$RUNNER_TEMP/exact-heads.txt"
+          echo "v143=$v143" >>"$GITHUB_OUTPUT"
+          echo "v144=$v144" >>"$GITHUB_OUTPUT"
+
+      - name: Observe clean V1.4.3 exact head
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v1.4.3-observed"
+          git worktree add --detach "$root" "${{ steps.bind.outputs.v143 }}"
+          cd "$root"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test ! -e .bootstrap/v1.4.3
+          test ! -e .github/workflows/v1.4.3-bootstrap.yml
+          test ! -e .github/workflows/v1.4.3-finalize-publish.yml
+          test ! -e .github/workflows/v1.4.3-materializer.yml
+          test ! -e .github/workflows/v1.4.3-clean-closure-exec.yml
+          test ! -e .github/workflows/v1.4.3-clean-closure-exec-v2.yml
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.3-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Replay frozen V1.4.2 exact baseline
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v1.4.2-frozen"
+          git worktree add --detach "$root" "$V142_SHA"
+          cd "$root"
+          python scripts/validate_plan_v1_4_2.py
+          python scripts/validate_v1_4_2_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_2.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Observe V1.4.4 module-documentation exact head
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v1.4.4-observed"
+          git worktree add --detach "$root" "${{ steps.bind.outputs.v144 }}"
+          cd "$root"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test ! -e .github/workflows/v1.4.4-module-doc-closure-exec.yml
+          test ! -e .github/workflows/v1.4.4-module-doc-closure-exec-v2.yml
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.4-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Rebind unchanged remote heads
+        run: |
+          set -euo pipefail
+          before_v143="${{ steps.bind.outputs.v143 }}"
+          before_v144="${{ steps.bind.outputs.v144 }}"
+          after_v143="$(git ls-remote origin "refs/heads/$V143_BRANCH" | awk '{print $1}')"
+          after_v144="$(git ls-remote origin "refs/heads/$V144_BRANCH" | awk '{print $1}')"
+          after_integration="$(git ls-remote origin "refs/heads/$INTEGRATION_BRANCH" | awk '{print $1}')"
+          test "$before_v143" = "$after_v143"
+          test "$before_v144" = "$after_v144"
+          test "$before_v144" = "$after_integration"
+
+      - name: Publish repository-controlled technical receipt
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v1.4.4-observed"
+          cd "$root"
+          mkdir -p evidence/technical
+          cat >evidence/technical/HEPTABAO_V1_4_4_REPOSITORY_CONTROLLED_TECHNICAL_PASS.yaml <<EOF
+          schema: heptabao.repository-controlled-technical-pass.v1
+          plan_id: HEPTABAO-PLAN-2026-08-28
+          revision: '1.4.4'
+          repository: TrillionniumFoundation/HeptaBao
+          v1_4_2_baseline: $V142_SHA
+          v1_4_3_commit: ${{ steps.bind.outputs.v143 }}
+          v1_4_3_tree: $(git rev-parse '${{ steps.bind.outputs.v143 }}^{tree}')
+          v1_4_4_commit: ${{ steps.bind.outputs.v144 }}
+          v1_4_4_tree: $(git rev-parse '${{ steps.bind.outputs.v144 }}^{tree}')
+          integration_branch: $INTEGRATION_BRANCH
+          workflow_run_id: '$GITHUB_RUN_ID'
+          workflow_run_attempt: '$GITHUB_RUN_ATTEMPT'
+          workflow_job: '$GITHUB_JOB'
+          runner_name: '$RUNNER_NAME'
+          runner_os: '$RUNNER_OS'
+          repository_controlled_status: PASS
+          executed:
+            v1_4_3_plan_and_hostile_tests: PASS
+            v1_4_3_platform_and_oracle_regressions: PASS
+            v1_4_3_rust_1_98_fmt_test_strict_clippy: PASS
+            frozen_v1_4_2_replay: PASS
+            v1_4_4_documentation_validator_and_mutation_tests: PASS
+            v1_4_4_platform_and_oracle_regressions: PASS
+            v1_4_4_rust_1_98_fmt_test_strict_clippy: PASS
+            exact_remote_head_rebind: PASS
+          closed_repository_blockers:
+          - HB-BLK-REPO-033
+          - HB-BLK-REPO-034
+          - HB-BLK-REPO-035
+          - HB-BLK-REPO-036
+          - HB-BLK-REPO-037
+          - HB-BLK-REPO-038
+          - HB-BLK-REPO-039
+          - HB-BLK-REPO-040
+          external_and_control_blockers:
+          - HB-BLK-CTRL-001
+          - HB-BLK-EXT-001
+          - HB-BLK-EXT-002
+          - HB-BLK-EXT-003
+          - HB-BLK-EXT-004
+          - HB-BLK-EXT-005
+          - HB-BLK-EXT-006
+          - HB-BLK-EXT-007
+          qualification: false
+          compatibility_claim: false
+          selected_candidates: []
+          selection_effect: NONE
+          production_authority: false
+          migration_authority: false
+          release_authority: false
+          authority_effect: NONE
+          EOF
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          path = Path('evidence/technical/HEPTABAO_V1_4_4_REPOSITORY_CONTROLLED_TECHNICAL_PASS.yaml')
+          obj = yaml.safe_load(path.read_text(encoding='utf-8'))
+          if obj['repository_controlled_status'] != 'PASS':
+              raise SystemExit('receipt status drifted')
+          if obj['qualification'] or obj['compatibility_claim'] or obj['production_authority'] or obj['migration_authority'] or obj['release_authority']:
+              raise SystemExit('receipt authority boundary drifted')
+          if obj['authority_effect'] != 'NONE' or obj['selection_effect'] != 'NONE':
+              raise SystemExit('receipt effect boundary drifted')
+          if len(obj['closed_repository_blockers']) != 8:
+              raise SystemExit('receipt blocker set drifted')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add evidence/technical/HEPTABAO_V1_4_4_REPOSITORY_CONTROLLED_TECHNICAL_PASS.yaml
+          git commit -m 'chore(evidence): record V1.4.4 repository-controlled technical pass'
+          git push origin "+HEAD:refs/heads/$EVIDENCE_BRANCH"
+
+      - name: Upload observer diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: heptabao-v1.4.4-technical-observer-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/exact-heads.txt
+            ${{ runner.temp }}/v1.4.3-metadata.json
+            ${{ runner.temp }}/v1.4.4-metadata.json
