@@ -63,6 +63,75 @@ jobs:
               source = source.replace('detail("', 'stable_detail("')
           if new_helper not in source or 'let detail = detail("' in source:
               raise SystemExit('test detail helper shadowing remains')
+
+          transition_start = source.find('const fn allowed_transition(')
+          transition_end = source.find('\n\nfn validate_event_shape', transition_start)
+          if transition_start < 0 or transition_end < 0:
+              raise SystemExit('allowed-transition function envelope drifted')
+          transition = '''const fn allowed_transition(
+              class: OperationClass,
+              previous: OperationPhase,
+              next: OperationPhase,
+          ) -> bool {
+              matches!(
+                  (class, previous, next),
+                  (_, OperationPhase::Accepted, OperationPhase::RejectedBeforeDispatch)
+                      | (_, OperationPhase::Accepted, OperationPhase::IntentCommitted)
+                      | (
+                          OperationClass::DurableMutation,
+                          OperationPhase::IntentCommitted,
+                          OperationPhase::StateCommitted,
+                      )
+                      | (
+                          OperationClass::DurableMutation,
+                          OperationPhase::IntentCommitted,
+                          OperationPhase::Reconciled,
+                      )
+                      | (
+                          OperationClass::ExternalEffect,
+                          OperationPhase::IntentCommitted,
+                          OperationPhase::EffectStarted,
+                      )
+                      | (
+                          OperationClass::ExternalEffect,
+                          OperationPhase::EffectStarted,
+                          OperationPhase::EffectSucceeded
+                              | OperationPhase::EffectFailed
+                              | OperationPhase::EffectUnknown,
+                      )
+                      | (
+                          OperationClass::ExternalEffect,
+                          OperationPhase::EffectSucceeded,
+                          OperationPhase::StateCommitted,
+                      )
+                      | (
+                          OperationClass::ExternalEffect,
+                          OperationPhase::EffectFailed | OperationPhase::EffectUnknown,
+                          OperationPhase::Reconciled,
+                      )
+                      | (
+                          _,
+                          OperationPhase::StateCommitted,
+                          OperationPhase::ResponseAudited
+                              | OperationPhase::ResponseAuditFailedAfterCommit,
+                      )
+                      | (
+                          _,
+                          OperationPhase::ResponseAudited,
+                          OperationPhase::Delivered
+                              | OperationPhase::DeliveryFailedAfterCommit,
+                      )
+                      | (
+                          _,
+                          OperationPhase::ResponseAuditFailedAfterCommit
+                              | OperationPhase::DeliveryFailedAfterCommit,
+                          OperationPhase::Reconciled,
+                      )
+              )
+          }'''
+          source = source[:transition_start] + transition + source[transition_end:]
+          if 'match (class, previous, next)' in source:
+              raise SystemExit('match-like transition expression remains')
           ledger.write_text(source, encoding='utf-8')
 
           convergence = Path('.github/workflows/v1.4.1-converge-final-source.yml')
