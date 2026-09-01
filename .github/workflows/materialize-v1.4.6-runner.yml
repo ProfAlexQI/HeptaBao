@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-storage-intent-6]' }}"
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-storage-intent-7]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -26,11 +26,12 @@ jobs:
           python3 scripts/apply_v1_4_6_storage_intent_fix1.py
           python3 scripts/apply_v1_4_6_storage_intent_fix2.py
           python3 scripts/apply_v1_4_6_storage_intent_fix3.py
+          python3 scripts/apply_v1_4_6_storage_intent_fix4.py
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           python3 -m pip install --disable-pip-version-check pyyaml
           cargo +1.98.0 fmt --all
           mkdir -p .diagnostics
-          log=.diagnostics/v1.4.6-storage-intent-6.txt
+          log=.diagnostics/v1.4.6-storage-intent-7.txt
           : > "$log"
           failed=0
           run_check() {
