@@ -29,6 +29,29 @@ name = "heptabao-governance"
 version = "0.1.0"
 
 [[package]]
+name = "heptabao-journal-api"
+version = "0.1.0"
+
+[[package]]
+name = "heptabao-journaled-core"
+version = "0.1.0"
+dependencies = [
+ "heptabao-barrier-api",
+ "heptabao-durable-core",
+ "heptabao-journal-api",
+ "heptabao-operation-ledger",
+ "heptabao-storage-api",
+]
+
+[[package]]
+name = "heptabao-operation-ledger"
+version = "0.1.0"
+dependencies = [
+ "heptabao-journal-api",
+ "heptabao-storage-api",
+]
+
+[[package]]
 name = "heptabao-oracle-observer"
 version = "0.1.0"
 
@@ -50,6 +73,13 @@ version = "0.1.0"
 [[package]]
 name = "heptabao-protocol"
 version = "0.1.0"
+
+[[package]]
+name = "heptabao-single-node-journal"
+version = "0.1.0"
+dependencies = [
+ "heptabao-journal-api",
+]
 
 [[package]]
 name = "heptabao-single-node-store"
