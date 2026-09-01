@@ -153,6 +153,52 @@ jobs:
           PY
           git apply --check "$RUNNER_TEMP/v1.4.1-final.patch"
           git apply "$RUNNER_TEMP/v1.4.1-final.patch"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/heptabao-journaled-core/src/lib.rs')
+          source = path.read_text(encoding='utf-8')
+          import_anchor = (
+              'use heptabao_storage_api::{CommitReceipt, DurableGenerationStore, Generation};\n'
+          )
+          alias = (
+              '\npub type JournaledCoreResult<T, S, B, J> = '
+              'Result<T, JournaledCoreError<S, B, J>>;\n'
+          )
+          if alias.strip() not in source:
+              if source.count(import_anchor) != 1:
+                  raise SystemExit('journaled-core import anchor drifted')
+              source = source.replace(import_anchor, import_anchor + alias, 1)
+          receipt_result = (
+              'Result<JournaledCommitReceipt, '
+              'JournaledCoreError<S::Error, B::Error, J::Error>>'
+          )
+          unit_result = (
+              'Result<(), JournaledCoreError<S::Error, B::Error, J::Error>>'
+          )
+          if source.count(receipt_result) != 1:
+              raise SystemExit(
+                  f'journaled-core receipt result count drifted: '
+                  f'{source.count(receipt_result)}'
+              )
+          if source.count(unit_result) != 7:
+              raise SystemExit(
+                  f'journaled-core unit result count drifted: '
+                  f'{source.count(unit_result)}'
+              )
+          source = source.replace(
+              receipt_result,
+              'JournaledCoreResult<JournaledCommitReceipt, '
+              'S::Error, B::Error, J::Error>',
+          )
+          source = source.replace(
+              unit_result,
+              'JournaledCoreResult<(), S::Error, B::Error, J::Error>',
+          )
+          if 'Result<(), JournaledCoreError<S::Error' in source:
+              raise SystemExit('journaled-core complex unit result remains')
+          path.write_text(source, encoding='utf-8')
+          PY
           rm -f \
             .github/workflows/v1.4.1-source-export.yml \
             .github/workflows/v1.4.1-rust-materializer.yml \
