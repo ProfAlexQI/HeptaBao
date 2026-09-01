@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  materialize:
-    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-operation-recovery-3]' }}"
+  validate:
+    if: "${{ github.event.head_commit.message == 'chore(bootstrap): [run-v1.4.6-file-provider-matrix-1]' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -18,18 +18,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Apply patch, validate, and persist source or diagnostics
+      - name: Validate real-provider crash matrix and persist formatting or diagnostics
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/fix_apply_v1_4_6_operation_recovery.py
-          python3 scripts/apply_v1_4_6_operation_recovery.py
-          python3 scripts/apply_v1_4_6_operation_recovery_fix2.py
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           python3 -m pip install --disable-pip-version-check pyyaml
+          cargo +1.98.0 generate-lockfile
           cargo +1.98.0 fmt --all
           mkdir -p .diagnostics
-          log=.diagnostics/v1.4.6-operation-recovery-3.txt
+          log=.diagnostics/v1.4.6-file-provider-matrix-1.txt
           : > "$log"
           failed=0
           run_check() {
@@ -52,11 +50,11 @@ jobs:
           git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
           if [ "$failed" -eq 0 ]; then
             rm -f "$log"
-            git add crates scripts/validate_plan_v1_4_5.py
-            git commit -m "feat(v1.4.6): recover durable intents from provider proof"
+            git add Cargo.lock crates/heptabao-journaled-core
+            git commit -m "test(v1.4.6): verify file-provider recovery across reopen"
           else
             git add "$log"
-            git commit -m "chore(diagnostics): capture V1.4.6 operation recovery failure"
+            git commit -m "chore(diagnostics): capture V1.4.6 file-provider matrix failure"
           fi
           git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
           exit "$failed"
