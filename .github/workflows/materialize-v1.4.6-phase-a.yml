@@ -1,0 +1,354 @@
+name: Materialize V1.4.6 authoritative recovery phase A
+
+on:
+  push:
+    branches:
+      - codex/plan-v1.4.6-authoritative-recovery-closure-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: ${{ github.event.head_commit.message == 'chore(bootstrap): [materialize-v1.4.6-phase-a]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply minimal authoritative-recovery patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, expected: int = 1) -> None:
+              file = Path(path)
+              value = file.read_text(encoding="utf-8")
+              actual = value.count(old)
+              if actual != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {actual}: {old[:120]!r}")
+              file.write_text(value.replace(old, new, expected), encoding="utf-8")
+
+          replace(
+              "crates/heptabao-journal-api/src/lib.rs",
+              "    fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error>;\n\n    fn append(\n",
+              "    fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error>;\n\n"
+              "    /// Re-establishes the provider's authoritative in-memory view after an\n"
+              "    /// append whose outcome was unknown, then returns the fully authenticated\n"
+              "    /// committed prefix. Providers with cached tails or exact-next orphan\n"
+              "    /// records must override this method and reconcile them fail-closed.\n"
+              "    fn recover_authoritative(&mut self) -> Result<Vec<JournalRecord>, Self::Error> {\n"
+              "        self.replay()\n"
+              "    }\n\n"
+              "    fn append(\n",
+          )
+
+          replace(
+              "crates/heptabao-operation-ledger/src/lib.rs",
+              "    pub fn open(journal: J) -> Result<Self, OperationLedgerError<J::Error>> {\n"
+              "        let records = journal.replay().map_err(OperationLedgerError::Journal)?;\n",
+              "    pub fn open(mut journal: J) -> Result<Self, OperationLedgerError<J::Error>> {\n"
+              "        let records = journal\n"
+              "            .recover_authoritative()\n"
+              "            .map_err(OperationLedgerError::Journal)?;\n",
+          )
+          replace(
+              "crates/heptabao-operation-ledger/src/lib.rs",
+              "    pub fn reopen(self) -> Result<Self, OperationLedgerError<J::Error>> {\n"
+              "        Self::open(self.journal)\n"
+              "    }\n",
+              "    pub fn recover_after_append_failure(\n"
+              "        &mut self,\n"
+              "    ) -> Result<(), OperationLedgerError<J::Error>> {\n"
+              "        if !self.replay_required() {\n"
+              "            return Err(OperationLedgerError::RecoveryNotRequired);\n"
+              "        }\n"
+              "        let records = self\n"
+              "            .journal\n"
+              "            .recover_authoritative()\n"
+              "            .map_err(OperationLedgerError::Journal)?;\n"
+              "        let mut operations = BTreeMap::new();\n"
+              "        for record in records {\n"
+              "            let event = OperationEvent::decode(record.payload.as_bytes())\n"
+              "                .map_err(OperationLedgerError::Contract)?;\n"
+              "            apply_replayed_event(&mut operations, event)\n"
+              "                .map_err(OperationLedgerError::Contract)?;\n"
+              "        }\n"
+              "        self.operations = operations;\n"
+              "        self.write_state = LedgerWriteState::Writable;\n"
+              "        Ok(())\n"
+              "    }\n\n"
+              "    pub fn reopen(self) -> Result<Self, OperationLedgerError<J::Error>> {\n"
+              "        let mut ledger = self;\n"
+              "        if ledger.replay_required() {\n"
+              "            ledger.recover_after_append_failure()?;\n"
+              "            Ok(ledger)\n"
+              "        } else {\n"
+              "            Self::open(ledger.journal)\n"
+              "        }\n"
+              "    }\n",
+          )
+          replace(
+              "crates/heptabao-operation-ledger/src/lib.rs",
+              "    ReplayRequiredAfterAppendFailure,\n}\n",
+              "    ReplayRequiredAfterAppendFailure,\n    RecoveryNotRequired,\n}\n",
+          )
+          replace(
+              "crates/heptabao-operation-ledger/src/lib.rs",
+              "            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(\n"
+              "                \"journal append outcome was unknown; close and reopen the ledger before writing\",\n"
+              "            ),\n",
+              "            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(\n"
+              "                \"journal append outcome was unknown; recover authoritative replay before writing\",\n"
+              "            ),\n"
+              "            Self::RecoveryNotRequired => formatter.write_str(\n"
+              "                \"operation ledger recovery was requested while the ledger was writable\",\n"
+              "            ),\n",
+          )
+          replace(
+              "crates/heptabao-operation-ledger/src/lib.rs",
+              "                        ledger.record(event),\n                        Err(OperationLedgerError::ReplayRequiredAfterAppendFailure)\n                    ));\n",
+              "                        ledger.record(event.clone()),\n                        Err(OperationLedgerError::ReplayRequiredAfterAppendFailure)\n                    ));\n"
+              "                    assert!(ledger.recover_after_append_failure().is_ok());\n"
+              "                    assert_eq!(ledger.write_state(), LedgerWriteState::Writable);\n"
+              "                    assert_eq!(ledger.operation_count(), 0);\n"
+              "                    assert!(ledger.record(event).is_ok());\n",
+          )
+
+          replace(
+              "crates/heptabao-key-lifecycle/src/lib.rs",
+              "    pub fn open(journal: J) -> Result<Self, KeyLifecycleError<J::Error>> {\n"
+              "        let records = journal.replay().map_err(KeyLifecycleError::Journal)?;\n",
+              "    pub fn open(mut journal: J) -> Result<Self, KeyLifecycleError<J::Error>> {\n"
+              "        let records = journal\n"
+              "            .recover_authoritative()\n"
+              "            .map_err(KeyLifecycleError::Journal)?;\n",
+          )
+          replace(
+              "crates/heptabao-key-lifecycle/src/lib.rs",
+              "    pub fn reopen(self) -> Result<Self, KeyLifecycleError<J::Error>> {\n"
+              "        Self::open(self.journal)\n"
+              "    }\n\n"
+              "    fn record(\n",
+              "    pub fn recover_after_append_failure(\n"
+              "        &mut self,\n"
+              "    ) -> Result<(), KeyLifecycleError<J::Error>> {\n"
+              "        if !self.replay_required() {\n"
+              "            return Err(KeyLifecycleError::RecoveryNotRequired);\n"
+              "        }\n"
+              "        let records = self\n"
+              "            .journal\n"
+              "            .recover_authoritative()\n"
+              "            .map_err(KeyLifecycleError::Journal)?;\n"
+              "        let mut state = KeyRingState::default();\n"
+              "        for record in records {\n"
+              "            let event = KeyRingEvent::decode(record.payload.as_bytes())\n"
+              "                .map_err(KeyLifecycleError::Contract)?;\n"
+              "            state.apply(&event).map_err(KeyLifecycleError::Contract)?;\n"
+              "        }\n"
+              "        self.state = state;\n"
+              "        self.write_state = KeyLedgerWriteState::Writable;\n"
+              "        Ok(())\n"
+              "    }\n\n"
+              "    pub fn reopen(self) -> Result<Self, KeyLifecycleError<J::Error>> {\n"
+              "        let mut ledger = self;\n"
+              "        if ledger.replay_required() {\n"
+              "            ledger.recover_after_append_failure()?;\n"
+              "            Ok(ledger)\n"
+              "        } else {\n"
+              "            Self::open(ledger.journal)\n"
+              "        }\n"
+              "    }\n\n"
+              "    fn record(\n",
+          )
+          replace(
+              "crates/heptabao-key-lifecycle/src/lib.rs",
+              "    ReplayRequiredAfterAppendFailure,\n}\n",
+              "    ReplayRequiredAfterAppendFailure,\n    RecoveryNotRequired,\n}\n",
+          )
+          replace(
+              "crates/heptabao-key-lifecycle/src/lib.rs",
+              "            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(\n"
+              "                \"key lifecycle append outcome was unknown; close and reopen before writing\",\n"
+              "            ),\n",
+              "            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(\n"
+              "                \"key lifecycle append outcome was unknown; recover authoritative replay before writing\",\n"
+              "            ),\n"
+              "            Self::RecoveryNotRequired => formatter.write_str(\n"
+              "                \"key lifecycle recovery was requested while the ledger was writable\",\n"
+              "            ),\n",
+          )
+          replace(
+              "crates/heptabao-key-lifecycle/src/lib.rs",
+              "        let reopened = ledger.reopen()?;\n        assert_eq!(reopened.state().active_epoch(), Some(KeyEpoch::INITIAL));\n",
+              "        ledger.recover_after_append_failure()?;\n"
+              "        assert_eq!(ledger.write_state(), KeyLedgerWriteState::Writable);\n"
+              "        assert_eq!(ledger.state().active_epoch(), Some(KeyEpoch::INITIAL));\n"
+              "        let reopened = ledger.reopen()?;\n"
+              "        assert_eq!(reopened.state().active_epoch(), Some(KeyEpoch::INITIAL));\n",
+          )
+
+          replace(
+              "crates/heptabao-journaled-core/src/lib.rs",
+              "    pub fn persist_mutation(\n",
+              "    pub fn recover_ledger_after_append_failure(\n"
+              "        &mut self,\n"
+              "    ) -> JournaledCoreResult<(), S::Error, B::Error, J::Error> {\n"
+              "        self.ledger\n"
+              "            .recover_after_append_failure()\n"
+              "            .map_err(JournaledCoreError::Ledger)\n"
+              "    }\n\n"
+              "    pub fn persist_mutation(\n",
+          )
+
+          replace(
+              "crates/heptabao-single-node-journal/src/lib.rs",
+              "    fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error> {\n"
+              "        let _ = self.inspect_current_layout()?;\n"
+              "        let records = self.replay_internal()?;\n",
+              "    fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error> {\n"
+              "        if self.inspect_current_layout()?.is_some() {\n"
+              "            return Err(FileJournalError::PendingOrphan);\n"
+              "        }\n"
+              "        let records = self.replay_internal()?;\n",
+          )
+          replace(
+              "crates/heptabao-single-node-journal/src/lib.rs",
+              "    fn append(\n        &mut self,\n",
+              "    fn recover_authoritative(&mut self) -> Result<Vec<JournalRecord>, Self::Error> {\n"
+              "        self.root.verify().map_err(map_directory_guard_error)?;\n"
+              "        self.validate_marker()?;\n"
+              "        self.tail = self.read_optional_tail()?;\n"
+              "        if self.validate_layout()?.is_some() {\n"
+              "            let _ = self.reconcile_next_orphan()?;\n"
+              "        }\n"
+              "        let records = self.replay_internal()?;\n"
+              "        if tail_from_records(&records) != self.tail {\n"
+              "            return Err(FileJournalError::CorruptJournal);\n"
+              "        }\n"
+              "        Ok(records)\n"
+              "    }\n\n"
+              "    fn append(\n        &mut self,\n",
+          )
+          replace(
+              "crates/heptabao-single-node-journal/src/lib.rs",
+              "                assert!(reopened.tail().is_none());\n"
+              "                assert!(reopened.reconcile_next_orphan().is_ok());\n",
+              "                assert!(reopened.tail().is_none());\n"
+              "                assert!(matches!(\n"
+              "                    reopened.replay(),\n"
+              "                    Err(FileJournalError::PendingOrphan)\n"
+              "                ));\n"
+              "                assert!(reopened.recover_authoritative().is_ok());\n",
+          )
+          replace(
+              "crates/heptabao-single-node-journal/src/lib.rs",
+              "    #[cfg(unix)]\n    #[test]\n    fn symlinked_root_is_rejected() {\n",
+              "    #[test]\n"
+              "    fn authoritative_recovery_refreshes_stale_cached_tail() {\n"
+              "        let temporary = TempDirectory::new();\n"
+              "        let domain = domain();\n"
+              "        let authenticator = TestAuthenticator::new();\n"
+              "        if let (Ok(temporary), Ok(domain), Ok(authenticator)) =\n"
+              "            (temporary, domain, authenticator)\n"
+              "        {\n"
+              "            let journal = FileDurableJournal::create_new(\n"
+              "                &temporary.path,\n"
+              "                domain,\n"
+              "                authenticator,\n"
+              "            );\n"
+              "            assert!(journal.is_ok());\n"
+              "            if let Ok(mut journal) = journal {\n"
+              "                let payload = JournalPayload::new(b\"published-before-error\".to_vec());\n"
+              "                assert!(payload.is_ok());\n"
+              "                if let Ok(payload) = payload {\n"
+              "                    assert!(journal.append(None, payload).is_ok());\n"
+              "                    journal.tail = None;\n"
+              "                    assert!(matches!(\n"
+              "                        journal.replay(),\n"
+              "                        Err(FileJournalError::TailConflict { .. })\n"
+              "                    ));\n"
+              "                    let recovered = journal.recover_authoritative();\n"
+              "                    assert!(recovered.is_ok());\n"
+              "                    if let Ok(recovered) = recovered {\n"
+              "                        assert_eq!(recovered.len(), 1);\n"
+              "                    }\n"
+              "                    assert_eq!(\n"
+              "                        journal.tail().map(|tail| tail.sequence),\n"
+              "                        Some(JournalSequence::INITIAL)\n"
+              "                    );\n"
+              "                }\n"
+              "            }\n"
+              "        }\n"
+              "    }\n\n"
+              "    #[cfg(unix)]\n    #[test]\n    fn symlinked_root_is_rejected() {\n",
+          )
+
+          replace(
+              "crates/heptabao-rollback-anchor/src/lib.rs",
+              "impl VerifiedRecoveryCheckpoint {\n"
+              "    pub const fn checkpoint(&self) -> &RecoveryCheckpoint {\n"
+              "        &self.checkpoint\n"
+              "    }\n"
+              "}\n",
+              "impl VerifiedRecoveryCheckpoint {\n"
+              "    pub const fn revision(&self) -> AnchorRevision {\n"
+              "        self.checkpoint.revision()\n"
+              "    }\n\n"
+              "    pub const fn digest(&self) -> CheckpointDigest {\n"
+              "        self.checkpoint.digest()\n"
+              "    }\n\n"
+              "    pub const fn observation(&self) -> &CheckpointObservation {\n"
+              "        self.checkpoint.observation()\n"
+              "    }\n"
+              "}\n",
+          )
+          replace(
+              "crates/heptabao-recovery-core/src/lib.rs",
+              "        let anchored_checkpoint = anchor.verify_current(verified.checkpoint()).map_err(|_| {\n"
+              "            RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)\n"
+              "        })?;\n",
+              "        anchor.verify_current(verified.checkpoint()).map_err(|_| {\n"
+              "            RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)\n"
+              "        })?;\n",
+          )
+          replace(
+              "crates/heptabao-recovery-core/src/lib.rs",
+              "        let anchored_checkpoint = anchor\n"
+              "            .verify_current(anchored_checkpoint.checkpoint())\n"
+              "            .map_err(|_| {\n"
+              "                RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)\n"
+              "            })?;\n"
+              "        let anchor_revision = anchored_checkpoint.checkpoint().revision();\n",
+              "        let anchored_checkpoint = anchor\n"
+              "            .verify_current(verified.checkpoint())\n"
+              "            .map_err(|_| {\n"
+              "                RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)\n"
+              "            })?;\n"
+              "        let anchor_revision = anchored_checkpoint.revision();\n",
+          )
+          PY
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt clippy
+
+      - name: Validate source and hostile tests
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --workspace --all-targets
+          cargo +1.98.0 clippy --workspace --all-targets -- -D warnings
+          python3 scripts/validate_plan_v1_4_5.py --root .
+          python3 tests/plan/test_plan_v1_4_5.py
+
+      - name: Commit materialized source
+        run: |
+          git config user.name "heptabao-v1.4.6-materializer"
+          git config user.email "heptabao-v1.4.6-materializer@users.noreply.github.com"
+          git add crates
+          git commit -m "fix(v1.4.6): make journal poison recoverable"
+          git push origin HEAD:codex/plan-v1.4.6-authoritative-recovery-closure-v1
