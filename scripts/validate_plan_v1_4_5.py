@@ -205,12 +205,28 @@ def validate(root: Path) -> list[str]:
         errors.append("historical V1.3.1 exact-ratifier workflow is not branch scoped")
 
     workflow = text(root, ".github/workflows/plan-v1.4.5-security-invariant-closure.yml")
-    for token in ("contents: read", "matrix.source_kind", "cargo +1.98.0 test", "validate_plan_v1_4_5.py"):
+    for token in (
+        "contents: read",
+        "matrix.source_kind",
+        "cargo +1.98.0 test",
+        "validate_plan_v1_4_5.py",
+        "V145_HEAD: 936cb5599d206cea895de2ae04a1289a0b3a0326",
+        'git merge-base --is-ancestor "$V145_HEAD" "$HEAD_SHA"',
+        'git diff --name-only "$V145_BASELINE" "$V145_HEAD"',
+        'git diff --check "$V145_BASELINE" "$V145_HEAD"',
+    ):
         if token not in workflow:
             errors.append(f"V1.4.5 workflow missing {token!r}")
-    for token in ("contents: write", "git push", "update-ref", "persist-credentials: true"):
+    for token in (
+        "contents: write",
+        "git push",
+        "update-ref",
+        "persist-credentials: true",
+        'git diff --name-only "$V145_BASELINE" "$HEAD_SHA"',
+        'git diff --check "$V145_BASELINE" "$HEAD_SHA"',
+    ):
         if token in workflow:
-            errors.append(f"V1.4.5 workflow is not read-only: {token!r}")
+            errors.append(f"V1.4.5 workflow contains forbidden successor-unsafe token: {token!r}")
 
     blocker = load_yaml(root, "planning/HEPTABAO_BLOCKER_REGISTER_V1_4_5.yaml")
     status = load_yaml(root, "planning/HEPTABAO_V1_4_5_SECURITY_INVARIANT_STATUS.yaml")

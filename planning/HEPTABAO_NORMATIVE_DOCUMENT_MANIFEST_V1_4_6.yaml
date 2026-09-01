@@ -32,6 +32,15 @@ documents:
 - path: .github/workflows/plan-v1.4.6-authoritative-recovery-closure.yml
   role: READ_ONLY_PR_EXACT_HEAD_AND_MERGE_WORKFLOW
   source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: .github/workflows/plan-v1.4.5-security-invariant-closure.yml
+  role: INHERITED_CHECKPOINT_BOUND_REGRESSION_WORKFLOW
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: scripts/validate_plan_v1_4_5.py
+  role: INHERITED_GATE_SEMANTIC_VALIDATOR
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
+- path: tests/plan/test_plan_v1_4_5.py
+  role: INHERITED_GATE_HOSTILE_VALIDATOR_TEST
+  source_binding: RESOLVE_FROM_EXACT_SOURCE
 - path: crates/heptabao-storage-api/src/lib.rs
   role: STORAGE_RECOVERY_CONTRACT_SOURCE
   source_binding: RESOLVE_FROM_EXACT_SOURCE
