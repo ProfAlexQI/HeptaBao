@@ -123,33 +123,19 @@ jobs:
           source = path.read_text(encoding="utf-8")
           import_old = "AnchorAuthenticatorId, AnchorCoordinator, AnchorFenceError, AnchorRevision,"
           import_new = "AnchorAuthenticatorId, AnchorCoordinator, AnchorRevision,"
-          if import_old not in source:
-              raise SystemExit("expected unused AnchorFenceError import was not found")
+          if source.count(import_old) != 1:
+              raise SystemExit("expected one unused AnchorFenceError import")
           source = source.replace(import_old, import_new, 1)
 
-          binding_old = """        let restore = anchor
-              .with_current_fence(&publish_checkpoint, || {
-          """
-          binding_new = """        anchor
-              .with_current_fence(&publish_checkpoint, || {
-          """
-          if binding_old not in source:
-              raise SystemExit("expected recovery let-and-return binding was not found")
-          source = source.replace(binding_old, binding_new, 1)
+          binding_old = "        let restore = anchor\n"
+          if source.count(binding_old) != 1:
+              raise SystemExit("expected one recovery let-and-return binding")
+          source = source.replace(binding_old, "        anchor\n", 1)
 
-          return_old = """              .map_err(|_| {
-                  RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
-              })?;
-          
-                  restore
-          """
-          return_new = """              .map_err(|_| {
-                  RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
-              })?
-          """
-          if return_old not in source:
-              raise SystemExit("expected recovery let-and-return tail was not found")
-          source = source.replace(return_old, return_new, 1)
+          return_old = "            })?;\n        restore\n"
+          if source.count(return_old) != 1:
+              raise SystemExit("expected one recovery let-and-return tail")
+          source = source.replace(return_old, "            })?\n", 1)
           path.write_text(source, encoding="utf-8")
           PY
           cargo +1.98.0 fmt --all
