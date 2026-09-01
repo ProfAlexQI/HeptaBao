@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "heptabao-key-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "heptabao-barrier-api",
+ "heptabao-journal-api",
+]
+
+[[package]]
 name = "heptabao-operation-ledger"
 version = "0.1.0"
 dependencies = [
@@ -73,6 +81,25 @@ version = "0.1.0"
 [[package]]
 name = "heptabao-protocol"
 version = "0.1.0"
+
+[[package]]
+name = "heptabao-recovery-core"
+version = "0.1.0"
+dependencies = [
+ "heptabao-barrier-api",
+ "heptabao-journal-api",
+ "heptabao-rollback-anchor",
+ "heptabao-storage-api",
+]
+
+[[package]]
+name = "heptabao-rollback-anchor"
+version = "0.1.0"
+dependencies = [
+ "heptabao-barrier-api",
+ "heptabao-journal-api",
+ "heptabao-storage-api",
+]
 
 [[package]]
 name = "heptabao-single-node-journal"
