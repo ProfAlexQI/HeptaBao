@@ -1,0 +1,373 @@
+name: v1.4.1-unresolved-operation-fence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/v1.4-durable-single-node-foundation-v1
+    paths:
+      - .github/workflows/v1.4.1-unresolved-operation-fence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair-test-publish:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "${{ github.event.pull_request.head.ref }}" = "codex/plan-v1.4-full-gap-closure-v1"
+
+      - name: Add unresolved-operation fence and rejection recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          ledger = Path('crates/heptabao-operation-ledger/src/lib.rs')
+          source = ledger.read_text(encoding='utf-8')
+          if '    pub fn blocking_phase(&self) -> Option<OperationPhase> {' not in source:
+              anchor = '''    pub fn operation_count(&self) -> usize {
+                  self.operations.len()
+              }
+
+          '''
+              insertion = anchor + '''    pub fn blocking_phase(&self) -> Option<OperationPhase> {
+                  self.operations.values().find_map(|event| {
+                      let phase = event.phase();
+                      if phase_blocks_new_mutation(phase) {
+                          Some(phase)
+                      } else {
+                          None
+                      }
+                  })
+              }
+
+          '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('operation-count anchor drifted')
+              source = source.replace(anchor, insertion, 1)
+          if 'const fn phase_blocks_new_mutation(' not in source:
+              anchor = 'const fn retry_directive_for_event(event: &OperationEvent) -> RetryDirective {\n'
+              helper = '''const fn phase_blocks_new_mutation(phase: OperationPhase) -> bool {
+                  matches!(
+                      phase,
+                      OperationPhase::Accepted
+                          | OperationPhase::IntentCommitted
+                          | OperationPhase::EffectStarted
+                          | OperationPhase::EffectSucceeded
+                          | OperationPhase::EffectUnknown
+                  )
+              }
+
+          '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('retry directive helper anchor drifted')
+              source = source.replace(anchor, helper + anchor, 1)
+          ledger.write_text(source, encoding='utf-8')
+
+          core = Path('crates/heptabao-journaled-core/src/lib.rs')
+          source = core.read_text(encoding='utf-8')
+          if '            return Err(JournaledCoreError::UnresolvedOperationBlocksMutation {' not in source:
+              anchor = '''        if let Some(existing) = self.ledger.current(&operation_id) {
+                  return Err(JournaledCoreError::ExistingOperation {
+                      phase: existing.phase(),
+                      directive: self
+                          .ledger
+                          .retry_directive(&operation_id)
+                          .unwrap_or(RetryDirective::ManualHold),
+                  });
+              }
+
+          '''
+              insertion = anchor + '''        if let Some(phase) = self.ledger.blocking_phase() {
+                  return Err(JournaledCoreError::UnresolvedOperationBlocksMutation { phase });
+              }
+
+          '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('existing-operation guard anchor drifted')
+              source = source.replace(anchor, insertion, 1)
+
+          if '    pub fn record_rejected_before_dispatch(' not in source:
+              anchor = '    pub fn reconcile_committed_state(\n'
+              method = '''    pub fn record_rejected_before_dispatch(
+                  &mut self,
+                  operation_id: &OperationId,
+                  detail: StableDetailCode,
+              ) -> Result<(), JournaledCoreError<S::Error, B::Error, J::Error>> {
+                  let current = self
+                      .ledger
+                      .current(operation_id)
+                      .cloned()
+                      .ok_or(JournaledCoreError::OperationMissing)?;
+                  let rejected = current
+                      .next(
+                          OperationPhase::RejectedBeforeDispatch,
+                          None,
+                          None,
+                          None,
+                          detail,
+                      )
+                      .map_err(JournaledCoreError::OperationContract)?;
+                  self.ledger
+                      .record(rejected)
+                      .map_err(JournaledCoreError::Ledger)?;
+                  Ok(())
+              }
+
+          '''
+              if source.count(anchor) != 1:
+                  raise SystemExit('committed-state reconciliation anchor drifted')
+              source = source.replace(anchor, method + anchor, 1)
+
+          enum_anchor = '''    ExistingOperation {
+                  phase: OperationPhase,
+                  directive: RetryDirective,
+              },
+          '''
+          if '    UnresolvedOperationBlocksMutation {' not in source:
+              insertion = enum_anchor + '''    UnresolvedOperationBlocksMutation {
+                  phase: OperationPhase,
+              },
+          '''
+              if source.count(enum_anchor) != 1:
+                  raise SystemExit('journaled-core error enum anchor drifted')
+              source = source.replace(enum_anchor, insertion, 1)
+
+          display_anchor = '''            Self::ExistingOperation { phase, directive } => write!(
+                      formatter,
+                      "operation already exists at phase {phase:?}; retry directive is {directive:?}"
+                  ),
+          '''
+          if 'Self::UnresolvedOperationBlocksMutation' not in source:
+              insertion = display_anchor + '''            Self::UnresolvedOperationBlocksMutation { phase } => write!(
+                      formatter,
+                      "unresolved operation at phase {phase:?} fences every new mutation"
+                  ),
+          '''
+              if source.count(display_anchor) != 1:
+                  raise SystemExit('journaled-core error display anchor drifted')
+              source = source.replace(display_anchor, insertion, 1)
+
+          test_name = '    fn unresolved_operation_fences_new_generation_until_reconciled() {'
+          if test_name not in source:
+              addition = r'''
+
+              #[test]
+              fn unresolved_operation_fences_new_generation_until_reconciled() {
+                  let core = build_core(Some(3));
+                  assert!(core.is_ok());
+                  if let Ok(mut core) = core {
+                      let first_id = operation_id();
+                      let first_digest = request_digest();
+                      let first_secret = SecretState::new(b"first-committed-state".to_vec());
+                      if let (Ok(first_id), Ok(first_digest), Ok(first_secret)) =
+                          (first_id, first_digest, first_secret)
+                      {
+                          let first = core.persist_mutation(
+                              first_id.clone(),
+                              first_digest,
+                              None,
+                              first_secret,
+                              Vec::new(),
+                          );
+                          let commit = match first {
+                              Err(JournaledCoreError::StateCommittedLedgerIncomplete {
+                                  commit,
+                                  ..
+                              }) => Some(commit),
+                              _ => None,
+                          };
+                          let second_id = OperationId::new("journaled-operation-0002".to_owned());
+                          let second_digest = OperationDigest::new([0x22; 32]);
+                          let second_secret = SecretState::new(b"must-not-advance".to_vec());
+                          if let (Ok(second_id), Ok(second_digest), Ok(second_secret)) =
+                              (second_id, second_digest, second_secret)
+                          {
+                              assert!(matches!(
+                                  core.persist_mutation(
+                                      second_id.clone(),
+                                      second_digest,
+                                      Some(Generation::INITIAL),
+                                      second_secret,
+                                      Vec::new(),
+                                  ),
+                                  Err(JournaledCoreError::UnresolvedOperationBlocksMutation {
+                                      phase: OperationPhase::IntentCommitted
+                                  })
+                              ));
+                              assert_eq!(
+                                  core.state().store().current_generation(),
+                                  Some(Generation::INITIAL)
+                              );
+                              if let Some(commit) = commit {
+                                  assert!(
+                                      core.reconcile_committed_state(&first_id, commit)
+                                          .is_ok()
+                                  );
+                                  let second_secret =
+                                      SecretState::new(b"second-committed-state".to_vec());
+                                  assert!(second_secret.is_ok());
+                                  if let Ok(second_secret) = second_secret {
+                                      assert!(
+                                          core.persist_mutation(
+                                              second_id,
+                                              second_digest,
+                                              Some(Generation::INITIAL),
+                                              second_secret,
+                                              Vec::new(),
+                                          )
+                                          .is_ok()
+                                      );
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              #[test]
+              fn accepted_pre_dispatch_failure_can_be_durably_rejected() {
+                  let core = build_core(Some(2));
+                  assert!(core.is_ok());
+                  if let Ok(mut core) = core {
+                      let first_id = operation_id();
+                      let first_digest = request_digest();
+                      let first_secret = SecretState::new(b"never-dispatched".to_vec());
+                      if let (Ok(first_id), Ok(first_digest), Ok(first_secret)) =
+                          (first_id, first_digest, first_secret)
+                      {
+                          assert!(matches!(
+                              core.persist_mutation(
+                                  first_id.clone(),
+                                  first_digest,
+                                  None,
+                                  first_secret,
+                                  Vec::new(),
+                              ),
+                              Err(JournaledCoreError::Ledger(_))
+                          ));
+                          assert_eq!(
+                              core.ledger().blocking_phase(),
+                              Some(OperationPhase::Accepted)
+                          );
+                          let detail = StableDetailCode::new(
+                              "intent-not-published".to_owned(),
+                          );
+                          assert!(detail.is_ok());
+                          if let Ok(detail) = detail {
+                              assert!(
+                                  core.record_rejected_before_dispatch(&first_id, detail)
+                                      .is_ok()
+                              );
+                              assert_eq!(core.ledger().blocking_phase(), None);
+                          }
+                      }
+                  }
+              }
+          '''
+              prefix, separator, suffix = source.rpartition('\n}')
+              if not separator:
+                  raise SystemExit('journaled-core test module closing brace is missing')
+              source = prefix + addition + separator + suffix
+          core.write_text(source, encoding='utf-8')
+
+          plan = Path('docs/plan/HEPTABAO_PLAN_V1_4_1_DURABLE_JOURNAL_AND_OPERATION_LEDGER.md')
+          text = plan.read_text(encoding='utf-8')
+          marker = 'An unresolved operation globally fences every later mutation'
+          if marker not in text:
+              anchor = (
+                  'then may the ledger append the missing `StateCommitted` transition. A forged,\n'
+                  'stale or mismatched receipt fails closed and leaves the operation unresolved.\n'
+              )
+              addition = anchor + (
+                  '\nAn unresolved operation globally fences every later mutation whose state could\n'
+                  'advance the authoritative generation. `Accepted`, `IntentCommitted`,\n'
+                  '`EffectStarted`, `EffectSucceeded` and `EffectUnknown` must be durably\n'
+                  'resolved before a new operation ID reaches the barrier or storage. A known\n'
+                  'pre-dispatch failure closes through `record_rejected_before_dispatch`; a\n'
+                  'postcommit gap closes only through exact stored-snapshot reconciliation.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('plan global-fence anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          plan.write_text(text, encoding='utf-8')
+
+          audit = Path('docs/audit/HEPTABAO_DURABLE_OPERATION_LEDGER_V1.md')
+          text = audit.read_text(encoding='utf-8')
+          marker = 'An unresolved intent is also a global writer fence.'
+          if marker not in text:
+              anchor = 'receipt before appending `StateCommitted`. Receipt text alone is insufficient.\n'
+              addition = anchor + (
+                  '\nAn unresolved intent is also a global writer fence. No later operation may\n'
+                  'advance the authoritative generation until that intent is either bound to the\n'
+                  'exact stored commit or durably classified as rejected before dispatch.\n'
+              )
+              if text.count(anchor) != 1:
+                  raise SystemExit('audit global-fence anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          audit.write_text(text, encoding='utf-8')
+
+          validator = Path('scripts/validate_plan_v1_4_1.py')
+          text = validator.read_text(encoding='utf-8')
+          token_anchor = '            "reconcile_committed_state",\n'
+          tokens = (
+              '            "blocking_phase",\n'
+              '            "record_rejected_before_dispatch",\n'
+              '            "UnresolvedOperationBlocksMutation",\n'
+          )
+          if '            "UnresolvedOperationBlocksMutation",\n' not in text:
+              if text.count(token_anchor) != 1:
+                  raise SystemExit('validator unresolved-fence token anchor drifted')
+              text = text.replace(token_anchor, token_anchor + tokens, 1)
+          validator.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install exact Python and Rust dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Validate and execute fenced candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          cargo +1.98.0 fmt --all
+          python scripts/validate_plan_v1_4_1.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_1.py' -v
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Self-delete and publish exact verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/v1.4.1-unresolved-operation-fence.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v1.4.1): fence new mutations behind unresolved operations"
+          git push origin HEAD:codex/plan-v1.4-full-gap-closure-v1
