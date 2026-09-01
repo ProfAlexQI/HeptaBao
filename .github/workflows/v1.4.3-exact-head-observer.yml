@@ -1,0 +1,100 @@
+name: v1.4.3-exact-head-observer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - codex/plan-v1.4.3-descriptor-fencing-v1
+    paths:
+      - .github/workflows/v1.4.3-exact-head-observer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1.4.3-exact-head-observer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  observe-exact-canonical-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Resolve canonical V1.4.3 branch head
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git refs/heads/codex/plan-v1.4.3-descriptor-fencing-v1 | cut -f1)"
+          test -n "$source"
+          printf 'sha=%s\n' "$source" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout exact canonical V1.4.3 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact remote head and require clean source shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="${{ steps.source.outputs.sha }}"
+          test "$(git rev-parse HEAD)" = "$source"
+          remote="$(git ls-remote origin refs/heads/codex/plan-v1.4.3-descriptor-fencing-v1 | cut -f1)"
+          test "$remote" = "$source"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test -e scripts/validate_plan_v1_4_3.py
+          test -e scripts/validate_v1_4_3_inherited_surface.py
+          test ! -e .bootstrap/v1.4.3
+          ! grep -R -n --fixed-strings '.bootstrap/v1.4.3' .github/workflows
+
+      - name: Install exact Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Validate V1.4.3 Python contracts and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python scripts/validate_plan_v1_4_3.py
+          python scripts/validate_v1_4_3_inherited_surface.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_3.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Install exact Rust 1.98 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Test format and strictly lint exact V1.4.3 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 metadata --locked --no-deps --format-version 1 >"$RUNNER_TEMP/v1.4.3-cargo-metadata.json"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Emit independent exact-head receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## V1.4.3 independent exact-head observer: PASS'
+            echo
+            echo "- commit: `${{ steps.source.outputs.sha }}`"
+            echo "- tree: `$(git rev-parse 'HEAD^{tree}')`"
+            echo '- canonical remote binding: PASS'
+            echo '- bootstrap absence: PASS'
+            echo '- Python/Rust 1.98 gates: PASS'
+            echo '- authority effect: NONE'
+          } >>"$GITHUB_STEP_SUMMARY"
