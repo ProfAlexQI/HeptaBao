@@ -1,0 +1,192 @@
+
+===== cargo-fmt =====
+exit_status=0
+
+===== cargo-test =====
+   Compiling heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+   Compiling heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+   Compiling heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+   Compiling heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+   Compiling heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+   Compiling heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+   Compiling heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+   Compiling heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+   Compiling heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+   Compiling heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+   Compiling heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+   Compiling heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+   Compiling heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+   Compiling heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+   Compiling heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+   Compiling heptabao-platform-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-platform-contracts)
+   Compiling heptabao-governance v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-governance)
+   Compiling heptabao-oracle-observer v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-oracle-observer)
+   Compiling heptabao-platform-bakeoff v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-platform-bakeoff)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.42s
+     Running unittests src/lib.rs (target/debug/deps/heptabao_authbus_contracts-0b4d818fa121eab5)
+
+running 10 tests
+test tests::assertion_debug_redacts_subject_and_cryptographic_fields ... ok
+test tests::future_issue_time_respects_bounded_skew ... ok
+test tests::replay_cache_prunes_expired_entries ... ok
+test tests::invalid_replay_cache_capacity_is_rejected ... ok
+test tests::expiry_key_and_signature_fail_closed ... ok
+test tests::request_binding_debug_redacts_target_host_and_body ... ok
+test tests::replay_is_rejected ... ok
+test tests::request_binding_mismatch_is_rejected ... ok
+test tests::replay_cache_saturation_fails_closed ... ok
+test tests::valid_assertion_authenticates_but_does_not_authorize ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_barrier_api-43ba4cae626b070e)
+
+running 4 tests
+test tests::context_binds_domain_generation_epoch_purpose_and_caller_data ... ok
+test tests::secret_and_envelope_debug_output_is_redacted ... ok
+test tests::envelope_round_trips_strictly ... ok
+test tests::truncated_and_trailing_envelopes_fail_closed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_durable_core-77466529dcbe5767)
+
+running 4 tests
+test tests::associated_data_mismatch_fails_authentication ... ok
+test tests::plaintext_is_sealed_before_storage_and_round_trips ... ok
+test tests::prepared_mutation_binds_target_before_authoritative_commit ... ok
+test tests::stale_expected_generation_is_rejected_before_sealing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_filesystem_guard-4858a7abd772359f)
+
+running 7 tests
+test tests::relative_root_is_rejected ... ok
+test tests::intermediate_symlink_is_rejected ... ok
+running 1 test
+
+test tests::cooperating_processes_observe_writer_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+test tests::second_open_is_fenced_until_drop ... ok
+test tests::descriptor_survives_root_path_replacement ... ok
+test tests::symlink_root_is_rejected ... ok
+
+running 1 test
+test tests::cooperating_processes_observe_writer_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+test tests::cooperating_processes_observe_writer_fence ... ok
+test tests::root_is_descriptor_bound_and_leaf_names_are_closed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_governance-f40b66e75c136ef2)
+
+running 6 tests
+test tests::every_h00_authority_flag_is_false ... ok
+test tests::high_finding_rejects_qualification ... ok
+test tests::failed_tests_reject_qualification ... ok
+test tests::qualification_never_grants_authority ... ok
+test tests::revoked_receipt_rejects_qualification ... ok
+test tests::unknown_tests_reject_qualification ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_journal_api-c4586d9e4d1c8ec5)
+
+running 4 tests
+test tests::domain_and_authenticator_identity_are_canonical ... ok
+test tests::payload_debug_is_redacted_and_consumable_without_clone ... ok
+test tests::sequence_is_checked_and_non_zero ... ok
+test tests::zero_tag_is_rejected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_journaled_core-10472f320b6561ff)
+
+running 6 tests
+test tests::accepted_pre_dispatch_failure_can_be_durably_rejected ... ok
+test tests::definitely_uncommitted_intent_is_durably_aborted_before_unfencing ... ok
+test tests::intent_precedes_state_commit_and_duplicate_never_mutates_again ... ok
+test tests::postcommit_ledger_failure_is_recovered_from_persisted_target_not_caller_receipt ... ok
+test tests::response_audit_and_delivery_are_durable_ledger_transitions ... ok
+test tests::unresolved_operation_fences_new_generation_until_provider_recovery ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_key_lifecycle-a77f19b4db2d0607)
+
+running 4 tests
+test tests::active_revocation_and_unstaged_rotation_fail_closed ... ok
+test tests::append_outcome_unknown_poison_requires_replay ... ok
+test tests::bootstrap_stage_rotate_retire_and_revoke_replay ... ok
+test tests::event_decoder_rejects_trailing_bytes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/heptabao_operation_ledger-f8e8d9795da948ae)
+
+running 6 tests
+test tests::append_outcome_unknown_fences_until_authenticated_replay ... ok
+test tests::duplicate_acceptance_and_illegal_transition_fail_closed ... ok
+test tests::encoded_event_rejects_trailing_bytes ... ok
+test tests::external_unknown_effect_is_reconcile_only ... ok
+test tests::legal_mutation_chain_replays_and_requires_lookup_after_commit ... FAILED
+test tests::proven_not_committed_intent_is_terminal_and_unblocks_new_mutations ... ok
+
+failures:
+
+---- tests::legal_mutation_chain_replays_and_requires_lookup_after_commit stdout ----
+
+thread 'tests::legal_mutation_chain_replays_and_requires_lookup_after_commit' (4380) panicked at crates/heptabao-operation-ledger/src/lib.rs:1068:33:
+assertion failed: matches!(intent.next(OperationPhase::Reconciled, None, None, None,
+    reconcile_detail,), Err(OperationContractError::InvalidTransition))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::legal_mutation_chain_replays_and_requires_lookup_after_commit
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p heptabao-operation-ledger --lib`
+exit_status=101
+
+===== cargo-clippy =====
+    Checking heptabao-storage-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-storage-api)
+    Checking heptabao-journal-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journal-api)
+    Checking heptabao-protocol v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-protocol)
+    Checking heptabao-filesystem-guard v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-filesystem-guard)
+    Checking heptabao-single-node-journal v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-journal)
+    Checking heptabao-barrier-api v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-barrier-api)
+    Checking heptabao-p0-server v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-p0-server)
+    Checking heptabao-durable-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-durable-core)
+    Checking heptabao-rollback-anchor v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-rollback-anchor)
+    Checking heptabao-operation-ledger v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-operation-ledger)
+    Checking heptabao-key-lifecycle v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-key-lifecycle)
+    Checking heptabao-recovery-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-recovery-core)
+    Checking heptabao-journaled-core v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-journaled-core)
+    Checking heptabao-authbus-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-authbus-contracts)
+    Checking heptabao-single-node-store v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-single-node-store)
+    Checking heptabao-governance v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-governance)
+    Checking heptabao-platform-contracts v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-platform-contracts)
+    Checking heptabao-platform-bakeoff v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-platform-bakeoff)
+    Checking heptabao-oracle-observer v0.1.0 (/home/runner/work/HeptaBao/HeptaBao/crates/heptabao-oracle-observer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.64s
+exit_status=0
+
+===== validator-v145 =====
+V1.4.5 security invariant validation: PASS
+exit_status=0
+
+===== hostile-v145 =====
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 0.586s
+
+OK
+exit_status=0
