@@ -134,11 +134,41 @@ jobs:
 
           validator = Path('scripts/validate_plan_v1_4_2.py')
           source = validator.read_text(encoding='utf-8')
-          before = '            "candidate.apply(&event)",'
-          after = '            ".apply(&event)",'
-          if source.count(before) != 1:
-              raise SystemExit('key lifecycle validator anchor drifted')
-          validator.write_text(source.replace(before, after, 1), encoding='utf-8')
+          anchor = '''def require_tokens(source: str, tokens: list[str], location: str) -> None:
+              missing = [token for token in tokens if token not in source]
+              require(not missing, f"{location} lost required invariants: {missing}")
+
+
+'''
+          replacement = anchor + '''def require_rust_tokens(source: str, tokens: list[str], location: str) -> None:
+              compact_source = re.sub(r"\s+", "", source)
+              missing = [
+                  token
+                  for token in tokens
+                  if re.sub(r"\s+", "", token) not in compact_source
+              ]
+              require(not missing, f"{location} lost required invariants: {missing}")
+
+
+'''
+          if source.count(anchor) != 1:
+              raise SystemExit('validator token helper anchor drifted')
+          source = source.replace(anchor, replacement, 1)
+          for function_name in [
+              'validate_key_lifecycle_source',
+              'validate_anchor_source',
+              'validate_recovery_source',
+          ]:
+              start = source.find(f'def {function_name}(')
+              end = source.find('\n\ndef ', start + 1)
+              if start < 0 or end < 0:
+                  raise SystemExit(f'validator function envelope drifted: {function_name}')
+              section = source[start:end]
+              if section.count('    require_tokens(') != 1:
+                  raise SystemExit(f'validator Rust token call drifted: {function_name}')
+              section = section.replace('    require_tokens(', '    require_rust_tokens(', 1)
+              source = source[:start] + section + source[end:]
+          validator.write_text(source, encoding='utf-8')
           PY_REPAIR
           rm -rf .bootstrap/v1.4.2
           rm -f .github/workflows/v1.4.2-bootstrap-exact-candidate.yml
