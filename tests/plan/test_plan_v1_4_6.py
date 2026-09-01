@@ -80,6 +80,18 @@ class PlanV146HostileTests(unittest.TestCase):
             ),
         )
 
+    def test_filesystem_guard_test_isolation_removal_is_rejected(self) -> None:
+        self.assert_rejected(
+            "crates/heptabao-filesystem-guard/src/lib.rs",
+            lambda path: path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "static TEST_SERIAL: Mutex<()> = Mutex::new(());",
+                    "static REMOVED_TEST_SERIAL: Mutex<()> = Mutex::new(());",
+                ),
+                encoding="utf-8",
+            ),
+        )
+
     def test_push_context_is_rejected(self) -> None:
         self.assert_rejected(
             ".github/workflows/plan-v1.4.6-authoritative-recovery-closure.yml",
