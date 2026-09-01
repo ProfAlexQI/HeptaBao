@@ -28,7 +28,8 @@ Close the remaining repository-controlled gaps in the V1.4.5 security kernel:
 6. give pull-request exact-head and prospective-merge checks distinct,
    non-colliding provenance; and
 7. bind these guarantees to a clean source tree, crash matrix, module addenda,
-   semantic validator and hostile validator tests.
+   semantic validator and hostile validator tests; and
+8. eliminate fork/exec file-descriptor inheritance races from filesystem writer-fence tests without weakening fail-closed locking.
 
 ## 3. Rollback-anchor publication fence
 
@@ -94,6 +95,13 @@ On Unix, store marker, `CURRENT`, temporary control files and immutable
 generation bundles are created with mode `0600`. Directory ownership and
 filesystem/controller durability remain deployment and qualification concerns.
 
+Filesystem-guard tests are serialized inside their test process because a child
+spawned by another parallel test can inherit an unrelated lock descriptor during
+the interval between fork and exec. `O_CLOEXEC` closes it at exec, but immediate
+reacquisition in the other test may correctly observe transient `WriterBusy`.
+Serializing the test scenarios removes this harness race while preserving the
+production fail-closed behavior.
+
 ## 7. Clean CI provenance
 
 The permanent V1.4.6 workflow is pull-request-only and read-only. Its matrix
@@ -140,7 +148,7 @@ OpenBao compatibility.
 
 ## 10. Completion rule
 
-HB-BLK-REPO-049 through HB-BLK-REPO-055 close only when the clean immutable
+HB-BLK-REPO-049 through HB-BLK-REPO-056 close only when the clean immutable
 candidate passes exact-head and prospective-merge gates and independent review
 accepts the fence, recovery, permissions, CI and documentation claims. External
 and control blockers remain open until their real completion objects exist.
