@@ -116,6 +116,43 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
           cargo +1.98.0 fmt --all
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/heptabao-recovery-core/src/lib.rs")
+          source = path.read_text(encoding="utf-8")
+          import_old = "AnchorAuthenticatorId, AnchorCoordinator, AnchorFenceError, AnchorRevision,"
+          import_new = "AnchorAuthenticatorId, AnchorCoordinator, AnchorRevision,"
+          if import_old not in source:
+              raise SystemExit("expected unused AnchorFenceError import was not found")
+          source = source.replace(import_old, import_new, 1)
+
+          binding_old = """        let restore = anchor
+              .with_current_fence(&publish_checkpoint, || {
+          """
+          binding_new = """        anchor
+              .with_current_fence(&publish_checkpoint, || {
+          """
+          if binding_old not in source:
+              raise SystemExit("expected recovery let-and-return binding was not found")
+          source = source.replace(binding_old, binding_new, 1)
+
+          return_old = """              .map_err(|_| {
+                  RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
+              })?;
+          
+                  restore
+          """
+          return_new = """              .map_err(|_| {
+                  RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
+              })?
+          """
+          if return_old not in source:
+              raise SystemExit("expected recovery let-and-return tail was not found")
+          source = source.replace(return_old, return_new, 1)
+          path.write_text(source, encoding="utf-8")
+          PY
+          cargo +1.98.0 fmt --all
           git diff --check
           python scripts/validate_plan_v1_4_6.py
           python -m unittest discover -s tests/plan -p 'test_plan_v1_4_6.py' -v
