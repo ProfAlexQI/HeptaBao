@@ -187,3 +187,14 @@ occurred. It is never a safe retryable contract failure. Operators and target
 providers must perform authoritative readback and reconciliation before another
 restore attempt. Only `AuthorizedRecoveryImage` exposes consumable sealed state and
 journal records; archive-authenticated images do not.
+
+## V1.4.6 atomic admission and fenced publish
+
+`RecoveryTarget::stage_if_empty` replaces separate advisory emptiness and stage
+calls. The provider atomically verifies/claims an empty target and returns a
+staged token consumed by `publish`. `RecoveryRestorer` creates the
+`AuthorizedRecoveryImage`, stages and publishes it, and compares the complete
+receipt while the rollback provider's exact-current fence is held.
+
+A provider-declared publication-unknown or mismatched post-publication receipt
+requires target readback. It is never a safe automatic retry.

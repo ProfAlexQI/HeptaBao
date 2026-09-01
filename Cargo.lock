@@ -44,6 +44,8 @@ dependencies = [
  "heptabao-durable-core",
  "heptabao-journal-api",
  "heptabao-operation-ledger",
+ "heptabao-single-node-journal",
+ "heptabao-single-node-store",
  "heptabao-storage-api",
 ]
 

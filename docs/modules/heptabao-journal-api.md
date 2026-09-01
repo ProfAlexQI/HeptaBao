@@ -157,3 +157,11 @@ must classify the error through `classify_append_failure`. The default is
 `OutcomeUnknown`; only a provider with affirmative evidence that neither the record
 nor tail was published may return `DefinitelyNotAppended`. Callers must fence writes
 on the unknown disposition until a fresh open performs authenticated replay.
+
+## V1.4.6 authoritative replay contract
+
+`recover_authoritative` is the only provider-neutral path for clearing an
+append-unknown ledger fence. It must refresh cached provider state, authenticate
+the committed prefix and reconcile any provider-defined exact-next durable
+artifact before returning records. The default append-failure disposition
+remains `OutcomeUnknown`; optimistic error-name classification is forbidden.

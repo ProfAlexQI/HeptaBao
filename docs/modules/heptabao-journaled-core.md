@@ -148,3 +148,13 @@ objects. Generic reconciliation rejects a durable mutation at `IntentCommitted`.
 Only `reconcile_committed_state`, after rereading authoritative storage and matching
 both generation and digest, can advance such an operation. An append-unknown ledger
 error poisons all later journal writes until reopen and replay.
+
+## V1.4.6 interrupted commit recovery
+
+The composition records `Accepted` and exact `IntentCommitted` evidence before
+calling the state provider. Recovery derives the descriptor from the replayed
+operation, invokes authoritative store classification, and records either
+`StateCommitted` or `AbortedBeforeStateCommit`. Divergent provider state remains
+fenced. Generic `Reconciled` is still forbidden for durable mutation intent.
+The file-provider integration suite covers failures before/after storage and
+journal publication boundaries.

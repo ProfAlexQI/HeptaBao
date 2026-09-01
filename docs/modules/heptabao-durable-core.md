@@ -135,3 +135,11 @@ The production-facing engine no longer returns a mutable store reference and can
 be decomposed into raw store and barrier providers. Read-only inspection remains
 available for exact reconciliation. This keeps barrier-before-storage sequencing an
 API capability boundary rather than a caller convention.
+
+## V1.4.6 prepared mutation semantics
+
+`prepare_persist` seals plaintext first and obtains the exact provider commit
+descriptor without publishing state. `PreparedDurableMutation` owns both that
+descriptor and the sealed candidate and is consumed by `commit_prepared`.
+The descriptor exposed for journaling is metadata; only the journaled
+composition supplies the intent-before-effect authority sequence.

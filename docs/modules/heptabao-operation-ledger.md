@@ -161,3 +161,11 @@ the instance and constructing a new ledger with `OperationLedger::open`, which
 replays the authenticated journal. Durable mutations may not transition directly
 from `IntentCommitted` to `Reconciled`; exact storage evidence is required for the
 `StateCommitted` transition.
+
+## V1.4.6 persisted-then-error evidence
+
+The append-unknown hostile provider now stores the encoded event before
+returning the injected error. The ledger enters `ReplayRequired`, rejects the
+next write before provider access, calls authoritative journal recovery, and
+reconstructs the persisted operation. The recovered duplicate `Accepted` event
+is rejected rather than silently appended again.

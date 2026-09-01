@@ -1,0 +1,44 @@
+schema: heptabao.v1-4-6-authoritative-recovery-status.v1
+plan_id: HEPTABAO-PLAN-2026-09-02
+revision: 1.4.6
+status: SOURCE_IMPLEMENTED_EXACT_HEAD_MERGE_AND_INDEPENDENT_REVIEW_REQUIRED
+current_plan: docs/plan/HEPTABAO_PLAN_V1_4_6_AUTHORITATIVE_RECOVERY_CLOSURE.md
+current_blocker_register: planning/HEPTABAO_BLOCKER_REGISTER_V1_4_6.yaml
+normative_manifest: planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_6.yaml
+recovery_protocol: docs/recovery/HEPTABAO_AUTHORITATIVE_RECOVERY_PROTOCOL_V1.md
+current_documentation: docs/CURRENT_DOCUMENTATION.md
+source_baseline:
+  commit: 936cb5599d206cea895de2ae04a1289a0b3a0326
+  tree: 7c2ac2adc8eff42360950dcd425eb20e894c3c22
+implementation:
+  anchor_fence_across_publish: IMPLEMENTED_SOURCE
+  atomic_empty_target_staging: IMPLEMENTED_SOURCE
+  authoritative_store_commit_recovery: IMPLEMENTED_SOURCE
+  authoritative_journal_replay: IMPLEMENTED_SOURCE
+  persisted_then_error_hostile_evidence: IMPLEMENTED_SOURCE
+  owner_only_store_files: IMPLEMENTED_SOURCE
+  event_qualified_ci_contexts: IMPLEMENTED_SOURCE
+  clean_candidate_tree: IMPLEMENTED_SOURCE
+  recovery_protocol_and_module_addenda: IMPLEMENTED_SOURCE
+execution:
+  exact_head: REQUIRED
+  prospective_merge: REQUIRED
+  independent_security_review: REQUIRED
+external_open:
+- HB-BLK-CTRL-001
+- HB-BLK-EXT-001
+- HB-BLK-EXT-002
+- HB-BLK-EXT-003
+- HB-BLK-EXT-004
+- HB-BLK-EXT-005
+- HB-BLK-EXT-006
+- HB-BLK-EXT-007
+claims:
+  qualification: false
+  compatibility_claim: false
+  selected_candidates: []
+  selection_effect: NONE
+  production_authority: false
+  migration_authority: false
+  release_authority: false
+  authority_effect: NONE

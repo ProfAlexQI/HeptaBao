@@ -51,3 +51,14 @@ cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 Source baseline for V1.4.5: `489a104450ff48c49e7fb61e167e566ea5e0e6c7` / `a567e8feb90077de5e3a8e540f07a89192264338`. V1.4.4 remains the inherited **19 / 19** module-documentation coverage revision.
+
+## V1.4.6 authoritative recovery closure
+
+The latest source tranche rebuilds a clean candidate from V1.4.5 and adds
+authoritative interrupted-commit recovery, an anchor serialization fence held
+through recovery publication, atomic empty-target staging, persisted-then-error
+ledger evidence, owner-only Unix store files, and distinct pull-request
+exact-head/prospective-merge checks.
+
+This remains a security-kernel candidate and is not production-deployable.
+Current normative entry points are listed in `docs/CURRENT_DOCUMENTATION.md`.

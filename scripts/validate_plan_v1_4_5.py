@@ -88,7 +88,7 @@ def validate(root: Path) -> list[str]:
         (
             "pub enum LedgerWriteState",
             "ReplayRequiredAfterAppendFailure",
-            "append_outcome_unknown_fences_until_authenticated_replay",
+            "append_outcome_unknown_after_persistence_requires_authoritative_replay",
             "pub fn reopen(self)",
         ),
     )
@@ -129,7 +129,7 @@ def validate(root: Path) -> list[str]:
         root,
         "crates/heptabao-journaled-core/src/lib.rs",
         (
-            "reconcile_committed_state",
+            "recover_durable_intent",
             "generic-reconcile-forbidden",
             "current.class() == OperationClass::DurableMutation",
         ),
@@ -138,7 +138,10 @@ def validate(root: Path) -> list[str]:
         errors,
         root,
         "crates/heptabao-journaled-core/src/lib.rs",
-        ("pub fn into_parts(self) -> (DurableStateEngine",),
+        (
+            "pub fn into_parts(self) -> (DurableStateEngine",
+            "pub fn reconcile_committed_state",
+        ),
     )
     require_tokens(
         errors,

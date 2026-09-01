@@ -249,8 +249,16 @@ pub struct VerifiedRecoveryCheckpoint {
 }
 
 impl VerifiedRecoveryCheckpoint {
-    pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
-        &self.checkpoint
+    pub const fn revision(&self) -> AnchorRevision {
+        self.checkpoint.revision()
+    }
+
+    pub const fn digest(&self) -> CheckpointDigest {
+        self.checkpoint.digest()
+    }
+
+    pub const fn observation(&self) -> &CheckpointObservation {
+        self.checkpoint.observation()
     }
 }
 
@@ -262,10 +270,46 @@ pub trait CheckpointAuthenticator: fmt::Debug + Send + Sync {
     fn authenticate(&self, preimage: &[u8]) -> Result<CheckpointDigest, Self::Error>;
 }
 
+#[derive(Debug)]
+pub enum AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    CheckpointNotCurrent,
+    Provider(E),
+}
+
+impl<E> fmt::Display for AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CheckpointNotCurrent => {
+                formatter.write_str("rollback checkpoint is no longer current")
+            }
+            Self::Provider(error) => write!(formatter, "rollback anchor fence failure: {error}"),
+        }
+    }
+}
+
+impl<E> Error for AnchorFenceError<E> where E: Error + Send + Sync + 'static {}
+
 pub trait RollbackAnchor: fmt::Debug + Send {
     type Error: Error + Send + Sync + 'static;
 
     fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error>;
+
+    /// Executes `operation` only while `expected` is the exact current
+    /// checkpoint and while the provider's anchor-advance serialization
+    /// primitive remains held. `compare_and_swap` must use the same primitive.
+    fn with_current_fence<T, F>(
+        &mut self,
+        expected: &RecoveryCheckpoint,
+        operation: F,
+    ) -> Result<T, AnchorFenceError<Self::Error>>
+    where
+        F: FnOnce() -> T;
 
     fn compare_and_swap(
         &mut self,
@@ -414,6 +458,25 @@ where
             ));
         }
         Ok(receipt)
+    }
+
+    pub fn with_current_fence<T, F>(
+        &mut self,
+        checkpoint: &RecoveryCheckpoint,
+        operation: F,
+    ) -> AnchorResult<T, A::Error, P::Error>
+    where
+        F: FnOnce() -> T,
+    {
+        self.verify_checkpoint(checkpoint)?;
+        self.anchor
+            .with_current_fence(checkpoint, operation)
+            .map_err(|error| match error {
+                AnchorFenceError::CheckpointNotCurrent => {
+                    AnchorCoordinatorError::Contract(AnchorContractError::CheckpointNotCurrent)
+                }
+                AnchorFenceError::Provider(error) => AnchorCoordinatorError::Anchor(error),
+            })
     }
 
     pub fn verify_owned(
@@ -633,6 +696,20 @@ mod tests {
             Ok(self.current.clone())
         }
 
+        fn with_current_fence<T, F>(
+            &mut self,
+            expected: &RecoveryCheckpoint,
+            operation: F,
+        ) -> Result<T, AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            if self.current.as_ref() != Some(expected) {
+                return Err(AnchorFenceError::CheckpointNotCurrent);
+            }
+            Ok(operation())
+        }
+
         fn compare_and_swap(
             &mut self,
             expected_revision: Option<AnchorRevision>,
@@ -727,6 +804,25 @@ mod tests {
     }
 
     #[test]
+    fn current_checkpoint_fence_rejects_stale_checkpoint() -> Result<(), Box<dyn Error>> {
+        let anchor = MemoryAnchor::default();
+        let authenticator = TestAuthenticator::new()?;
+        let mut coordinator = AnchorCoordinator::new(anchor, authenticator);
+        let current = coordinator.advance(observation(1, 3, 1, 1)?)?.current;
+        let observed = coordinator.with_current_fence(&current, || 7_u8)?;
+        assert_eq!(observed, 7);
+        let stale = current;
+        let _ = coordinator.advance(observation(2, 4, 2, 2)?)?;
+        assert!(matches!(
+            coordinator.with_current_fence(&stale, || 9_u8),
+            Err(AnchorCoordinatorError::Contract(
+                AnchorContractError::CheckpointNotCurrent
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn rollback_divergence_and_epoch_regression_fail_closed() -> Result<(), Box<dyn Error>> {
         let anchor = MemoryAnchor::default();
         let authenticator = TestAuthenticator::new()?;
@@ -806,6 +902,17 @@ mod tests {
 
         fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error> {
             Ok(None)
+        }
+
+        fn with_current_fence<T, F>(
+            &mut self,
+            _expected: &RecoveryCheckpoint,
+            _operation: F,
+        ) -> Result<T, AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            Err(AnchorFenceError::CheckpointNotCurrent)
         }
 
         fn compare_and_swap(

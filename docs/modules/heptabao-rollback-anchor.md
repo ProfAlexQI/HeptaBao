@@ -159,3 +159,12 @@ checkpoints. Raw anchor and authenticator providers are not extractable from the
 coordinator. `verify_current` always rereads the external anchor, requires exact
 checkpoint equality and authenticates the current object; a historical verification
 result is never sufficient for a later restore ceremony.
+
+## V1.4.6 publication fence
+
+`with_current_fence` authenticates the expected checkpoint through the
+coordinator, compares exact current state under the provider serialization
+primitive, and keeps that primitive held while the supplied publication
+closure executes. `compare_and_swap` must use the same primitive, so an anchor
+advance cannot interleave between admission and recovery publication.
+The closure is single invocation; a stale checkpoint never enters it.

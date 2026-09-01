@@ -16,14 +16,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use heptabao_filesystem_guard::{DirectoryGuardError, ExclusiveDirectory};
 use heptabao_storage_api::{
-    CommitReceipt, DurableGenerationStore, Generation, GenerationSnapshot, IntegrityProvider,
-    OpaqueState, StateDigest, StorageContractError, StoreDomain, StoreOpenMode,
+    CommitIntent, CommitReceipt, CommitRecovery, DurableGenerationStore, Generation,
+    GenerationSnapshot, IntegrityProvider, OpaqueState, StateDigest, StorageContractError,
+    StoreDomain, StoreOpenMode,
 };
 
 const MARKER_NAME: &str = "heptabao.marker";
@@ -143,6 +144,46 @@ impl<P: IntegrityProvider> FileGenerationStore<P> {
 
     pub fn root_identity(&self) -> heptabao_filesystem_guard::DirectoryIdentity {
         self.root.identity()
+    }
+
+    fn read_optional_current_record(
+        &self,
+    ) -> Result<Option<CurrentRecord>, FileStoreError<P::Error>> {
+        match fs::symlink_metadata(self.current_path()) {
+            Ok(_) => {
+                let bytes = read_regular_file(&self.current_path(), MAX_CONTROL_FILE_BYTES)?;
+                decode_current(&bytes)
+                    .map(Some)
+                    .map_err(|_| FileStoreError::CorruptState)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(FileStoreError::Io(error)),
+        }
+    }
+
+    fn regular_file_exists(&self, path: &Path) -> Result<bool, FileStoreError<P::Error>> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                Err(FileStoreError::UnsafeFileType)
+            }
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(FileStoreError::Io(error)),
+        }
+    }
+
+    fn publish_current_record(
+        &self,
+        record: CurrentRecord,
+    ) -> Result<(), FileStoreError<P::Error>> {
+        let mut bytes = encode_current(record);
+        let result = atomic_replace(&self.root, CURRENT_NAME, &bytes);
+        bytes.fill(0);
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.published => Err(FileStoreError::CommitOutcomeUnknown),
+            Err(error) => Err(FileStoreError::Io(error.source)),
+        }
     }
 
     fn ensure_disk_matches_memory(&self) -> Result<(), FileStoreError<P::Error>> {
@@ -280,6 +321,120 @@ where
             digest,
             state,
         }))
+    }
+
+    fn prepare_commit(
+        &self,
+        expected_current: Option<Generation>,
+        candidate: &OpaqueState,
+    ) -> Result<CommitIntent, Self::Error> {
+        self.ensure_disk_matches_memory()?;
+        if expected_current != self.current {
+            return Err(FileStoreError::GenerationConflict {
+                expected: expected_current,
+                actual: self.current,
+            });
+        }
+        let committed = match self.current {
+            Some(value) => value.checked_next().map_err(FileStoreError::Contract)?,
+            None => Generation::INITIAL,
+        };
+        let digest = self
+            .integrity
+            .digest(&self.domain, committed, candidate.as_bytes())
+            .map_err(FileStoreError::IntegrityProvider)?;
+        CommitIntent::new(expected_current, committed, digest).map_err(FileStoreError::Contract)
+    }
+
+    fn recover_commit(&mut self, intent: CommitIntent) -> Result<CommitRecovery, Self::Error> {
+        self.root.verify().map_err(map_directory_guard_error)?;
+        reject_unresolved_temporary_artifacts(self.root.access_path())?;
+        let marker_exists = self.regular_file_exists(&self.marker_path())?;
+        let disk_current = self.read_optional_current_record()?;
+        if intent.previous().is_some() {
+            if !marker_exists {
+                return Err(FileStoreError::MarkerMissing);
+            }
+            self.validate_marker()?;
+        } else if marker_exists {
+            self.validate_marker()?;
+            if disk_current.is_none() {
+                return Err(FileStoreError::CorruptState);
+            }
+        }
+
+        if let Some(record) = disk_current {
+            let bundle = self.read_and_verify_bundle(record.generation)?;
+            if bundle.digest != record.digest {
+                return Err(FileStoreError::CorruptState);
+            }
+        }
+
+        match disk_current {
+            Some(record) if record.generation == intent.committed() => {
+                if record.digest != intent.digest() {
+                    return Ok(CommitRecovery::Conflict {
+                        actual: Some((record.generation, record.digest)),
+                    });
+                }
+                if intent.previous().is_none() && !marker_exists && self.publish_marker().is_err() {
+                    return Err(FileStoreError::CommitOutcomeUnknown);
+                }
+                self.validate_marker()?;
+                self.current = Some(record.generation);
+                Ok(CommitRecovery::Committed(intent.receipt()))
+            }
+            Some(record) if Some(record.generation) == intent.previous() => {
+                if !self.regular_file_exists(&self.bundle_path(intent.committed()))? {
+                    self.current = Some(record.generation);
+                    return Ok(CommitRecovery::NotCommitted);
+                }
+                let bundle = self.read_and_verify_bundle(intent.committed())?;
+                if bundle.digest != intent.digest() {
+                    return Ok(CommitRecovery::Conflict {
+                        actual: Some((record.generation, record.digest)),
+                    });
+                }
+                self.publish_current_record(CurrentRecord {
+                    generation: intent.committed(),
+                    digest: intent.digest(),
+                })?;
+                let verified = self.read_current_record()?;
+                if verified.generation != intent.committed() || verified.digest != intent.digest() {
+                    return Err(FileStoreError::CommitOutcomeUnknown);
+                }
+                self.current = Some(intent.committed());
+                Ok(CommitRecovery::Committed(intent.receipt()))
+            }
+            None if intent.previous().is_none() => {
+                if !self.regular_file_exists(&self.bundle_path(intent.committed()))? {
+                    self.current = None;
+                    return Ok(CommitRecovery::NotCommitted);
+                }
+                let bundle = self.read_and_verify_bundle(intent.committed())?;
+                if bundle.digest != intent.digest() {
+                    return Ok(CommitRecovery::Conflict { actual: None });
+                }
+                self.publish_current_record(CurrentRecord {
+                    generation: intent.committed(),
+                    digest: intent.digest(),
+                })?;
+                if self.publish_marker().is_err() {
+                    return Err(FileStoreError::CommitOutcomeUnknown);
+                }
+                let verified = self.read_current_record()?;
+                self.validate_marker()?;
+                if verified.generation != intent.committed() || verified.digest != intent.digest() {
+                    return Err(FileStoreError::CommitOutcomeUnknown);
+                }
+                self.current = Some(intent.committed());
+                Ok(CommitRecovery::Committed(intent.receipt()))
+            }
+            Some(record) => Ok(CommitRecovery::Conflict {
+                actual: Some((record.generation, record.digest)),
+            }),
+            None => Ok(CommitRecovery::Conflict { actual: None }),
+        }
     }
 
     fn commit(
@@ -600,6 +755,8 @@ where
 fn secure_create_new(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
     #[cfg(target_os = "linux")]
     options.custom_flags(O_NOFOLLOW | O_CLOEXEC);
     options.open(path)
@@ -997,6 +1154,83 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_recovery_classifies_unwritten_and_published_intents() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let integrity = TestIntegrity::new();
+        if let (Ok(temporary), Ok(domain), Ok(integrity)) = (temporary, domain, integrity) {
+            let store = FileGenerationStore::create_new(&temporary.path, domain, integrity);
+            assert!(store.is_ok());
+            if let Ok(mut store) = store {
+                let candidate = OpaqueState::new(b"recoverable-state".to_vec());
+                assert!(candidate.is_ok());
+                if let Ok(candidate) = candidate {
+                    let intent = store.prepare_commit(None, &candidate);
+                    assert!(intent.is_ok());
+                    if let Ok(intent) = intent {
+                        assert!(matches!(
+                            store.recover_commit(intent),
+                            Ok(CommitRecovery::NotCommitted)
+                        ));
+                        assert!(store.commit(None, candidate).is_ok());
+                        store.current = None;
+                        let recovered = store.recover_commit(intent);
+                        assert!(matches!(
+                            recovered,
+                            Ok(CommitRecovery::Committed(receipt))
+                                if receipt == intent.receipt()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_orphan_bundle_is_completed_only_for_matching_intent() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let integrity = TestIntegrity::new();
+        if let (Ok(temporary), Ok(domain), Ok(integrity)) = (temporary, domain, integrity) {
+            let store = FileGenerationStore::create_new(&temporary.path, domain, integrity);
+            assert!(store.is_ok());
+            if let Ok(mut store) = store {
+                let candidate = OpaqueState::new(b"orphan-candidate".to_vec());
+                assert!(candidate.is_ok());
+                if let Ok(candidate) = candidate {
+                    let intent = store.prepare_commit(None, &candidate);
+                    assert!(intent.is_ok());
+                    if let Ok(intent) = intent {
+                        let encoded = encode_bundle::<TestIntegrityError>(
+                            intent.committed(),
+                            store.domain.as_str(),
+                            store.integrity.algorithm_id().as_str(),
+                            intent.digest(),
+                            candidate.as_bytes(),
+                        );
+                        assert!(encoded.is_ok());
+                        if let Ok(mut encoded) = encoded {
+                            let name = bundle_file_name(intent.committed());
+                            assert!(
+                                write_new_file_and_sync_parent(&store.root, &name, &encoded)
+                                    .is_ok()
+                            );
+                            encoded.fill(0);
+                            let recovered = store.recover_commit(intent);
+                            assert!(matches!(
+                                recovered,
+                                Ok(CommitRecovery::Committed(receipt))
+                                    if receipt == intent.receipt()
+                            ));
+                            assert_eq!(store.current_generation(), Some(Generation::INITIAL));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn compare_and_swap_rejects_stale_expected_generation() {
         let temporary = TempDirectory::new();
         let domain = domain();
@@ -1105,6 +1339,38 @@ mod tests {
             assert!(fs::write(temporary.path.join("unexpected"), b"x").is_ok());
             let store = FileGenerationStore::create_new(&temporary.path, domain, integrity);
             assert!(matches!(store, Err(FileStoreError::DirectoryNotEmpty)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_files_are_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let integrity = TestIntegrity::new();
+        if let (Ok(temporary), Ok(domain), Ok(integrity)) = (temporary, domain, integrity) {
+            let store = FileGenerationStore::create_new(&temporary.path, domain, integrity);
+            assert!(store.is_ok());
+            if let Ok(mut store) = store {
+                let candidate = OpaqueState::new(b"owner-only-state".to_vec());
+                assert!(candidate.is_ok());
+                if let Ok(candidate) = candidate {
+                    assert!(store.commit(None, candidate).is_ok());
+                }
+            }
+            for path in [
+                temporary.path.join(MARKER_NAME),
+                temporary.path.join(CURRENT_NAME),
+                temporary.path.join(bundle_file_name(Generation::INITIAL)),
+            ] {
+                let metadata = fs::symlink_metadata(path);
+                assert!(metadata.is_ok());
+                if let Ok(metadata) = metadata {
+                    assert_eq!(metadata.permissions().mode() & 0o077, 0);
+                }
+            }
         }
     }
 

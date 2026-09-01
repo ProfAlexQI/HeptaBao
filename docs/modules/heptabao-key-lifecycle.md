@@ -156,3 +156,11 @@ The owner updates this document whenever public API, dependency edges, persisten
 stage, rotate, retire, revoke and bootstrap all fail before provider access until the
 ledger is consumed by `reopen` and reconstructed through authenticated replay. The
 raw journal is no longer returned to callers.
+
+## V1.4.6 authoritative journal recovery
+
+An append classified outcome-unknown sets `ReplayRequired`. Recovery invokes
+the journal provider's authoritative recovery method rather than replaying a
+possibly stale cached tail, then rebuilds the complete key-ring state before
+writes resume. The hostile provider persists the key event before returning its
+error.
