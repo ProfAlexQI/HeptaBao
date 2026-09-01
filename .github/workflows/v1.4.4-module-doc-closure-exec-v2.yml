@@ -65,12 +65,28 @@ jobs:
               raise SystemExit('audited generator step boundaries are missing or ambiguous')
           body = source.split(start, 1)[1].split(end, 1)[0]
           filtered = []
+          deindent_rewrites = {
+              'validator': "validator = '\\n'.join(validator.splitlines()) + '\\n'",
+              'tests': "tests = '\\n'.join(tests.splitlines()) + '\\n'",
+              'workflow': "workflow = '\\n'.join(workflow.splitlines()) + '\\n'",
+          }
+          rewrites_seen = set()
           for raw in body.splitlines():
               line = raw[10:] if raw.startswith('          ') else raw
               if "find . -path './.git'" in line and 'TODO|TBD|PLACEHOLDER' in line:
                   filtered.append(': # historical documents are outside the V1.4.4 generated-surface scan')
-              else:
+                  continue
+              rewritten = False
+              for name, replacement in deindent_rewrites.items():
+                  if line.startswith(f"{name} = '\\n'.join(line[10:]"):
+                      filtered.append(replacement)
+                      rewrites_seen.add(name)
+                      rewritten = True
+                      break
+              if not rewritten:
                   filtered.append(line)
+          if rewrites_seen != set(deindent_rewrites):
+              raise SystemExit(f'generated-template deindent contract drifted: {sorted(rewrites_seen)!r}')
           script = '\n'.join(filtered) + '\n'
           required = [
               "git worktree add --detach \"$work\" \"$source_sha\"",
