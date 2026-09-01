@@ -72,10 +72,7 @@ jobs:
               step = by_name.get(name)
               if not isinstance(step, dict) or not isinstance(step.get('run'), str):
                   raise SystemExit(f'missing audited bootstrap script: {name}')
-              (root / f'v142-{key}.sh').write_text(
-                  step['run'],
-                  encoding='utf-8',
-              )
+              (root / f'v142-{key}.sh').write_text(step['run'], encoding='utf-8')
           PY
 
       - name: Materialize digest-bound candidate and repair Drop-safe tests
@@ -143,9 +140,36 @@ jobs:
         shell: bash
         run: bash "$RUNNER_TEMP/v142-frozen.sh"
 
-      - name: Test and strictly lint current V1.4.2 workspace
+      - name: Capture current V1.4.2 Rust diagnostics
+        id: current_rust
+        continue-on-error: true
         shell: bash
-        run: bash "$RUNNER_TEMP/v142-rust.sh"
+        run: |
+          set +e
+          bash "$RUNNER_TEMP/v142-rust.sh" >"$RUNNER_TEMP/v142-rust.log" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/v142-rust.log"
+          printf 'status=%s\n' "$status" >>"$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload exact Rust diagnostic package
+        if: ${{ always() && steps.current_rust.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v1.4.2-rust-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v142-rust.log
+            crates/heptabao-key-lifecycle/src/lib.rs
+            crates/heptabao-rollback-anchor/src/lib.rs
+            crates/heptabao-recovery-core/src/lib.rs
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Require current V1.4.2 Rust success
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.current_rust.outputs.status }}" = "0"
 
       - name: Confirm non-authority and fast-forward publish
         shell: bash
