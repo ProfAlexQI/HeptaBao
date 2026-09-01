@@ -37,58 +37,44 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path('crates/heptabao-single-node-journal/src/lib.rs')
           source = path.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  '            let metadata = entry.metadata().map_err(FileJournalError::Io)?;\n'
-                  '            let name = entry.file_name();',
-                  '            let metadata = fs::symlink_metadata(entry.path())\n'
-                  '                .map_err(FileJournalError::Io)?;\n'
-                  '            let name = entry.file_name();',
-              ),
-              (
-                  '                if !metadata.is_file() || fs::symlink_metadata(entry.path())?.file_type().is_symlink()\n'
-                  '                {',
-                  '                if metadata.file_type().is_symlink() || !metadata.is_file() {',
-              ),
-              (
-                  '            let sequence = parse_entry_file_name(name)?\n'
-                  '                .ok_or(FileJournalError::UnexpectedEntry)?;\n'
-                  '            if !metadata.is_file() || fs::symlink_metadata(entry.path())?.file_type().is_symlink() {',
-                  '            let sequence = parse_entry_file_name(name)\n'
-                  '                .map_err(|_| FileJournalError::CorruptJournal)?\n'
-                  '                .ok_or(FileJournalError::UnexpectedEntry)?;\n'
-                  '            if metadata.file_type().is_symlink() || !metadata.is_file() {',
-              ),
-          ]
-          for before, after in replacements:
-              if source.count(before) != 1:
-                  raise SystemExit(f'single-node journal source shape drifted: {before!r}')
-              source = source.replace(before, after, 1)
-          old_helper = '''fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, FileJournalError<io::Error>> {
-              let Some(digits) = name
-                  .strip_prefix("entry-")
-                  .and_then(|value| value.strip_suffix(".hbj"))
-              else {
-                  return Ok(None);
-              };
-              if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-                  return Err(FileJournalError::CorruptJournal);
-              }
-              let value = digits
-                  .parse::<u64>()
-                  .map_err(|_| FileJournalError::CorruptJournal)?;
-              let sequence = JournalSequence::new(value).map_err(FileJournalError::Contract)?;
-              if entry_file_name(sequence) != name {
-                  return Err(FileJournalError::CorruptJournal);
-              }
-              Ok(Some(sequence))
-          }
-          '''
-          new_helper = '''fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, DecodeError> {
+
+          before = '            let metadata = entry.metadata().map_err(FileJournalError::Io)?;'
+          after = (
+              '            let metadata = fs::symlink_metadata(entry.path())\n'
+              '                .map_err(FileJournalError::Io)?;'
+          )
+          if source.count(before) != 1:
+              raise SystemExit('directory metadata source shape drifted')
+          source = source.replace(before, after, 1)
+
+          symlink_call = 'fs::symlink_metadata(entry.path())?.file_type().is_symlink()'
+          if source.count(symlink_call) != 2:
+              raise SystemExit('symlink guard source shape drifted')
+          source = source.replace(symlink_call, 'metadata.file_type().is_symlink()')
+
+          before_parse = (
+              '            let sequence = parse_entry_file_name(name)?\n'
+              '                .ok_or(FileJournalError::UnexpectedEntry)?;'
+          )
+          after_parse = (
+              '            let sequence = parse_entry_file_name(name)\n'
+              '                .map_err(|_| FileJournalError::CorruptJournal)?\n'
+              '                .ok_or(FileJournalError::UnexpectedEntry)?;'
+          )
+          if source.count(before_parse) != 1:
+              raise SystemExit('entry-name call source shape drifted')
+          source = source.replace(before_parse, after_parse, 1)
+
+          helper_pattern = re.compile(
+              r'fn parse_entry_file_name\(name: &str\).*?\n}\n\nfn encode_marker',
+              re.DOTALL,
+          )
+          helper_replacement = '''fn parse_entry_file_name(name: &str) -> Result<Option<JournalSequence>, DecodeError> {
               let Some(digits) = name
                   .strip_prefix("entry-")
                   .and_then(|value| value.strip_suffix(".hbj"))
@@ -108,10 +94,13 @@ jobs:
               }
               Ok(Some(sequence))
           }
-          '''
-          if source.count(old_helper) != 1:
-              raise SystemExit('single-node journal entry-name helper drifted')
-          path.write_text(source.replace(old_helper, new_helper, 1), encoding='utf-8')
+
+          fn encode_marker'''
+          source, substitutions = helper_pattern.subn(helper_replacement, source, count=1)
+          if substitutions != 1:
+              raise SystemExit('entry-name helper source shape drifted')
+
+          path.write_text(source, encoding='utf-8')
           PY
       - name: Install Rust 1.98
         shell: bash
