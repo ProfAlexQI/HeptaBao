@@ -1,0 +1,5 @@
+repository=TrillionniumFoundation/HeptaBao
+stage=V1.6.0
+predecessor=codex/plan-v1.5.0-product-control-plane-v1
+mode=fail-closed-stacked-candidate
+authority_effect=NONE
