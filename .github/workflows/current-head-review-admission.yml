@@ -1,0 +1,61 @@
+name: current-head review admission
+
+on:
+  pull_request:
+    branches:
+      - integration/v1.4.4-technical-candidate
+      - main
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  current-head-review-admission:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require a fresh independent approval and no current-head change request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PR_NUMBER"
+          test -n "$HEAD_SHA"
+          reviews="$RUNNER_TEMP/reviews.json"
+          gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > "$reviews"
+          python3 - "$reviews" "$HEAD_SHA" "$AUTHOR" <<'PY'
+          import json, sys
+          path, head, author = sys.argv[1:]
+          reviews = json.load(open(path, encoding='utf-8'))
+          latest = {}
+          for review in reviews:
+              user = (review.get('user') or {}).get('login')
+              if not user:
+                  continue
+              latest[user] = review
+          current_changes = []
+          current_approvals = []
+          for user, review in latest.items():
+              if review.get('commit_id') != head:
+                  continue
+              state = review.get('state')
+              if state == 'CHANGES_REQUESTED':
+                  current_changes.append(user)
+              if state == 'APPROVED' and user != author and not user.endswith('[bot]'):
+                  current_approvals.append(user)
+          if current_changes:
+              raise SystemExit('current-head changes requested by: ' + ', '.join(sorted(current_changes)))
+          if not current_approvals:
+              raise SystemExit('no fresh non-author approval is bound to current head ' + head)
+          print('fresh current-head approvals: ' + ', '.join(sorted(current_approvals)))
+          PY
