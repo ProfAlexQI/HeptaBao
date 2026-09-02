@@ -6,8 +6,6 @@ on:
       - integration/v1.4.4-technical-candidate
       - main
     types: [opened, synchronize, reopened, ready_for_review, review_requested]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
 
 permissions:
   contents: read
