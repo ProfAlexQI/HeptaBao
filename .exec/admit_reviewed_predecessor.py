@@ -24,10 +24,57 @@ def require_text(value: Any, name: str) -> str:
     return value
 
 
+def discover_pull_request(
+    repository: str,
+    expected_head_branch: str,
+    integration_branch: str,
+) -> int:
+    matches: list[int] = []
+    page = 1
+    while True:
+        query = urllib.parse.urlencode(
+            {
+                "state": "closed",
+                "per_page": 100,
+                "page": page,
+                "sort": "updated",
+                "direction": "desc",
+            }
+        )
+        pulls = gh(repository, f"pulls?{query}")
+        if not isinstance(pulls, list):
+            raise SystemExit("pull-request discovery response is not an array")
+        for pull in pulls:
+            head = pull.get("head") or {}
+            base = pull.get("base") or {}
+            head_repo = head.get("repo") or {}
+            if (
+                pull.get("merged_at")
+                and head.get("ref") == expected_head_branch
+                and base.get("ref") == integration_branch
+                and head_repo.get("full_name") == repository
+            ):
+                number = pull.get("number")
+                if isinstance(number, int):
+                    matches.append(number)
+        if len(pulls) < 100:
+            break
+        page += 1
+        if page > 100:
+            raise SystemExit("pull-request discovery exceeded bounded pagination")
+    unique = sorted(set(matches))
+    if len(unique) != 1:
+        raise SystemExit(
+            "expected exactly one merged predecessor PR for "
+            f"{expected_head_branch}->{integration_branch}, observed={unique}"
+        )
+    return unique[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
-    parser.add_argument("--pr", type=int, required=True)
+    parser.add_argument("--pr", type=int)
     parser.add_argument("--expected-head-branch", required=True)
     parser.add_argument("--integration-branch", required=True)
     parser.add_argument("--required-reviewer", action="append", default=[])
@@ -37,20 +84,30 @@ def main() -> int:
     if not args.repository:
         raise SystemExit("repository is required")
 
-    pull = gh(args.repository, f"pulls/{args.pr}")
+    pr_number = args.pr
+    if pr_number is None:
+        pr_number = discover_pull_request(
+            args.repository,
+            args.expected_head_branch,
+            args.integration_branch,
+        )
+
+    pull = gh(args.repository, f"pulls/{pr_number}")
     if pull.get("state") != "closed" or pull.get("merged") is not True:
-        raise SystemExit(f"PR #{args.pr} is not merged")
+        raise SystemExit(f"PR #{pr_number} is not merged")
     if (pull.get("base") or {}).get("ref") != args.integration_branch:
         raise SystemExit("predecessor base branch mismatch")
     if (pull.get("head") or {}).get("ref") != args.expected_head_branch:
         raise SystemExit("predecessor head branch mismatch")
+    if ((pull.get("head") or {}).get("repo") or {}).get("full_name") != args.repository:
+        raise SystemExit("predecessor head repository mismatch")
 
     reviewed_head = require_text((pull.get("head") or {}).get("sha"), "reviewed head")
     merge_sha = require_text(pull.get("merge_commit_sha"), "merge commit")
     base_sha = require_text((pull.get("base") or {}).get("sha"), "base commit")
     author = require_text((pull.get("user") or {}).get("login"), "PR author")
 
-    reviews = gh(args.repository, f"pulls/{args.pr}/reviews?per_page=100")
+    reviews = gh(args.repository, f"pulls/{pr_number}/reviews?per_page=100")
     if not isinstance(reviews, list):
         raise SystemExit("review response is not an array")
     latest: dict[str, dict[str, Any]] = {}
@@ -153,7 +210,7 @@ def main() -> int:
 
     value = {
         "repository": args.repository,
-        "pull_request": args.pr,
+        "pull_request": pr_number,
         "base_branch": args.integration_branch,
         "base_commit": base_sha,
         "reviewed_head": reviewed_head,
