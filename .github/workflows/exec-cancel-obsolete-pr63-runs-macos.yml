@@ -1,0 +1,41 @@
+name: exec cancel obsolete PR63 runs macOS
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: exec-cancel-obsolete-pr63-runs
+  cancel-in-progress: true
+
+jobs:
+  cancel-obsolete:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Cancel superseded PR63 workflow runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          obsolete=(
+            33633018489
+            33633018128
+            33633018316
+            33633018357
+          )
+          for run_id in "${obsolete[@]}"; do
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .status)"
+            if [[ "$status" == queued || "$status" == in_progress || "$status" == waiting || "$status" == requested || "$status" == pending ]]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel"
+              echo "cancel requested for obsolete run $run_id"
+            else
+              echo "obsolete run $run_id already terminal: $status"
+            fi
+          done
