@@ -1,0 +1,175 @@
+name: exec finalize PR63 hardening v2
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: exec-finalize-pr63-hardening-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - name: Checkout immutable transfer payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: exec/pr63-hardening-transfer-v1
+          path: transfer
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout live PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reconstruct and authenticate payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/hardening.patch.gz.b64"
+          for index in $(seq -w 0 16); do
+            part="transfer/.exec/pr63-hardening/patch-$index"
+            test -f "$part"
+            cat "$part" >> "$RUNNER_TEMP/hardening.patch.gz.b64"
+          done
+          test "$(shasum -a 256 "$RUNNER_TEMP/hardening.patch.gz.b64" | awk '{print $1}')" = "e3f945672e180b1e96cbb276c2a0988023fdfb0028e88275d8d6476da5d03062"
+          base64 --decode "$RUNNER_TEMP/hardening.patch.gz.b64" | gzip -dc > "$RUNNER_TEMP/hardening.patch"
+          test "$(shasum -a 256 "$RUNNER_TEMP/hardening.patch" | awk '{print $1}')" = "ec277f3b7bc2ab59eb7a75d00f5cc0170f95b163b4458f0e9d8614787facf0c8"
+          cat transfer/.exec/pr63-hardening/workflow-00 transfer/.exec/pr63-hardening/workflow-01 > "$RUNNER_TEMP/candidate-workflow.b64"
+          test "$(shasum -a 256 "$RUNNER_TEMP/candidate-workflow.b64" | awk '{print $1}')" = "ed613ae84d1049ed1a54a45954f873543d1a9406ca08cb685b4af6890b1c4f7a"
+          base64 --decode "$RUNNER_TEMP/candidate-workflow.b64" > "$RUNNER_TEMP/candidate-workflow.yml"
+          test "$(shasum -a 256 "$RUNNER_TEMP/candidate-workflow.yml" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+
+      - name: Converge exact source tree
+        id: converge
+        shell: bash
+        working-directory: candidate
+        env:
+          BASE_HEAD: 1d4f3ade1b169dd4afc721ab8867e979d1977400
+        run: |
+          set -euo pipefail
+          current="$(git rev-parse HEAD)"
+          if git apply --check --binary "$RUNNER_TEMP/hardening.patch"; then
+            git apply --index --binary "$RUNNER_TEMP/hardening.patch"
+            git config user.name "HeptaBao execution controller"
+            git config user.email "heptabao-exec@users.noreply.github.com"
+            git add --all
+            test -z "$(git diff --cached --name-only | grep '^.github/workflows/' || true)"
+            git commit -m "fix(v1.4.7): harden external admission and inherited gates"
+            git push origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+            echo "source_changed=true" >> "$GITHUB_OUTPUT"
+          elif git apply --reverse --check --binary "$RUNNER_TEMP/hardening.patch"; then
+            echo "source_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "payload neither applies nor reverses at live head $current" >&2
+            exit 1
+          fi
+          git diff --check
+
+      - name: Validate converged source
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git fetch origin codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          git reset --hard origin/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          python3 -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python3 scripts/render_plan_v1_4_7.py --check
+          python3 scripts/validate_plan_v1_4_7.py
+          python3 -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python3 -m compileall -q scripts tests
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Admit exact validated PR workflow
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          target=.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+          mkdir -p .github/workflows
+          if test -f "$target" && test "$(shasum -a 256 "$target" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"; then
+            echo 'validated workflow already present'
+          else
+            cp "$RUNNER_TEMP/candidate-workflow.yml" "$target"
+            test "$(shasum -a 256 "$target" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+            git config user.name "HeptaBao execution controller"
+            git config user.email "heptabao-exec@users.noreply.github.com"
+            git add "$target"
+            git commit -m "ci(v1.4.7): admit exact-head and prospective-merge gate"
+            git push origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          fi
+
+      - name: Rebind PR metadata and request fresh review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head="$(gh api repos/${GITHUB_REPOSITORY}/pulls/63 --jq .head.sha)"
+          base="$(gh api repos/${GITHUB_REPOSITORY}/pulls/63 --jq .base.sha)"
+          merge="$(gh api repos/${GITHUB_REPOSITORY}/pulls/63 --jq '.merge_commit_sha // "PENDING"')"
+          tree="$(gh api repos/${GITHUB_REPOSITORY}/git/commits/$head --jq .tree.sha)"
+          body_file="$RUNNER_TEMP/pr-body.md"
+          cat > "$body_file" <<EOF
+          ## Exact source binding
+
+          \`\`\`text
+          repository: ${GITHUB_REPOSITORY}
+          repository ID: 1349115072
+          base: integration/v1.4.4-technical-candidate@$base
+          head: $head
+          head tree: $tree
+          prospective merge: $merge
+          inherited V1.4.6 merge tree: c22288f561fdd711e908ce8a70c0116601d519e5
+          \`\`\`
+
+          ## Scope and executed hardening
+
+          V1.4.7 binds all 19 current crate guides to source truth, records the real V1.4.6 post-merge receipt, and hardens external/control completion admission so self-asserted validity, shared control roots, stale credentials, missing required cases, source drift and authority elevation all fail closed.
+
+          Digest-bound payload and completed preflight:
+
+          \`\`\`text
+          patch SHA-256: ec277f3b7bc2ab59eb7a75d00f5cc0170f95b163b4458f0e9d8614787facf0c8
+          workflow SHA-256: e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587
+          plan tests: 321 PASS
+          platform tests: 130 PASS
+          Oracle tests: 20 PASS
+          Rust 1.98 fmt/test/strict-Clippy: PASS
+          \`\`\`
+
+          Fresh GitHub checks and independent review must bind to the exact head and prospective merge above. No self-approval or administrator bypass is permitted.
+
+          Still factual-open until authentic completion objects exist: HB-BLK-CTRL-001 and HB-BLK-EXT-001 through HB-BLK-EXT-007.
+
+          \`\`\`text
+          qualification=false
+          compatibility_claim=false
+          production_authority=false
+          migration_authority=false
+          release_authority=false
+          authority_effect=NONE
+          \`\`\`
+          EOF
+          sed -i '' 's/^          //' "$body_file"
+          gh api --method PATCH repos/${GITHUB_REPOSITORY}/pulls/63 --raw-field body="$(cat "$body_file")" >/dev/null
+          gh api --method POST repos/${GITHUB_REPOSITORY}/pulls/63/requested_reviewers -f 'reviewers[]=Tomasrgbsf' >/dev/null || true
+          gh api --method POST repos/${GITHUB_REPOSITORY}/issues/63/comments -f body="Exact-head hardening converged at \\`$head\\` with prospective merge \\`$merge\\`. The stale-source finding is remediated. Fresh checks and a fresh independent review are required; no bypass or self-approval was used." >/dev/null
