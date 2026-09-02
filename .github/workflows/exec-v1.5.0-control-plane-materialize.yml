@@ -82,28 +82,36 @@ jobs:
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Publish clean candidate
+      - name: Publish clean candidate source
         shell: bash
         run: |
           set -euo pipefail
           test ! -e .exec
           test ! -e .github/workflows/exec-v1.5.0-control-plane-materialize.yml
           test -z "$(git status --porcelain=v1 --untracked-files=all | grep '^?? target/' || true)"
+          candidate_workflow=.github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml
+          test -f "$candidate_workflow"
+          cp "$candidate_workflow" "$RUNNER_TEMP/plan-v1.5.0-control-plane-vertical-slice.yml"
+          workflow_digest="$(sha256sum "$candidate_workflow" | awk '{print $1}')"
           git config user.name "HeptaBao execution controller"
           git config user.email "heptabao-exec@users.noreply.github.com"
           git add --all
+          git reset -- "$candidate_workflow"
+          rm "$candidate_workflow"
           git commit -m "feat(v1.5.0): implement mandatory control-plane vertical slice"
           candidate_sha="$(git rev-parse HEAD)"
           candidate_tree="$(git rev-parse HEAD^{tree})"
           git push --force origin HEAD:refs/heads/codex/plan-v1.5.0-control-plane-vertical-slice-v1
           {
-            echo '## V1.5.0 clean candidate published'
+            echo '## V1.5.0 clean candidate source published'
             echo
             echo "- branch: \`codex/plan-v1.5.0-control-plane-vertical-slice-v1\`"
-            echo "- commit: \`$candidate_sha\`"
-            echo "- tree: \`$candidate_tree\`"
+            echo "- source commit before workflow admission: \`$candidate_sha\`"
+            echo "- source tree before workflow admission: \`$candidate_tree\`"
+            echo "- validated candidate workflow SHA-256: \`$workflow_digest\`"
             echo '- workspace crates: 28'
             echo '- all plan/platform/oracle tests: PASS'
             echo '- Rust 1.98 fmt/test/strict-Clippy: PASS'
+            echo '- workflow admission is a separate repository contents write'
             echo '- authority effect: NONE'
           } >> "$GITHUB_STEP_SUMMARY"
