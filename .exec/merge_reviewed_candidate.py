@@ -9,6 +9,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+DECISIVE_REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
+
 
 def command(*args: str) -> Any:
     return json.loads(subprocess.check_output(args, text=True))
@@ -28,7 +30,13 @@ def discover_open_pull(repository: str, head_branch: str, base_branch: str) -> i
     found: list[int] = []
     for page in range(1, 101):
         query = urllib.parse.urlencode(
-            {"state": "open", "per_page": 100, "page": page, "sort": "updated"}
+            {
+                "state": "open",
+                "per_page": 100,
+                "page": page,
+                "sort": "updated",
+                "direction": "desc",
+            }
         )
         pulls = rest(repository, f"pulls?{query}")
         if not isinstance(pulls, list):
@@ -45,12 +53,29 @@ def discover_open_pull(repository: str, head_branch: str, base_branch: str) -> i
                 found.append(pull["number"])
         if len(pulls) < 100:
             break
+    else:
+        raise SystemExit("open pull discovery exceeded bounded pagination")
+
     unique = sorted(set(found))
     if len(unique) != 1:
         raise SystemExit(
             f"expected one open PR for {head_branch}->{base_branch}; observed={unique}"
         )
     return unique[0]
+
+
+def latest_decisive_reviews(reviews: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for review in sorted(reviews, key=lambda item: item.get("submitted_at") or ""):
+        login = (review.get("user") or {}).get("login")
+        state = review.get("state")
+        if (
+            isinstance(login, str)
+            and login
+            and state in DECISIVE_REVIEW_STATES
+        ):
+            latest[login] = review
+    return latest
 
 
 def review_threads(repository: str, number: int) -> dict[str, Any]:
@@ -74,9 +99,12 @@ def review_threads(repository: str, number: int) -> dict[str, Any]:
         f"number={number}",
     )
     try:
-        return payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+        result = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
     except (KeyError, TypeError) as error:
         raise SystemExit("review-thread response malformed") from error
+    if not isinstance(result, dict):
+        raise SystemExit("review-thread response is not an object")
+    return result
 
 
 def commit_identity(repository: str, sha: str) -> tuple[str, list[str], bool]:
@@ -85,9 +113,23 @@ def commit_identity(repository: str, sha: str) -> tuple[str, list[str], bool]:
         ((((value.get("commit") or {}).get("tree") or {}).get("sha"))),
         "commit tree",
     )
-    parents = [require_text(item.get("sha"), "commit parent") for item in value.get("parents") or []]
-    verified = (((value.get("commit") or {}).get("verification") or {}).get("verified")) is True
+    parents = [
+        require_text(item.get("sha"), "commit parent")
+        for item in value.get("parents") or []
+    ]
+    verified = (
+        (((value.get("commit") or {}).get("verification") or {}).get("verified"))
+        is True
+    )
     return tree, parents, verified
+
+
+def write_result(path: Path | None, result: dict[str, Any]) -> None:
+    encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(encoded, encoding="utf-8")
+    print(json.dumps(result, sort_keys=True))
 
 
 def main() -> int:
@@ -100,9 +142,16 @@ def main() -> int:
     parser.add_argument("--commit-title", required=True)
     parser.add_argument("--commit-message", required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if not args.repository:
         raise SystemExit("repository is required")
+    required_reviewers = sorted(set(args.required_reviewer))
+    required_workflows = sorted(set(args.required_workflow))
+    if not required_reviewers:
+        raise SystemExit("at least one required reviewer is required")
+    if "current-head review admission" not in required_workflows:
+        raise SystemExit("post-review current-head admission workflow is required")
 
     number = discover_open_pull(
         args.repository,
@@ -135,19 +184,18 @@ def main() -> int:
         args.repository,
         "git/ref/heads/" + urllib.parse.quote(args.expected_head_branch, safe="/"),
     )
-    if require_text((branch_ref.get("object") or {}).get("sha"), "candidate ref") != head_sha:
+    if (
+        require_text((branch_ref.get("object") or {}).get("sha"), "candidate ref")
+        != head_sha
+    ):
         raise SystemExit("candidate branch moved away from PR head")
 
     reviews = rest(args.repository, f"pulls/{number}/reviews?per_page=100")
     if not isinstance(reviews, list):
         raise SystemExit("review response is not an array")
-    latest: dict[str, dict[str, Any]] = {}
-    for review in sorted(reviews, key=lambda item: item.get("submitted_at") or ""):
-        login = (review.get("user") or {}).get("login")
-        if isinstance(login, str) and login:
-            latest[login] = review
+    latest = latest_decisive_reviews(reviews)
     waiting = []
-    for login in sorted(set(args.required_reviewer)):
+    for login in required_reviewers:
         review = latest.get(login)
         if (
             not review
@@ -169,9 +217,13 @@ def main() -> int:
         raise SystemExit("current-head changes requested by: " + ", ".join(blocking))
 
     threads = review_threads(args.repository, number)
-    if (threads.get("pageInfo") or {}).get("hasNextPage") is not False:
+    page_info = threads.get("pageInfo") or {}
+    if page_info.get("hasNextPage") is not False:
         raise SystemExit("review threads exceed bounded verifier")
-    if any(not item.get("isResolved") for item in threads.get("nodes") or []):
+    nodes = threads.get("nodes") or []
+    if not isinstance(nodes, list):
+        raise SystemExit("review-thread nodes are not an array")
+    if any(not item.get("isResolved") for item in nodes):
         raise SystemExit("candidate has unresolved review threads")
 
     query = urllib.parse.urlencode(
@@ -186,11 +238,11 @@ def main() -> int:
         name = run.get("name")
         if isinstance(name, str):
             latest_runs[name] = run
-    missing = sorted(set(args.required_workflow) - set(latest_runs))
+    missing = sorted(set(required_workflows) - set(latest_runs))
     if missing:
         raise SystemExit("missing workflow families: " + ", ".join(missing))
     bad = []
-    for name in sorted(set(args.required_workflow)):
+    for name in required_workflows:
         run = latest_runs[name]
         if (
             run.get("head_sha") != head_sha
@@ -223,7 +275,10 @@ def main() -> int:
     live = rest(args.repository, f"pulls/{number}")
     live_head = require_text((live.get("head") or {}).get("sha"), "live head")
     live_base = require_text((live.get("base") or {}).get("sha"), "live base")
-    live_prospective = require_text(live.get("merge_commit_sha"), "live prospective merge")
+    live_prospective = require_text(
+        live.get("merge_commit_sha"),
+        "live prospective merge",
+    )
     if (
         live.get("state") != "open"
         or live.get("draft") is not False
@@ -234,8 +289,29 @@ def main() -> int:
         raise SystemExit("candidate tuple changed before merge")
     encoded_base = urllib.parse.quote(args.integration_branch, safe="")
     integration = rest(args.repository, f"branches/{encoded_base}")
-    if require_text((integration.get("commit") or {}).get("sha"), "integration head") != base_sha:
+    if (
+        require_text((integration.get("commit") or {}).get("sha"), "integration head")
+        != base_sha
+    ):
         raise SystemExit("integration branch moved before merge")
+
+    premerge = {
+        "repository": args.repository,
+        "pull_request": number,
+        "base_branch": args.integration_branch,
+        "base_commit": base_sha,
+        "reviewed_head": head_sha,
+        "reviewed_tree": head_tree,
+        "prospective_merge": prospective,
+        "required_reviewers": required_reviewers,
+        "required_workflows": required_workflows,
+        "administrator_bypass": False,
+        "authority_effect": "NONE",
+    }
+    if args.dry_run:
+        premerge["mode"] = "DRY_RUN_PREMERGE_VALIDATED"
+        write_result(args.output, premerge)
+        return 0
 
     merged = command(
         "gh",
@@ -257,9 +333,18 @@ def main() -> int:
     merge_sha = require_text(merged.get("sha"), "final merge commit")
 
     integration = rest(args.repository, f"branches/{encoded_base}")
-    if require_text((integration.get("commit") or {}).get("sha"), "post-merge integration head") != merge_sha:
+    if (
+        require_text(
+            (integration.get("commit") or {}).get("sha"),
+            "post-merge integration head",
+        )
+        != merge_sha
+    ):
         raise SystemExit("integration readback does not equal final merge commit")
-    final_tree, final_parents, final_verified = commit_identity(args.repository, merge_sha)
+    final_tree, final_parents, final_verified = commit_identity(
+        args.repository,
+        merge_sha,
+    )
     if not final_verified:
         raise SystemExit("final merge commit is not GitHub verified")
     if final_parents != [base_sha, head_sha]:
@@ -270,23 +355,11 @@ def main() -> int:
         raise SystemExit(f"final merge tree {final_tree} != reviewed head tree {head_tree}")
 
     result = {
-        "repository": args.repository,
-        "pull_request": number,
-        "base_branch": args.integration_branch,
-        "base_commit": base_sha,
-        "reviewed_head": head_sha,
-        "reviewed_tree": head_tree,
-        "prospective_merge": prospective,
+        **premerge,
         "final_merge": merge_sha,
-        "required_reviewers": sorted(set(args.required_reviewer)),
-        "required_workflows": sorted(set(args.required_workflow)),
-        "administrator_bypass": False,
-        "authority_effect": "NONE",
+        "mode": "ORDINARY_REVIEWED_MERGE_COMPLETE",
     }
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(result, sort_keys=True))
+    write_result(args.output, result)
     return 0
 
 
