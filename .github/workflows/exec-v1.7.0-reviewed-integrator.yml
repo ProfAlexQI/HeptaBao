@@ -1,59 +1,204 @@
 name: exec V1.7.0 reviewed integrator
+
 on:
   push:
     branches: [exec/v1.7.0-reviewed-integrator-v1]
+
 permissions:
   actions: read
   contents: write
   pull-requests: write
+
 concurrency:
   group: exec-v1.7.0-reviewed-integrator
-  cancel-in-progress: false
+  cancel-in-progress: true
+
 jobs:
   integrate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 20
     steps:
-      - name: Verify and merge exact reviewed V1.7.0 candidate
+      - name: Admit and merge exact reviewed V1.7.0 candidate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: "66"
+          CANDIDATE_BRANCH: codex/plan-v1.7.0-service-ha-plugin-compatibility-v1
+          INTEGRATION_BRANCH: integration/v1.4.4-technical-candidate
         run: |
           set -euo pipefail
-          repo="$GITHUB_REPOSITORY";pr=66;candidate='codex/plan-v1.7.0-service-ha-plugin-compatibility-v1';ready=false
-          for attempt in $(seq 1 160);do
-            gh api "repos/$repo/pulls/$pr" > "$RUNNER_TEMP/pr.json"
-            if [[ "$(jq -r .state "$RUNNER_TEMP/pr.json")" != open ]];then test "$(jq -r .merged "$RUNNER_TEMP/pr.json")" = true;echo 'already merged';exit 0;fi
-            test "$(jq -r .draft "$RUNNER_TEMP/pr.json")" = false;test "$(jq -r .base.ref "$RUNNER_TEMP/pr.json")" = 'integration/v1.4.4-technical-candidate';test "$(jq -r .head.ref "$RUNNER_TEMP/pr.json")" = "$candidate"
-            head="$(jq -r .head.sha "$RUNNER_TEMP/pr.json")";test "$head" = "$(gh api "repos/$repo/git/ref/heads/$candidate" --jq .object.sha)"
-            gh api "repos/$repo/pulls/$pr/reviews?per_page=100" > "$RUNNER_TEMP/reviews.json";gh api "repos/$repo/actions/runs?event=pull_request&head_sha=$head&per_page=100" > "$RUNNER_TEMP/runs.json";gh api graphql -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$pr" > "$RUNNER_TEMP/threads.json"
-            set +e
-            HEAD_SHA="$head" REVIEWS="$RUNNER_TEMP/reviews.json" RUNS="$RUNNER_TEMP/runs.json" THREADS="$RUNNER_TEMP/threads.json" python - <<'PY'
-          import json,os,sys
+          repo="$GITHUB_REPOSITORY"
+          pr_json="$RUNNER_TEMP/pr.json"
+          reviews_json="$RUNNER_TEMP/reviews.json"
+          runs_json="$RUNNER_TEMP/runs.json"
+          threads_json="$RUNNER_TEMP/threads.json"
+          prospective_json="$RUNNER_TEMP/prospective.json"
+
+          gh api "repos/$repo/pulls/$PR_NUMBER" > "$pr_json"
+          test "$(jq -r .state "$pr_json")" = open
+          test "$(jq -r .merged "$pr_json")" = false
+          test "$(jq -r .draft "$pr_json")" = false
+          test "$(jq -r .base.ref "$pr_json")" = "$INTEGRATION_BRANCH"
+          test "$(jq -r .head.ref "$pr_json")" = "$CANDIDATE_BRANCH"
+          test "$(jq -r .mergeable "$pr_json")" = true
+
+          head="$(jq -r .head.sha "$pr_json")"
+          base="$(jq -r .base.sha "$pr_json")"
+          author="$(jq -r .user.login "$pr_json")"
+          prospective="$(jq -r .merge_commit_sha "$pr_json")"
+          test "$head" != null
+          test "$base" != null
+          test "$author" != null
+          test "$prospective" != null
+          test "$head" = "$(gh api "repos/$repo/git/ref/heads/$CANDIDATE_BRANCH" --jq .object.sha)"
+          test "$base" = "$(gh api "repos/$repo/git/ref/heads/$INTEGRATION_BRANCH" --jq .object.sha)"
+
+          marker="<!-- current-head-review-admission:$head -->"
+          body="$(jq -r .body "$pr_json")"
+          case "$body" in
+            *"$marker"*) ;;
+            *) echo "missing exact-head post-review admission marker" >&2; exit 1 ;;
+          esac
+
+          gh api --paginate "repos/$repo/pulls/$PR_NUMBER/reviews?per_page=100" > "$reviews_json"
+          gh api "repos/$repo/actions/runs?event=pull_request&head_sha=$head&per_page=100" > "$runs_json"
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+            -F owner="${repo%%/*}" \
+            -F name="${repo#*/}" \
+            -F number="$PR_NUMBER" \
+            > "$threads_json"
+
+          HEAD_SHA="$head" \
+          AUTHOR="$author" \
+          REVIEWS_JSON="$reviews_json" \
+          RUNS_JSON="$runs_json" \
+          THREADS_JSON="$threads_json" \
+          python3 - <<'PY'
+          import json
+          import os
           from pathlib import Path
-          required={'HeptaBao V1.7.0 service HA plugin compatibility','HeptaBao V1.6.0 runtime recovery operations','HeptaBao V1.5.0 control-plane vertical slice','HeptaBao V1.4.7 post-merge truth and external admission','HeptaBao V1.4.6 authoritative recovery closure','plan-v1.4.5-security-invariant-closure','plan-v1.4.4-module-documentation'}
-          runs=json.loads(Path(os.environ['RUNS']).read_text())['workflow_runs'];latest={}
-          for run in sorted(runs,key=lambda value:value['id']):latest[run['name']]=run
-          missing=required-set(latest)
-          if missing:print('PENDING runs',sorted(missing));sys.exit(10)
-          for name in sorted(required):
-            run=latest[name]
-            if run['head_sha']!=os.environ['HEAD_SHA']:print('HARD wrong head',name);sys.exit(2)
-            if run['status']!='completed':print('PENDING',name,run['status']);sys.exit(10)
-            if run.get('conclusion')!='success':print('HARD failed',name,run.get('conclusion'));sys.exit(2)
-          reviews=json.loads(Path(os.environ['REVIEWS']).read_text());latest_reviews={}
-          for review in sorted(reviews,key=lambda value:value.get('submitted_at')or''):latest_reviews[review['user']['login']]=review
-          blocking=[login for login,review in latest_reviews.items()if review.get('state')=='CHANGES_REQUESTED']
-          if blocking:print('HARD blocking reviews',blocking);sys.exit(2)
-          for reviewer in('ProfHepta','Tomasrgbsf'):
-            review=latest_reviews.get(reviewer)
-            if not review or review.get('state')!='APPROVED' or review.get('commit_id')!=os.environ['HEAD_SHA']:print('PENDING exact-head approval',reviewer);sys.exit(10)
-          threads=json.loads(Path(os.environ['THREADS']).read_text())['data']['repository']['pullRequest']['reviewThreads']
-          if threads['pageInfo']['hasNextPage']:print('HARD thread pagination');sys.exit(2)
-          if any(not node['isResolved']for node in threads['nodes']):print('PENDING unresolved thread');sys.exit(10)
-          print('READY all exact gates and reviews')
+
+          required_reviewers = {"ProfHepta", "Tomasrgbsf"}
+          required_runs = {
+              "current-head review admission",
+              "HeptaBao V1.7.0 service HA plugin compatibility",
+              "HeptaBao V1.6.0 runtime recovery operations",
+              "HeptaBao V1.5.0 control-plane vertical slice",
+              "HeptaBao V1.4.7 post-merge truth and external admission",
+              "HeptaBao V1.4.6 authoritative recovery closure",
+              "plan-v1.4.5-security-invariant-closure",
+              "plan-v1.4.4-module-documentation",
+          }
+          head = os.environ["HEAD_SHA"]
+          author = os.environ["AUTHOR"]
+
+          reviews = json.loads(
+              Path(os.environ["REVIEWS_JSON"]).read_text(encoding="utf-8")
+          )
+          latest_reviews = {}
+          for review in sorted(
+              reviews, key=lambda item: item.get("submitted_at") or ""
+          ):
+              login = (review.get("user") or {}).get("login")
+              if login:
+                  latest_reviews[login] = review
+
+          for reviewer in sorted(required_reviewers):
+              if reviewer == author or reviewer.endswith("[bot]"):
+                  raise SystemExit(f"ineligible required reviewer: {reviewer}")
+              review = latest_reviews.get(reviewer)
+              if (
+                  not review
+                  or review.get("state") != "APPROVED"
+                  or review.get("commit_id") != head
+              ):
+                  raise SystemExit(
+                      f"missing exact-head approval from {reviewer} for {head}"
+                  )
+
+          blocking = sorted(
+              login
+              for login, review in latest_reviews.items()
+              if review.get("commit_id") == head
+              and review.get("state") == "CHANGES_REQUESTED"
+          )
+          if blocking:
+              raise SystemExit(
+                  "current-head changes requested by: " + ", ".join(blocking)
+              )
+
+          runs = json.loads(
+              Path(os.environ["RUNS_JSON"]).read_text(encoding="utf-8")
+          )["workflow_runs"]
+          latest_runs = {}
+          for run in sorted(runs, key=lambda item: item["id"]):
+              latest_runs[run["name"]] = run
+          missing = sorted(required_runs - set(latest_runs))
+          if missing:
+              raise SystemExit(
+                  "missing workflow families: " + ", ".join(missing)
+              )
+          failures = []
+          for name in sorted(required_runs):
+              run = latest_runs[name]
+              if (
+                  run.get("head_sha") != head
+                  or run.get("status") != "completed"
+                  or run.get("conclusion") != "success"
+              ):
+                  failures.append(
+                      f"{name}:{run.get('head_sha')}:"
+                      f"{run.get('status')}:{run.get('conclusion')}"
+                  )
+          if failures:
+              raise SystemExit(
+                  "workflow admission failed: " + "; ".join(failures)
+              )
+
+          threads = json.loads(
+              Path(os.environ["THREADS_JSON"]).read_text(encoding="utf-8")
+          )["data"]["repository"]["pullRequest"]["reviewThreads"]
+          if threads["pageInfo"]["hasNextPage"]:
+              raise SystemExit("review-thread pagination is not admitted")
+          if any(not node["isResolved"] for node in threads["nodes"]):
+              raise SystemExit("unresolved review thread remains")
+          print("PASS current-head reviews, workflows and review threads")
           PY
-            result=$?;set -e;if [[ $result -eq 0 ]];then ready=true;break;fi;if [[ $result -eq 2 ]];then exit 2;fi;sleep 15
-          done
-          test "$ready" = true
-          result="$(gh api -X PUT "repos/$repo/pulls/$pr/merge" -f sha="$head" -f merge_method=merge -f commit_title='feat(v1.7.0): add service HA plugin compatibility and client surfaces' -f commit_message='Merged only after seven exact workflow families, two current exact-head approvals, no blocking review and no unresolved thread. External/control blockers and authority claims remain open.')";test "$(jq -r .merged <<<"$result")" = true;echo "merge_sha=$(jq -r .sha <<<"$result")"
+
+          gh api "repos/$repo/commits/$prospective" > "$prospective_json"
+          test "$(jq -r .commit.verification.verified "$prospective_json")" = true
+          mapfile -t parents < <(jq -r '.parents[].sha' "$prospective_json")
+          test "${#parents[@]}" = 2
+          test "${parents[0]}" = "$base"
+          test "${parents[1]}" = "$head"
+          prospective_tree="$(jq -r .commit.tree.sha "$prospective_json")"
+          head_tree="$(gh api "repos/$repo/commits/$head" --jq .commit.tree.sha)"
+          test "$prospective_tree" = "$head_tree"
+
+          result="$(
+            gh api -X PUT "repos/$repo/pulls/$PR_NUMBER/merge" \
+              -f sha="$head" \
+              -f merge_method=merge \
+              -f commit_title='feat(v1.7.0): add service HA plugin compatibility and client surfaces' \
+              -f commit_message='Merged only after exact-head and prospective-merge validation, current-head review admission, two eligible exact-head approvals, resolved review threads, and a verified two-parent GitHub prospective merge. External/control blockers and authority claims remain open.'
+          )"
+          test "$(jq -r .merged <<<"$result")" = true
+          merged_sha="$(jq -r .sha <<<"$result")"
+          test "$merged_sha" != null
+
+          integration_head="$(
+            gh api "repos/$repo/git/ref/heads/$INTEGRATION_BRANCH" --jq .object.sha
+          )"
+          test "$integration_head" = "$merged_sha"
+          merged_json="$RUNNER_TEMP/merged.json"
+          gh api "repos/$repo/commits/$merged_sha" > "$merged_json"
+          test "$(jq -r .commit.verification.verified "$merged_json")" = true
+          mapfile -t merged_parents < <(jq -r '.parents[].sha' "$merged_json")
+          test "${#merged_parents[@]}" = 2
+          test "${merged_parents[0]}" = "$base"
+          test "${merged_parents[1]}" = "$head"
+          test "$(jq -r .commit.tree.sha "$merged_json")" = "$head_tree"
+
+          printf 'merged_sha=%s\nhead=%s\nbase=%s\ntree=%s\nauthority_effect=NONE\n' \
+            "$merged_sha" "$head" "$base" "$head_tree"
