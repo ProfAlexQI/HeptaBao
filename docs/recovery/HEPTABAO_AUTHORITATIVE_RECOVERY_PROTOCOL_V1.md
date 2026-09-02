@@ -36,15 +36,36 @@ archive authentication
 → target.stage_if_empty(authorized image)
 → target.publish(staged token)
 → complete receipt comparison
-→ fence release
+→ prove clean fence completion or return post-entry uncertainty
 ```
 
 `RollbackAnchor::with_current_fence` must serialize against
 `compare_and_swap` using the same provider primitive. The closure must not run
 when the current checkpoint differs. For an in-process provider this can be one
 mutex or transaction. A remote implementation needs a lease or transaction
-whose validity spans publication; loss or ambiguity after target publication is
-an outcome-unknown incident, not a safe retry.
+whose validity spans publication.
+
+The fence has an explicit phase contract:
+
+| Public result | Closure invocation guarantee | Required caller action |
+|---|---|---|
+| `AnchorFenceError::CheckpointNotCurrent` | definitely not invoked | reject stale authority |
+| `AnchorFenceError::ProviderBeforeEntry(error)` | definitely not invoked | preserve provider error; no publication attributed to this call |
+| `Ok(operation_result)` | invoked exactly once | process the operation result without reinterpretation |
+| `AnchorFenceError::OutcomeUnknownAfterEntry(error)` | invoked; completion/fence validity uncertain | reconcile external anchor and target before any retry |
+
+Once the closure has been invoked, unlock, lease-release, transport,
+persistence, cancellation or post-operation verification uncertainty must never
+be returned as `CheckpointNotCurrent` or `ProviderBeforeEntry`. The provider
+must use `OutcomeUnknownAfterEntry`; the operation result is then deliberately
+unavailable because the fence cannot prove a clean authority boundary.
+
+`AnchorCoordinator` preserves `FenceOutcomeUnknown`, and
+`RecoveryRestorer` maps it to `RecoveryRestoreError::AnchorFenceOutcomeUnknown`.
+It separately preserves non-current contract errors, other anchor contract
+errors, anchor provider failures and checkpoint-authenticator failures. The
+restore layer may translate only an actual `CheckpointNotCurrent` contract
+result to `CheckpointNotAnchored`.
 
 A mere reread before `publish` is forbidden because it leaves a race window.
 
@@ -100,7 +121,14 @@ Generic `Reconciled` remains forbidden for durable mutation intent.
 | `PublishFailure::NotPublished` | provider proves no publication | provider error; no automatic alternate target |
 | `PublishFailure::OutcomeUnknown` | publication may have happened | target readback/reconciliation |
 | complete receipt mismatch | effect occurred but proof differs | outcome unknown; target readback |
-| exact receipt | archive, observation, checkpoint digest and anchor revision match | restore complete for this kernel |
+| `ProviderBeforeEntry` at outer fence | closure was not entered | preserve anchor provider error |
+| `OutcomeUnknownAfterEntry` at outer fence | closure ran; publication and fence completion may have happened | anchor and target readback; never safe retry |
+| exact receipt plus clean fence completion | archive, observation, checkpoint digest and anchor revision match | restore complete for this kernel |
+
+The outer fence classification dominates a successful inner receipt when the
+provider cannot prove clean fence completion. A target may therefore contain the
+restored bytes while the API returns `AnchorFenceOutcomeUnknown`. That is an
+intentional fail-closed result, not a contradiction.
 
 ## 9. Filesystem permission and provenance boundary
 
@@ -118,24 +146,35 @@ entry checks `pull_request.head.sha`; the `prospective-merge` entry checks the
 GitHub pull-request merge commit. Distinct job names prevent a push check from
 satisfying a required PR context.
 
+Inherited Rust semantic validation ignores only whitespace differences produced
+by formatting. Non-Rust documents and workflows retain exact token checks, and
+hostile mutations must continue to reject removed or renamed security symbols.
+
 ## 11. Hostile evidence map
 
 | Claim | Evidence |
 |---|---|
 | anchor cannot advance across publish | `anchor_fence_is_held_across_target_publication` |
 | stale checkpoint cannot publish | `stale_checkpoint_cannot_authorize_restore` |
+| post-entry fence failure is outcome unknown | `post_entry_anchor_fence_failure_is_outcome_unknown` |
 | non-empty target rejected atomically | `tamper_trailing_bytes_and_non_empty_target_fail_closed` |
 | append persisted then errored | `append_outcome_unknown_after_persistence_requires_authoritative_replay` |
 | store files owner-only | `durable_store_files_are_owner_only_on_unix` |
 | exact orphan bundle only | `exact_orphan_bundle_is_completed_only_for_matching_intent` |
 | file provider end-to-end interrupted recovery | `crates/heptabao-journaled-core/tests/file_provider_recovery.rs` |
 | semantic drift rejected | `tests/plan/test_plan_v1_4_6.py` |
+| rustfmt whitespace does not create a false blocker | `test_rustfmt_whitespace_is_semantically_transparent` |
 
 ## 12. Known limitations
 
-No remote anchor or production recovery target is implemented. `CommitIntent`
-is provider metadata and is publicly representable; it is not authorization.
-The only repository composition that may use it to settle a mutation is the
-journaled core after replaying the matching ledger operation. Provider
-conformance, crash/power-cut qualification and independent security review
-remain mandatory before any authority claim.
+No remote anchor or production recovery target is implemented. A remote provider
+must define acquisition, fencing token, lease duration, renewal, cancellation,
+release and authoritative readback semantics, and must produce
+`OutcomeUnknownAfterEntry` whenever it cannot prove that authority remained
+valid through completion.
+
+`CommitIntent` is provider metadata and is publicly representable; it is not
+authorization. The only repository composition that may use it to settle a
+mutation is the journaled core after replaying the matching ledger operation.
+Provider conformance, crash/power-cut qualification and independent security
+review remain mandatory before any authority claim.
