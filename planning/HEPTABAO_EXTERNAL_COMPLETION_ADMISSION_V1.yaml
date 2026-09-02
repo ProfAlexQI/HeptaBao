@@ -3,7 +3,10 @@ plan_id: HEPTABAO-PLAN-2026-09-02-V1.4.7
 envelope_schema: schemas/heptabao_external_completion_evidence_v1.schema.json
 validator: scripts/validate_external_completion_evidence_v1.py
 protocol: docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md
-closure_mode: FAIL_CLOSED_EXACT_SOURCE_REQUIRED
+closure_mode: FAIL_CLOSED_EXACT_SOURCE_AND_EXTERNAL_CRYPTOGRAPHIC_VERIFIER_REQUIRED
+required_case_catalog: embedded-in-validator
+required_artifact_kind_catalog: embedded-in-validator
+signature_policy: domain-separated-payload-external-verifier-only
 blockers:
 - id: HB-BLK-CTRL-001
   template: qualifications/external/templates/HB-BLK-CTRL-001.template.json

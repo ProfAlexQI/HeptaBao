@@ -44,6 +44,24 @@ class PlanV141Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationFailure, "workspace members"):
             validate(target)
 
+    def test_successor_workspace_superset_is_accepted(self) -> None:
+        validate(ROOT)
+
+    def test_unapproved_journal_dependency_fails_closed(self) -> None:
+        temporary, target = self.copy_repository()
+        self.addCleanup(temporary.cleanup)
+        manifest = target / "crates/heptabao-single-node-journal/Cargo.toml"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "[lints]",
+                '[dependencies.unapproved-journal]\npath = "../unapproved-journal"\n\n[lints]',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValidationFailure, "dependency boundary"):
+            validate(target)
+
     def test_authority_promotion_fails_closed(self) -> None:
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
@@ -65,7 +83,7 @@ class PlanV141Tests(unittest.TestCase):
         source = target / "crates/heptabao-single-node-journal/src/lib.rs"
         source.write_text(
             source.read_text(encoding="utf-8").replace(
-                "fs::symlink_metadata(entry.path())",
+                "entry.file_type()",
                 "entry.metadata()",
                 1,
             ),

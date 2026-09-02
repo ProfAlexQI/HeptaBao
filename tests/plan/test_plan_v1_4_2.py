@@ -83,13 +83,13 @@ class PlanV142Tests(unittest.TestCase):
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
         source = target / "crates/heptabao-key-lifecycle/src/lib.rs"
-        source.write_text(
-            source.read_text(encoding="utf-8").replace(
-                "ActiveRevocationForbidden",
-                "ActiveRevocationAllowed",
-            ),
-            encoding="utf-8",
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "ActiveRevocationForbidden",
+            "ActiveRevocationAllowed",
         )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
         with self.assertRaisesRegex(ValidationFailure, "key lifecycle source"):
             validate(target)
 
@@ -97,44 +97,44 @@ class PlanV142Tests(unittest.TestCase):
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
         source = target / "crates/heptabao-rollback-anchor/src/lib.rs"
-        source.write_text(
-            source.read_text(encoding="utf-8").replace(
-                "append_field(&mut output, authenticator_id.as_str().as_bytes())",
-                "let _ = authenticator_id",
-                1,
-            ),
-            encoding="utf-8",
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "append_field(&mut output, authenticator_id.as_str().as_bytes())",
+            "let _ = authenticator_id",
+            1,
         )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
         with self.assertRaisesRegex(ValidationFailure, "rollback anchor source"):
             validate(target)
 
-    def test_restore_requires_externally_verified_checkpoint(self) -> None:
+    def test_restore_requires_current_checkpoint_verification(self) -> None:
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
         source = target / "crates/heptabao-recovery-core/src/lib.rs"
-        source.write_text(
-            source.read_text(encoding="utf-8").replace(
-                "anchored_checkpoint: &VerifiedRecoveryCheckpoint",
-                "anchored_checkpoint: &RecoveryCheckpoint",
-                1,
-            ),
-            encoding="utf-8",
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            ".verify_current(verified.checkpoint())",
+            ".trust_without_verification(verified.checkpoint())",
+            1,
         )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
         with self.assertRaisesRegex(ValidationFailure, "recovery source"):
             validate(target)
 
-    def test_restore_target_empty_check_is_mandatory(self) -> None:
+    def test_restore_target_atomic_empty_admission_is_mandatory(self) -> None:
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
         source = target / "crates/heptabao-recovery-core/src/lib.rs"
-        source.write_text(
-            source.read_text(encoding="utf-8").replace(
-                "if !target.is_empty()",
-                "if false",
-                1,
-            ),
-            encoding="utf-8",
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            ".stage_if_empty(authorized)",
+            ".stage_without_empty_check(authorized)",
+            1,
         )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
         with self.assertRaisesRegex(ValidationFailure, "recovery source"):
             validate(target)
 
@@ -142,13 +142,44 @@ class PlanV142Tests(unittest.TestCase):
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)
         source = target / "crates/heptabao-recovery-core/src/lib.rs"
-        source.write_text(
-            source.read_text(encoding="utf-8").replace(
-                "RecoveryRestoreError::PublishOutcomeUnknown",
-                "RecoveryRestoreError::Provider",
-            ),
-            encoding="utf-8",
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "RecoveryRestoreError::PublishOutcomeUnknown(error)",
+            "RecoveryRestoreError::Target(error)",
+            1,
         )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
+        with self.assertRaisesRegex(ValidationFailure, "recovery source"):
+            validate(target)
+
+    def test_receipt_mismatch_remains_outcome_unknown(self) -> None:
+        temporary, target = self.copy_repository()
+        self.addCleanup(temporary.cleanup)
+        source = target / "crates/heptabao-recovery-core/src/lib.rs"
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "return Err(RecoveryRestoreError::PublishReceiptMismatchOutcomeUnknown {",
+            "return Err(RecoveryRestoreError::Target(provider_error) /* unsafe collapse */ {",
+            1,
+        )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
+        with self.assertRaisesRegex(ValidationFailure, "recovery source"):
+            validate(target)
+
+    def test_post_entry_anchor_failure_remains_outcome_unknown(self) -> None:
+        temporary, target = self.copy_repository()
+        self.addCleanup(temporary.cleanup)
+        source = target / "crates/heptabao-recovery-core/src/lib.rs"
+        original = source.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "RecoveryRestoreError::AnchorFenceOutcomeUnknown(error)",
+            "RecoveryRestoreError::Anchor(error)",
+            1,
+        )
+        self.assertNotEqual(original, mutated)
+        source.write_text(mutated, encoding="utf-8")
         with self.assertRaisesRegex(ValidationFailure, "recovery source"):
             validate(target)
 

@@ -32,6 +32,19 @@ class PlanV13Tests(unittest.TestCase):
     def test_checked_in_v13_passes(self):
         load_validator().validate()
 
+    def test_successor_workspace_superset_is_accepted(self):
+        validator = load_validator()
+        validator.validate_workspace()
+
+    def test_missing_v13_foundation_crate_fails_closed(self):
+        validator = load_validator()
+        cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        cargo = cargo.replace('  "crates/heptabao-protocol",\n', "", 1)
+        temporary, path = temp_text(cargo, ".toml")
+        self.addCleanup(temporary.cleanup)
+        with self.assertRaises(validator.Failure):
+            validator.validate_workspace(path, ROOT / "Cargo.lock")
+
     def test_status_rejects_authority(self):
         schema = json.loads((ROOT / "schemas/heptabao_v1_3_foundation_status_v1.schema.json").read_text(encoding="utf-8"))
         status = yaml.safe_load((ROOT / "planning/HEPTABAO_PLAN_V1_3_STATUS_V1.yaml").read_text(encoding="utf-8"))
@@ -118,6 +131,23 @@ class PlanV13Tests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         path = Path(temporary.name) / "bad.yml"
         path.write_text("permissions:\n  contents: write\n", encoding="utf-8")
+        with self.assertRaises(validator.Failure):
+            validator.validate_workflow_directory(Path(temporary.name))
+
+    def test_git_merge_base_read_only_check_is_not_rejected(self):
+        validator = load_validator()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "read-only.yml"
+        path.write_text("steps:\n  - run: git merge-base --is-ancestor A B\n", encoding="utf-8")
+        validator.validate_workflow_directory(Path(temporary.name))
+
+    def test_git_merge_mutation_is_rejected(self):
+        validator = load_validator()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "mutating.yml"
+        path.write_text("steps:\n  - run: git merge attacker/ref\n", encoding="utf-8")
         with self.assertRaises(validator.Failure):
             validator.validate_workflow_directory(Path(temporary.name))
 

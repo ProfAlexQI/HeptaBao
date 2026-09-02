@@ -29,6 +29,7 @@ implementation:
   blocker_specific_negative_tests: IMPLEMENTED_SOURCE
   current_documentation_supersession: IMPLEMENTED_SOURCE
   exact_head_and_prospective_merge_gate: IMPLEMENTED_SOURCE
+  complete_python_regression_surface_manifest: IMPLEMENTED_SOURCE
 repository_open:
 - HB-BLK-REPO-059
 - HB-BLK-REPO-060

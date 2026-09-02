@@ -59,6 +59,21 @@ class PlanV14Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationFailure, "authority claims"):
             validate(target)
 
+    def test_unapproved_successor_dependency_fails_closed(self) -> None:
+        temporary, target = self.copy_repository()
+        self.addCleanup(temporary.cleanup)
+        manifest = target / "crates/heptabao-single-node-store/Cargo.toml"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "[lints]",
+                '[dependencies.unapproved-provider]\npath = "../unapproved-provider"\n\n[lints]',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValidationFailure, "dependency boundary"):
+            validate(target)
+
     def test_barrier_before_storage_order_is_mandatory(self) -> None:
         temporary, target = self.copy_repository()
         self.addCleanup(temporary.cleanup)

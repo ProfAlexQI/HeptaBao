@@ -74,7 +74,9 @@ added_blockers:
   closure_criteria:
   - one schema covers control and external blocker completion envelopes
   - closure mode binds exact source and merge identities
-  - required roles separation cases artifacts findings signatures and authority flags fail closed
+  - schema validation exact merge parents complete blocker-specific cases and artifact kinds fail closed
+  - every required role signs a domain-separated payload verified by an external cryptographic verifier
+  - separation roots findings freshness transparency revocation and authority flags fail closed
   - UNEXECUTED templates cannot be admitted as closure
   evidence:
   - schemas/heptabao_external_completion_evidence_v1.schema.json
@@ -85,14 +87,37 @@ added_blockers:
 - id: HB-BLK-REPO-062
   class: REPOSITORY_CONTROLLED
   severity: MEDIUM
-  title: current documentation still selected the pre-merge V1.4.6 status
+  title: current entry points and inherited plan-marker validation could become stale or reject successors
   state: IMPLEMENTED_SOURCE_REVIEW_REQUIRED
   closure_criteria:
-  - single current portal selects V1.4.7 plan status blocker register and manifest
+  - README and the single current portal select V1.4.7 plan status blocker register and manifest
+  - inherited validators accept a well-formed versioned successor marker without accepting an unversioned latest alias
   - V1.4.6 remains immutable inherited evidence
+  - the full historical plan, platform and Oracle regression surfaces execute in the current gate and are digest-bound by
+    the V1.4.7 manifest
   - external authority boundary remains explicit
   evidence:
+  - README.md
   - docs/CURRENT_DOCUMENTATION.md
+  - scripts/validate_plan_v1_2.py
+  - tests/plan/test_plan_v1_2.py
+  - scripts/validate_plan_v1_2_1.py
+  - tests/plan/test_plan_v1_2_1.py
+  - scripts/validate_plan_v1_3.py
+  - tests/plan/test_plan_v1_3.py
+  - scripts/validate_plan_v1_3_1.py
+  - tests/plan/test_plan_v1_3_1.py
+  - scripts/validate_plan_v1_4.py
+  - tests/plan/test_plan_v1_4.py
+  - scripts/validate_plan_v1_4_1.py
+  - tests/plan/test_plan_v1_4_1.py
+  - scripts/validate_plan_v1_4_2.py
+  - tests/plan/test_plan_v1_4_2.py
+  - scripts
+  - tests/plan
+  - tests/platform
+  - tests/oracle
+  - .github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
   closure_receipt_required: true
 external_and_control_blockers_carried_forward:
 - HB-BLK-CTRL-001

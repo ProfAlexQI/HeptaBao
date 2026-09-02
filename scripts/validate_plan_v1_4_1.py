@@ -267,7 +267,7 @@ def validate_workspace(root: Path) -> None:
     cargo = tomllib.loads(read_text(root, "Cargo.toml"))
     members = set(cargo.get("workspace", {}).get("members", []))
     require(EXPECTED_CRATES <= members, "V1.4.1 crates are not all workspace members")
-    require(len(members) == 15, f"V1.4.1 workspace must contain exactly 15 crates, found {len(members)}")
+    # Historical V1.4.1 proves its required crate set as a subset; successor plans may add crates.
     lock = read_text(root, "Cargo.lock")
     for crate in EXPECTED_CRATES:
         package = crate.removeprefix("crates/")
@@ -277,25 +277,37 @@ def validate_workspace(root: Path) -> None:
         )
 
     manifests = {
-        "crates/heptabao-journal-api/Cargo.toml": set(),
-        "crates/heptabao-single-node-journal/Cargo.toml": {"heptabao-journal-api"},
-        "crates/heptabao-operation-ledger/Cargo.toml": {
-            "heptabao-journal-api",
-            "heptabao-storage-api",
-        },
-        "crates/heptabao-journaled-core/Cargo.toml": {
-            "heptabao-barrier-api",
-            "heptabao-durable-core",
-            "heptabao-journal-api",
-            "heptabao-operation-ledger",
-            "heptabao-storage-api",
-        },
+        "crates/heptabao-journal-api/Cargo.toml": (set(), set()),
+        "crates/heptabao-single-node-journal/Cargo.toml": (
+            {"heptabao-journal-api"},
+            {"heptabao-journal-api", "heptabao-filesystem-guard"},
+        ),
+        "crates/heptabao-operation-ledger/Cargo.toml": (
+            {"heptabao-journal-api", "heptabao-storage-api"},
+            {"heptabao-journal-api", "heptabao-storage-api"},
+        ),
+        "crates/heptabao-journaled-core/Cargo.toml": (
+            {
+                "heptabao-barrier-api",
+                "heptabao-durable-core",
+                "heptabao-journal-api",
+                "heptabao-operation-ledger",
+                "heptabao-storage-api",
+            },
+            {
+                "heptabao-barrier-api",
+                "heptabao-durable-core",
+                "heptabao-journal-api",
+                "heptabao-operation-ledger",
+                "heptabao-storage-api",
+            },
+        ),
     }
-    for relative, expected_dependencies in manifests.items():
+    for relative, (required_dependencies, allowed_dependencies) in manifests.items():
         parsed = tomllib.loads(read_text(root, relative))
         dependencies = set(parsed.get("dependencies", {}))
         require(
-            dependencies == expected_dependencies,
+            required_dependencies <= dependencies <= allowed_dependencies,
             f"provider-neutral dependency boundary drifted in {relative}: {dependencies}",
         )
         require(parsed.get("package", {}).get("publish") is False, f"{relative} became publishable")
@@ -335,7 +347,8 @@ def validate_rust_sources(root: Path) -> None:
             "AppendOutcomeUnknown",
             "PendingOrphan",
             "AuthenticationFailed",
-            "fs::symlink_metadata(entry.path())",
+            "entry.file_type()",
+            "file_type.is_symlink()",
             "secure_create_new",
         ],
         "single-node journal",
@@ -347,10 +360,13 @@ def validate_rust_sources(root: Path) -> None:
     )
 
     ledger = read_text(root, "crates/heptabao-operation-ledger/src/lib.rs")
+    require(
+        re.search(r"HEPTABAO-OPERATION-EVENT-V[1-9][0-9]*\\0", ledger) is not None,
+        "operation ledger lost its explicit versioned event domain",
+    )
     require_tokens(
         ledger,
         [
-            "HEPTABAO-OPERATION-EVENT-V1",
             "pub enum OperationPhase",
             "pub enum RetryDirective",
             "fn validate_transition",
@@ -372,7 +388,6 @@ def validate_rust_sources(root: Path) -> None:
             "OperationPhase::IntentCommitted",
             "StateCommittedLedgerIncomplete",
             "record_response_audit_failure_after_commit",
-            "reconcile_committed_state",
             "blocking_phase",
             "record_rejected_before_dispatch",
             "UnresolvedOperationBlocksMutation",
@@ -381,9 +396,13 @@ def validate_rust_sources(root: Path) -> None:
         ],
         "journaled durable core",
     )
+    require(
+        "reconcile_committed_state" in core or "recover_durable_intent" in core,
+        "journaled core lost committed-intent provider recovery",
+    )
     accepted_position = core.find(".record(accepted.clone())")
     intent_position = core.find(".record(intent.clone())")
-    state_position = core.find(".state\n            .persist(")
+    state_position = core.find(".commit_prepared(prepared)")
     committed_position = core.find(".record(committed)")
     require(
         -1 not in (accepted_position, intent_position, state_position, committed_position)

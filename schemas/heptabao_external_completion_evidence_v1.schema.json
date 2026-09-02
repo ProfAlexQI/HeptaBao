@@ -13,10 +13,30 @@
             },
             "type": "array"
           },
+          "credential_id": {
+            "minLength": 3,
+            "type": "string"
+          },
+          "credential_issuer": {
+            "minLength": 2,
+            "type": "string"
+          },
+          "credential_not_after": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "credential_not_before": {
+            "format": "date-time",
+            "type": "string"
+          },
           "independent": {
             "type": "boolean"
           },
           "organization": {
+            "minLength": 2,
+            "type": "string"
+          },
+          "revocation_authority": {
             "minLength": 2,
             "type": "string"
           },
@@ -34,7 +54,12 @@
           "role",
           "organization",
           "independent",
-          "conflicts"
+          "conflicts",
+          "credential_id",
+          "credential_issuer",
+          "credential_not_before",
+          "credential_not_after",
+          "revocation_authority"
         ],
         "type": "object"
       },
@@ -59,12 +84,41 @@
             "pattern": "^sha256:[0-9a-f]{64}$",
             "type": "string"
           },
+          "kind": {
+            "enum": [
+              "CEREMONY_TRANSCRIPT",
+              "CRASH_MATRIX",
+              "CROSS_ENVIRONMENT_COMPARISON",
+              "DRILL_BUNDLE",
+              "INDEPENDENCE_ATTESTATION",
+              "INDEPENDENT_REVIEW",
+              "LAB_ENVIRONMENT_ATTESTATION",
+              "LEGAL_DISPOSITION",
+              "LIVE_API_READBACK",
+              "NEGATIVE_TEST_BUNDLE",
+              "RAW_EVIDENCE_MANIFEST",
+              "READINESS_ATTESTATION",
+              "REPRODUCTION_BUNDLE",
+              "RESTRICTED_CAPTURE_REFERENCE",
+              "REVIEWED_INPUT_MANIFEST",
+              "REVOCATION_DRILL",
+              "ROLE_REGISTRY",
+              "SANITIZATION_REPORT",
+              "SANITIZED_FIXTURE",
+              "SCOPED_REVIEW_RECEIPTS",
+              "SIGNATURE_VERIFICATION",
+              "SIGNING_PROFILE",
+              "TRANSFER_COMPLETION",
+              "TRANSPARENCY_CHECKPOINT"
+            ]
+          },
           "name": {
             "minLength": 1,
             "type": "string"
           }
         },
         "required": [
+          "kind",
           "name",
           "digest",
           "custody_uri",
@@ -169,6 +223,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
+            "minLength": 1,
             "type": "string"
           },
           "severity": {
@@ -226,6 +281,7 @@
     },
     "separation": {
       "additionalProperties": {
+        "minLength": 2,
         "type": "string"
       },
       "type": "object"
@@ -246,6 +302,14 @@
             "minLength": 3,
             "type": "string"
           },
+          "payload_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "revocation_evidence_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
           "role": {
             "minLength": 3,
             "type": "string"
@@ -262,13 +326,13 @@
             "minLength": 3,
             "type": "string"
           },
-          "verification": {
-            "enum": [
-              "VALID",
-              "INVALID",
-              "UNKNOWN",
-              "REVOKED"
-            ]
+          "transparency_checkpoint_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "trust_root_id": {
+            "minLength": 3,
+            "type": "string"
           }
         },
         "required": [
@@ -278,8 +342,11 @@
           "algorithm",
           "signed_at",
           "expires_at",
-          "signature",
-          "verification"
+          "trust_root_id",
+          "transparency_checkpoint_digest",
+          "revocation_evidence_digest",
+          "payload_digest",
+          "signature"
         ],
         "type": "object"
       },
@@ -288,6 +355,13 @@
     "source": {
       "additionalProperties": false,
       "properties": {
+        "base_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "commit": {
           "pattern": "^[0-9a-f]{40}$",
           "type": [
@@ -307,6 +381,20 @@
           ]
         },
         "merge_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "merge_parent_one": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "merge_parent_two": {
           "pattern": "^[0-9a-f]{40}$",
           "type": [
             "string",
@@ -342,8 +430,11 @@
       "required": [
         "commit",
         "tree",
+        "base_commit",
         "merge_commit",
         "merge_tree",
+        "merge_parent_one",
+        "merge_parent_two",
         "plan_digest",
         "manifest_digest"
       ],

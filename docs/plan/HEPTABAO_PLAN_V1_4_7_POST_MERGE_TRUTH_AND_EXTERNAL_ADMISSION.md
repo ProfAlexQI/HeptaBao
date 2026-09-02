@@ -10,9 +10,10 @@ This tranche starts from the signed GitHub merge `54d524214df443752a2ecaeff6d4a0
 2. close `HB-BLK-REPO-049` through `HB-BLK-REPO-058` only in repository scope, without closing role, legal, operational, custody, laboratory or reproduction blockers;
 3. replace title-only module-documentation validation with exact source, API, dependency, test and digest binding for every current crate;
 4. make stale hand-written Public API tables detectable and regenerate them from candidate source;
-5. provide one strict, blocker-specific external completion envelope and fail-closed admission tool;
-6. ensure templates, owner assertions, same-identity reviews, stale signatures, incomplete cases and authority elevation cannot close a blocker;
-7. bind all changes to distinct exact-head and prospective-merge pull-request checks.
+5. provide one strict, blocker-specific external completion envelope with complete case/artifact catalogs and a mandatory external cryptographic verifier;
+6. ensure templates, owner assertions, self-asserted signature validity, missing negative cases, shared controls, stale/revoked signatures and authority elevation cannot close a blocker;
+7. bind all changes to distinct exact-head and prospective-merge pull-request checks;
+8. bind the complete current Python validator and plan/platform/Oracle regression surface into the normative manifest so historical-gate repairs cannot drift outside exact-source review.
 
 ## 3. V1.4.6 post-merge closure
 
@@ -20,13 +21,13 @@ The V1.4.6 head `837668cb879683bc60808584d2ebdedd42a397aa` and prospective merge
 
 ## 4. Module source truth
 
-The V2 renderer derives the workspace package set, Cargo manifest hashes, Rust source hashes, workspace-internal dependency declarations, public lexical declarations and discovered test functions. It rewrites the Public API section of each guide and adds a generated facts block. Check mode recomputes every fact and rejects source/documentation drift.
+The V2 renderer derives the workspace package set, Cargo manifest hashes, Rust source hashes, workspace-internal dependency declarations, public lexical declarations and discovered test functions. It rewrites the Public API section of each guide and adds a generated facts block. Check mode recomputes every fact and rejects source/documentation drift. The V1.4.7 normative manifest also hashes every current Python script and every plan, platform and Oracle regression file executed by the current gate.
 
 The parser is intentionally bounded and lexical. It does not claim Rust name resolution or semantic compatibility. That limitation is part of the normative output rather than an implicit weakness.
 
 ## 5. External completion admission
 
-`HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007` each receive an `UNEXECUTED` template. The validator can inspect planning shape without closure, but closure mode requires exact source identities, complete PASS-only cases, distinct accountable roles, blocker-specific separation, artifact custody, no unresolved Critical/High/Unclassified finding, fresh valid signatures and unchanged authority flags.
+`HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007` each receive an `UNEXECUTED` template. The validator can inspect planning shape without closure, but closure mode first enforces the strict JSON schema and independently supplied head/tree/base/two-parent-merge/plan/manifest identities. It then requires the complete blocker-specific case and artifact-kind catalogs, distinct accountable roles, explicit primary-versus-external control separation, no unresolved Critical/High/Unclassified finding, and one domain-separated payload signature from every required role. Signature validity is never accepted from an envelope field: a caller-supplied external verifier must validate cryptography, key role and scope, trust-root state, transparency inclusion and revocation state.
 
 Repository automation cannot populate real identities, legal authority, operating coverage, HSM custody, restricted raw Oracle evidence, independent power-cut control or separately controlled reproduction. Those facts remain open until external operators submit authentic evidence.
 
@@ -35,7 +36,7 @@ Repository automation cannot populate real identities, legal authority, operatin
 - `HB-BLK-REPO-059`: V1.4.6 post-merge repository closure was not canonicalized.
 - `HB-BLK-REPO-060`: module guides were structurally present but not source/API/dependency/test bound.
 - `HB-BLK-REPO-061`: external completion inputs lacked one strict fail-closed admission envelope.
-- `HB-BLK-REPO-062`: current documentation still selected the pre-merge V1.4.6 status.
+- `HB-BLK-REPO-062`: current entry points and inherited current-plan validation could become stale or reject valid successor revisions.
 
 All four are implemented in source by this candidate and remain review-required until exact-head and prospective-merge CI pass and an independent reviewer accepts the final candidate.
 
@@ -46,6 +47,7 @@ python scripts/render_plan_v1_4_7.py --check
 python scripts/validate_plan_v1_4_7.py
 python -m unittest discover -s tests/plan -p 'test_*v1_4_7.py' -v
 python -m unittest discover -s tests/plan -p 'test_external_completion_evidence_v1.py' -v
+python -m unittest discover -s tests/plan -p 'test_*.py' -v
 python scripts/validate_plan_v1_4_6.py
 python scripts/validate_plan_v1_4_5.py
 python scripts/validate_module_documentation_v1_4_4.py

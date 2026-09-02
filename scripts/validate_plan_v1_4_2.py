@@ -291,7 +291,7 @@ def validate_workspace(root: Path) -> None:
     members = cargo.get("workspace", {}).get("members")
     require(isinstance(members, list), "workspace members are missing")
     require(len(members) == len(set(members)), "workspace contains duplicate members")
-    require(set(members) == EXPECTED_WORKSPACE_MEMBERS, "V1.4.2 workspace members drifted")
+    require(EXPECTED_WORKSPACE_MEMBERS <= set(members), "V1.4.2 workspace members drifted")
     package = cargo.get("workspace", {}).get("package", {})
     require(package.get("edition") == "2024", "workspace edition drifted")
     require(package.get("rust-version") == "1.98", "workspace Rust floor drifted")
@@ -381,20 +381,39 @@ def validate_recovery_source(root: Path) -> None:
             "authenticator_id: RecoveryAuthenticatorId",
             "checkpoint_authenticator_id_len",
             "RecoveryContractError::AuthenticatorMismatch",
-            "anchored_checkpoint: &VerifiedRecoveryCheckpoint",
-            "verified.checkpoint() != anchored_checkpoint.checkpoint()",
+            "anchor: &mut AnchorCoordinator<R, P>",
+            "anchor.verify_current(verified.checkpoint())",
+            "let publish_checkpoint = verified.checkpoint().clone()",
             "RecoveryContractError::CheckpointNotAnchored",
             "if state_len == 0 || state_len > MAX_RECOVERY_STATE_BYTES",
             "payload_budget > MAX_RECOVERY_PAYLOAD_BYTES",
-            "if !target.is_empty()",
-            "let staged = target.stage(verified)",
-            "PublishFailure::OutcomeUnknown",
-            "RecoveryRestoreError::PublishOutcomeUnknown",
-            "RecoveryContractError::RestoreReceiptMismatch",
+            "fn stage_if_empty(",
+            "image: AuthorizedRecoveryImage",
+            ".with_current_fence(&publish_checkpoint",
+            ".stage_if_empty(authorized)",
+            "StageFailure::TargetNotEmpty",
+            "PublishFailure::OutcomeUnknown(error) => { RecoveryRestoreError::PublishOutcomeUnknown(error) }",
+            "return Err(RecoveryRestoreError::PublishReceiptMismatchOutcomeUnknown {",
+            "AnchorCoordinatorError::FenceOutcomeUnknown(error) => { RecoveryRestoreError::AnchorFenceOutcomeUnknown(error) }",
             "TrailingArchiveBytes",
         ],
         "recovery source",
     )
+    restore_start = source.find("impl RecoveryRestorer")
+    restore_end = source.find("fn map_anchor_restore_error", restore_start)
+    require(restore_start >= 0 and restore_end > restore_start, "recovery source lost restore implementation")
+    restore_source = re.sub(r"\s+", "", source[restore_start:restore_end])
+    order = [
+        "archive.verify(authenticator)",
+        "anchor.verify_current(verified.checkpoint())",
+        ".with_current_fence(&publish_checkpoint",
+        ".stage_if_empty(authorized)",
+        "target.publish(staged)",
+        "if receipt != expected",
+    ]
+    positions = [restore_source.find(re.sub(r"\s+", "", token)) for token in order]
+    require(all(position >= 0 for position in positions), "recovery source lost restore ordering markers")
+    require(positions == sorted(positions), "recovery source restore happens-before ordering drifted")
     require("#![forbid(unsafe_code)]" in source, "recovery source permits unsafe code")
     require(".field(\"sealed_state\"" not in source, "recovery Debug output exposes state bytes")
     require(".field(\"payload\"" not in source, "recovery Debug output exposes journal payload bytes")

@@ -409,6 +409,17 @@ def validate_durable_store_contract() -> None:
         if token not in executable:
             fail(f"durable executable contract missing token: {token}")
 
+
+CURRENT_PLAN_MARKER = re.compile(
+    r"current plan:\s*\*\*v\d+\.\d+(?:\.\d+)?(?:\s+[^*\n]+)?\*\*",
+    re.IGNORECASE,
+)
+
+
+def validate_readme_current_plan_marker(readme: str) -> None:
+    if not CURRENT_PLAN_MARKER.search(readme):
+        fail("README.md: current plan marker is missing or malformed")
+
 def validate_docs() -> None:
     required = {
         "docs/plan/HEPTABAO_MASTER_DEVELOPMENT_PLAN_V1_2.md": [
@@ -430,8 +441,7 @@ def validate_docs() -> None:
             if token.lower() not in text.lower():
                 fail(f"{path}: required concept missing: {token}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
-    if "current plan: **v1.2**" not in readme and "current plan: **v1.3**" not in readme:
-        fail("README.md: current plan marker is missing")
+    validate_readme_current_plan_marker(readme)
     deployability = (
         "not yet a deployable secrets server",
         "not a production-deployable secrets server",

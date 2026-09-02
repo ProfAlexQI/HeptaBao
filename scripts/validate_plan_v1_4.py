@@ -261,19 +261,25 @@ def validate_workspace(root: Path) -> None:
         )
 
     manifests = {
-        "crates/heptabao-storage-api/Cargo.toml": set(),
-        "crates/heptabao-barrier-api/Cargo.toml": {"heptabao-storage-api"},
-        "crates/heptabao-single-node-store/Cargo.toml": {"heptabao-storage-api"},
-        "crates/heptabao-durable-core/Cargo.toml": {
-            "heptabao-barrier-api",
-            "heptabao-storage-api",
-        },
+        "crates/heptabao-storage-api/Cargo.toml": (set(), set()),
+        "crates/heptabao-barrier-api/Cargo.toml": (
+            {"heptabao-storage-api"},
+            {"heptabao-storage-api"},
+        ),
+        "crates/heptabao-single-node-store/Cargo.toml": (
+            {"heptabao-storage-api"},
+            {"heptabao-storage-api", "heptabao-filesystem-guard"},
+        ),
+        "crates/heptabao-durable-core/Cargo.toml": (
+            {"heptabao-barrier-api", "heptabao-storage-api"},
+            {"heptabao-barrier-api", "heptabao-storage-api"},
+        ),
     }
-    for relative, expected_dependencies in manifests.items():
+    for relative, (required_dependencies, allowed_dependencies) in manifests.items():
         parsed = tomllib.loads(read_text(root, relative))
         dependencies = set(parsed.get("dependencies", {}))
         require(
-            dependencies == expected_dependencies,
+            required_dependencies <= dependencies <= allowed_dependencies,
             f"provider-neutral dependency boundary drifted in {relative}: {dependencies}",
         )
         require(parsed.get("package", {}).get("publish") is False, f"{relative} became publishable")
@@ -348,10 +354,19 @@ def validate_rust_sources(root: Path) -> None:
         ],
         "durable core",
     )
-    seal_position = core.find(".seal(&context, plaintext)")
-    commit_position = core.find(".commit(expected_current, candidate)")
+    prepare_start = core.find("pub fn prepare_persist")
+    seal_position = core.find(".seal(&context, plaintext)", prepare_start)
+    commit_function = core.find("pub fn commit_prepared", prepare_start)
+    commit_position = core.find(
+        ".commit(prepared.intent.previous(), prepared.candidate)",
+        commit_function,
+    )
+    persist_function = core.find("pub fn persist", commit_function)
+    prepare_call = core.find("self.prepare_persist", persist_function)
+    commit_call = core.find("self.commit_prepared(prepared)", prepare_call)
     require(
-        0 <= seal_position < commit_position,
+        0 <= prepare_start < seal_position < commit_function <= commit_position
+        and 0 <= persist_function < prepare_call < commit_call,
         "durable core no longer seals plaintext before storage commit",
     )
 

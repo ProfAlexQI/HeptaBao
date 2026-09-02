@@ -2,10 +2,10 @@
 """Validate V1.3.1 source and fail-closed workflow admission.
 
 The legacy source validator remains available beside this wrapper. Its
-historical workflow path inventory is preserved as compatibility input, while
-this wrapper validates the current repository-wide scheduling boundary:
-exactly one automatic pull-request workflow and exactly two workflows that may
-run automatically on pushes to the active integration branch.
+historical workflow path inventory is preserved as compatibility input. The
+canonical historical pull-request lane must remain active, later versioned
+read-only plan lanes may coexist, and only the two designated historical
+workflows may run automatically on pushes to the active integration branch.
 """
 
 from __future__ import annotations
@@ -287,6 +287,49 @@ def _active_push(push: Any, label: str) -> bool:
     return True
 
 
+def _active_pull_request(configuration: Any, label: str) -> bool:
+    if configuration is None:
+        return True
+    require(isinstance(configuration, Mapping), f"{label} pull_request trigger malformed")
+    branches = configuration.get("branches")
+    branches_ignore = configuration.get("branches-ignore")
+    require(
+        not (branches is not None and branches_ignore is not None),
+        f"{label} cannot define both pull_request.branches and pull_request.branches-ignore",
+    )
+    if branches is not None:
+        selected = False
+        saw_positive = False
+        for raw_pattern in _string_list(branches, f"{label} pull_request.branches"):
+            negative = raw_pattern.startswith("!")
+            pattern = raw_pattern[1:] if negative else raw_pattern
+            if not negative:
+                saw_positive = True
+            if _pattern_matches_active_branch(pattern, f"{label} pull_request.branches"):
+                selected = not negative
+        require(saw_positive, f"{label} pull_request.branches requires a positive pattern")
+        return selected
+    if branches_ignore is not None:
+        ignored = any(
+            _pattern_matches_active_branch(pattern, f"{label} pull_request.branches-ignore")
+            for pattern in _string_list(
+                branches_ignore,
+                f"{label} pull_request.branches-ignore",
+            )
+        )
+        return not ignored
+    return True
+
+
+
+def _is_versioned_successor_plan_workflow(name: str) -> bool:
+    """Accept only explicitly versioned successor plan workflows on `.yml`."""
+    match = re.fullmatch(r"plan-v(\d+)\.(\d+)(?:\.(\d+))?(?:-[a-z0-9][a-z0-9.-]*)?\.yml", name)
+    if match is None:
+        return False
+    version = tuple(int(value or 0) for value in match.groups())
+    return version > (1, 3, 1)
+
 def _validate_permissions(value: Any, label: str, *, required: bool) -> None:
     if value is None:
         require(not required, f"{label} permissions declaration missing")
@@ -346,9 +389,15 @@ def validate_workflow_admission(root: Path) -> None:
     ):
         require(required_name in names, f"required workflow is missing: {required_name}")
 
-    pull_request_workflows: list[str] = []
+    active_pull_request_workflows: list[str] = []
     active_push_workflows: list[str] = []
     event_map: dict[str, dict[str, Any]] = {}
+    required_dispatch = {
+        CANONICAL_PR_WORKFLOW,
+        EXACT_SOURCE_WORKFLOW,
+        DIAGNOSTIC_FALLBACK_WORKFLOW,
+        Path(HISTORICAL_WORKFLOW).name,
+    }
     for path in paths:
         value, _ = _read_workflow(path)
         _validate_workflow_security(value, path.name)
@@ -358,20 +407,43 @@ def validate_workflow_admission(root: Path) -> None:
             not unsupported,
             f"{path.name} contains unsupported automatic events: {sorted(unsupported)}",
         )
-        require(
-            "workflow_dispatch" in events,
-            f"{path.name} must retain workflow_dispatch for bounded reproduction",
-        )
+        if path.name in required_dispatch:
+            require(
+                "workflow_dispatch" in events,
+                f"{path.name} must retain workflow_dispatch for bounded reproduction",
+            )
         event_map[path.name] = events
-        if "pull_request" in events:
-            pull_request_workflows.append(path.name)
+        if "pull_request" in events and _active_pull_request(
+            events["pull_request"], path.name
+        ):
+            active_pull_request_workflows.append(path.name)
         if "push" in events and _active_push(events["push"], path.name):
             active_push_workflows.append(path.name)
 
     require(
-        pull_request_workflows == [CANONICAL_PR_WORKFLOW],
-        "automatic PR workflow set must contain only the canonical head-and-merge lane: "
-        f"{pull_request_workflows}",
+        CANONICAL_PR_WORKFLOW in active_pull_request_workflows,
+        "canonical V1.3.1 head-and-merge lane no longer selects its historical active branch: "
+        f"{active_pull_request_workflows}",
+    )
+    unexpected_pull_request = sorted(
+        name
+        for name in active_pull_request_workflows
+        if name != CANONICAL_PR_WORKFLOW
+        and not _is_versioned_successor_plan_workflow(name)
+    )
+    require(
+        not unexpected_pull_request,
+        "unversioned or malformed successor pull-request workflows are forbidden: "
+        f"{unexpected_pull_request}",
+    )
+    unexpected_push = sorted(
+        set(active_push_workflows)
+        - {EXACT_SOURCE_WORKFLOW, DIAGNOSTIC_FALLBACK_WORKFLOW}
+    )
+    require(
+        not unexpected_push,
+        "only the exact-source and bounded-fallback workflows may select the historical active branch on push: "
+        f"{unexpected_push}",
     )
     canonical_events = event_map[CANONICAL_PR_WORKFLOW]
     require(
@@ -384,16 +456,15 @@ def validate_workflow_admission(root: Path) -> None:
         "canonical pull_request configuration malformed",
     )
     if isinstance(pr_configuration, Mapping):
-        forbidden_filters = {
-            "branches",
-            "branches-ignore",
-            "paths",
-            "paths-ignore",
-        } & set(pr_configuration)
         require(
-            not forbidden_filters,
-            "canonical PR lane must cover every base branch and repository path: "
-            f"{sorted(forbidden_filters)}",
+            _active_pull_request(pr_configuration, CANONICAL_PR_WORKFLOW),
+            "canonical PR lane must select the historical active branch",
+        )
+        forbidden_path_filters = {"paths", "paths-ignore"} & set(pr_configuration)
+        require(
+            not forbidden_path_filters,
+            "canonical PR lane must cover every repository path for its selected base: "
+            f"{sorted(forbidden_path_filters)}",
         )
         types = pr_configuration.get("types")
         if types is not None:
@@ -404,9 +475,9 @@ def validate_workflow_admission(root: Path) -> None:
             )
 
     require(
-        set(active_push_workflows)
-        == {EXACT_SOURCE_WORKFLOW, DIAGNOSTIC_FALLBACK_WORKFLOW},
-        "active-branch push workflows must be exact-source export plus bounded fallback: "
+        {EXACT_SOURCE_WORKFLOW, DIAGNOSTIC_FALLBACK_WORKFLOW}
+        <= set(active_push_workflows),
+        "historical active-branch push coverage must retain exact-source export and bounded fallback: "
         f"{active_push_workflows}",
     )
     for name in (EXACT_SOURCE_WORKFLOW, DIAGNOSTIC_FALLBACK_WORKFLOW):

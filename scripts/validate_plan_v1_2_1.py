@@ -273,10 +273,6 @@ def validate_v121_docs() -> None:
             "CODEOWNERS",
             "contents: read",
         ],
-        "README.md": [
-            "V1.2.1",
-            "HEPTABAO_EXTERNAL_ACTION_PACKAGE_CATALOG_V1.yaml",
-        ],
     }
     for path, tokens in required.items():
         text = (ROOT / path).read_text(encoding="utf-8")
@@ -284,9 +280,11 @@ def validate_v121_docs() -> None:
             if token.lower() not in text.lower():
                 fail(f"{path}: required V1.2.1 concept missing: {token}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+    base.validate_readme_current_plan_marker(readme)
     if (
         "not yet a deployable secrets server" not in readme
         and "not a production-deployable secrets server" not in readme
+        and "not production-deployable" not in readme
     ):
         fail("README.md: non-production deployability boundary is missing")
 

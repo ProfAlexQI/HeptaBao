@@ -33,6 +33,20 @@ class PlanV12Tests(unittest.TestCase):
         self.assertFalse(result["qualification"])
         self.assertEqual(result["authority_effect"], "NONE")
 
+    def test_successor_current_plan_marker_is_accepted(self):
+        validator.validate_readme_current_plan_marker(
+            "- Current plan: **V1.4.7 post-merge truth and external admission**."
+        )
+
+    def test_missing_or_unversioned_current_plan_marker_fails_closed(self):
+        for value in (
+            "- Current plan: latest.",
+            "- Current plan: **post-merge truth**.",
+            "- Historical plan: **V1.4.7**.",
+        ):
+            with self.assertRaises(validator.ValidationFailure):
+                validator.validate_readme_current_plan_marker(value)
+
     def test_duplicate_manifest_path_fails_closed(self):
         value = validator.load_yaml("planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1.yaml")
         value = copy.deepcopy(value)

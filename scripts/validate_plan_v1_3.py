@@ -94,7 +94,9 @@ def validate_workspace(cargo_toml: Path | None = None, cargo_lock: Path | None =
     workspace = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
     members = set(workspace.get("workspace", {}).get("members", []))
     require(EXPECTED_NEW_CRATES <= members, "V1.3 workspace crates are missing")
-    require(len(members) == 7, f"expected seven workspace crates, observed {len(members)}")
+    # V1.3 proves its required foundation as an immutable subset. Successor plans
+    # may add workspace crates; exact current coverage is enforced by the active
+    # module-source-truth gate rather than this historical checkpoint.
     lock = tomllib.loads(cargo_lock.read_text(encoding="utf-8"))
     packages = {item.get("name") for item in lock.get("package", [])}
     for package in ("heptabao-protocol", "heptabao-authbus-contracts", "heptabao-p0-server"):
@@ -255,7 +257,7 @@ def validate_workflow_directory(directory: Path = WORKFLOWS) -> None:
     forbidden = (
         re.compile(r"(?mi)^\s*contents\s*:\s*write\s*$"),
         re.compile(r"(?mi)^\s*persist-credentials\s*:\s*true\s*$"),
-        re.compile(r"(?mi)^\s*git\s+(?:commit|push|rebase|merge)\b"),
+        re.compile(r"(?mi)^\s*(?:(?:-\s*)?run:\s*)?git\s+(?:commit|push|rebase|merge)(?:\s|$)"),
     )
     for path in sorted(directory.glob("*.yml")):
         text = path.read_text(encoding="utf-8")

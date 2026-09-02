@@ -35,6 +35,10 @@ REQUIRED = [
     "schemas/heptabao_external_completion_evidence_v1.schema.json",
     "scripts/render_plan_v1_4_7.py",
     "scripts/validate_external_completion_evidence_v1.py",
+    "tests/plan/test_external_completion_evidence_v1.py",
+    "tests/plan/test_module_source_truth_v1_4_7.py",
+    "tests/plan/test_plan_v1_4_7.py",
+    "qualifications/external/README.md",
     ".github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml",
 ]
 

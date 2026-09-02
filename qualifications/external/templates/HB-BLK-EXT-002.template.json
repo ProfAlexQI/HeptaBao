@@ -29,9 +29,12 @@
   "separation": {},
   "signatures": [],
   "source": {
+    "base_commit": null,
     "commit": null,
     "manifest_digest": null,
     "merge_commit": null,
+    "merge_parent_one": null,
+    "merge_parent_two": null,
     "merge_tree": null,
     "plan_digest": null,
     "tree": null

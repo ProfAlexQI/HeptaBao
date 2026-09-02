@@ -56,6 +56,58 @@ class PlanV131Tests(unittest.TestCase):
     def test_checked_in_v1_3_1_contract_passes(self) -> None:
         MODULE.validate(ROOT)
 
+    def _workflow_fixture(self, root: Path) -> Path:
+        directory = root / ".github/workflows"
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in (
+            MODULE.CANONICAL_PR_WORKFLOW,
+            MODULE.EXACT_SOURCE_WORKFLOW,
+            MODULE.DIAGNOSTIC_FALLBACK_WORKFLOW,
+            Path(MODULE.HISTORICAL_WORKFLOW).name,
+        ):
+            (directory / name).write_bytes((ROOT / ".github/workflows" / name).read_bytes())
+        return directory
+
+    def test_successor_pr_workflow_on_other_base_is_allowed_without_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = self._workflow_fixture(Path(temporary))
+            (directory / "successor.yml").write_text(
+                """name: successor
+on:
+  pull_request:
+    branches: [integration/v1.4.4-technical-candidate]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo safe
+""",
+                encoding="utf-8",
+            )
+            MODULE.validate_workflow_admission(Path(temporary))
+
+    def test_successor_read_only_pr_workflow_may_share_historical_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = self._workflow_fixture(Path(temporary))
+            (directory / "plan-v1.4-successor-shared-base.yml").write_text(
+                f"""name: successor shared base
+on:
+  pull_request:
+    branches: [{MODULE.ACTIVE_BRANCH}]
+permissions:
+  contents: read
+jobs:
+  successor-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo distinct-successor-context
+""",
+                encoding="utf-8",
+            )
+            MODULE.validate_workflow_admission(Path(temporary))
+
     def test_external_blocker_cannot_be_self_closed(self) -> None:
         status_path = ROOT / STATUS_PATH
         status = yaml.safe_load(status_path.read_text(encoding="utf-8"))

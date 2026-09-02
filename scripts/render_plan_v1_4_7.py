@@ -358,467 +358,13 @@ def module_index_expected(root: Path, truth: dict[str, Any]) -> str:
 
 
 def external_schema() -> dict[str, Any]:
-    blockers = ["HB-BLK-CTRL-001"] + [f"HB-BLK-EXT-{index:03d}" for index in range(1, 8)]
-    digest = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://heptabao.invalid/schemas/heptabao_external_completion_evidence_v1.schema.json",
-        "title": "HeptaBao external completion evidence envelope v1",
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "schema", "blocker_id", "state", "repository", "source", "scope", "actors", "separation",
-            "checks", "artifacts", "findings", "signatures", "claims"
-        ],
-        "properties": {
-            "schema": {"const": "heptabao.external-completion-evidence.v1"},
-            "blocker_id": {"enum": blockers},
-            "state": {"enum": ["UNEXECUTED", "EXECUTED_PENDING_REVIEW", "ACCEPTED", "REJECTED", "REVOKED"]},
-            "repository": {
-                "type": "object", "additionalProperties": False,
-                "required": ["id", "full_name"],
-                "properties": {"id": {"const": REPOSITORY_ID}, "full_name": {"const": REPOSITORY_FULL_NAME}},
-            },
-            "source": {
-                "type": "object", "additionalProperties": False,
-                "required": ["commit", "tree", "merge_commit", "merge_tree", "plan_digest", "manifest_digest"],
-                "properties": {
-                    "commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-                    "tree": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-                    "merge_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-                    "merge_tree": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-                    "plan_digest": {"anyOf": [digest, {"type": "null"}]},
-                    "manifest_digest": {"anyOf": [digest, {"type": "null"}]},
-                },
-            },
-            "scope": {"type": "array", "items": {"type": "string", "minLength": 1}},
-            "actors": {
-                "type": "array",
-                "items": {
-                    "type": "object", "additionalProperties": False,
-                    "required": ["stable_id", "role", "organization", "independent", "conflicts"],
-                    "properties": {
-                        "stable_id": {"type": "string", "minLength": 3},
-                        "role": {"type": "string", "minLength": 3},
-                        "organization": {"type": "string", "minLength": 2},
-                        "independent": {"type": "boolean"},
-                        "conflicts": {"type": "array", "items": {"type": "string"}},
-                    },
-                },
-            },
-            "separation": {"type": "object", "additionalProperties": {"type": "string"}},
-            "checks": {
-                "type": "array",
-                "items": {
-                    "type": "object", "additionalProperties": False,
-                    "required": ["case_id", "status", "evidence_digest"],
-                    "properties": {
-                        "case_id": {"type": "string", "minLength": 1},
-                        "status": {"enum": ["PASS", "FAIL", "BLOCKED", "UNKNOWN", "UNEXECUTED"]},
-                        "evidence_digest": {"anyOf": [digest, {"type": "null"}]},
-                    },
-                },
-            },
-            "artifacts": {
-                "type": "array",
-                "items": {
-                    "type": "object", "additionalProperties": False,
-                    "required": ["name", "digest", "custody_uri", "classification"],
-                    "properties": {
-                        "name": {"type": "string", "minLength": 1},
-                        "digest": digest,
-                        "custody_uri": {"type": "string", "minLength": 3},
-                        "classification": {"enum": ["PUBLIC", "SANITIZED", "RESTRICTED_REFERENCE"]},
-                    },
-                },
-            },
-            "findings": {
-                "type": "array",
-                "items": {
-                    "type": "object", "additionalProperties": False,
-                    "required": ["id", "severity", "state"],
-                    "properties": {
-                        "id": {"type": "string"},
-                        "severity": {"enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL", "UNCLASSIFIED"]},
-                        "state": {"enum": ["OPEN", "CLOSED", "ACCEPTED_RISK"]},
-                    },
-                },
-            },
-            "signatures": {
-                "type": "array",
-                "items": {
-                    "type": "object", "additionalProperties": False,
-                    "required": ["signer_id", "role", "key_id", "algorithm", "signed_at", "expires_at", "signature", "verification"],
-                    "properties": {
-                        "signer_id": {"type": "string", "minLength": 3},
-                        "role": {"type": "string", "minLength": 3},
-                        "key_id": {"type": "string", "minLength": 3},
-                        "algorithm": {"type": "string", "minLength": 3},
-                        "signed_at": {"type": "string", "format": "date-time"},
-                        "expires_at": {"type": "string", "format": "date-time"},
-                        "signature": {"type": "string", "minLength": 16},
-                        "verification": {"enum": ["VALID", "INVALID", "UNKNOWN", "REVOKED"]},
-                    },
-                },
-            },
-            "claims": {
-                "type": "object", "additionalProperties": False,
-                "required": list(CLAIMS),
-                "properties": {
-                    "qualification": {"const": False},
-                    "compatibility_claim": {"const": False},
-                    "selected_candidates": {"const": []},
-                    "selection_effect": {"const": "NONE"},
-                    "production_authority": {"const": False},
-                    "migration_authority": {"const": False},
-                    "release_authority": {"const": False},
-                    "authority_effect": {"const": "NONE"},
-                },
-            },
-        },
-    }
-
+    return json.loads('{\n  "$id": "https://heptabao.invalid/schemas/heptabao_external_completion_evidence_v1.schema.json",\n  "$schema": "https://json-schema.org/draft/2020-12/schema",\n  "additionalProperties": false,\n  "properties": {\n    "actors": {\n      "items": {\n        "additionalProperties": false,\n        "properties": {\n          "conflicts": {\n            "items": {\n              "type": "string"\n            },\n            "type": "array"\n          },\n          "credential_id": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "credential_issuer": {\n            "minLength": 2,\n            "type": "string"\n          },\n          "credential_not_after": {\n            "format": "date-time",\n            "type": "string"\n          },\n          "credential_not_before": {\n            "format": "date-time",\n            "type": "string"\n          },\n          "independent": {\n            "type": "boolean"\n          },\n          "organization": {\n            "minLength": 2,\n            "type": "string"\n          },\n          "revocation_authority": {\n            "minLength": 2,\n            "type": "string"\n          },\n          "role": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "stable_id": {\n            "minLength": 3,\n            "type": "string"\n          }\n        },\n        "required": [\n          "stable_id",\n          "role",\n          "organization",\n          "independent",\n          "conflicts",\n          "credential_id",\n          "credential_issuer",\n          "credential_not_before",\n          "credential_not_after",\n          "revocation_authority"\n        ],\n        "type": "object"\n      },\n      "type": "array"\n    },\n    "artifacts": {\n      "items": {\n        "additionalProperties": false,\n        "properties": {\n          "classification": {\n            "enum": [\n              "PUBLIC",\n              "SANITIZED",\n              "RESTRICTED_REFERENCE"\n            ]\n          },\n          "custody_uri": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "digest": {\n            "pattern": "^sha256:[0-9a-f]{64}$",\n            "type": "string"\n          },\n          "kind": {\n            "enum": [\n              "CEREMONY_TRANSCRIPT",\n              "CRASH_MATRIX",\n              "CROSS_ENVIRONMENT_COMPARISON",\n              "DRILL_BUNDLE",\n              "INDEPENDENCE_ATTESTATION",\n              "INDEPENDENT_REVIEW",\n              "LAB_ENVIRONMENT_ATTESTATION",\n              "LEGAL_DISPOSITION",\n              "LIVE_API_READBACK",\n              "NEGATIVE_TEST_BUNDLE",\n              "RAW_EVIDENCE_MANIFEST",\n              "READINESS_ATTESTATION",\n              "REPRODUCTION_BUNDLE",\n              "RESTRICTED_CAPTURE_REFERENCE",\n              "REVIEWED_INPUT_MANIFEST",\n              "REVOCATION_DRILL",\n              "ROLE_REGISTRY",\n              "SANITIZATION_REPORT",\n              "SANITIZED_FIXTURE",\n              "SCOPED_REVIEW_RECEIPTS",\n              "SIGNATURE_VERIFICATION",\n              "SIGNING_PROFILE",\n              "TRANSFER_COMPLETION",\n              "TRANSPARENCY_CHECKPOINT"\n            ]\n          },\n          "name": {\n            "minLength": 1,\n            "type": "string"\n          }\n        },\n        "required": [\n          "kind",\n          "name",\n          "digest",\n          "custody_uri",\n          "classification"\n        ],\n        "type": "object"\n      },\n      "type": "array"\n    },\n    "blocker_id": {\n      "enum": [\n        "HB-BLK-CTRL-001",\n        "HB-BLK-EXT-001",\n        "HB-BLK-EXT-002",\n        "HB-BLK-EXT-003",\n        "HB-BLK-EXT-004",\n        "HB-BLK-EXT-005",\n        "HB-BLK-EXT-006",\n        "HB-BLK-EXT-007"\n      ]\n    },\n    "checks": {\n      "items": {\n        "additionalProperties": false,\n        "properties": {\n          "case_id": {\n            "minLength": 1,\n            "type": "string"\n          },\n          "evidence_digest": {\n            "anyOf": [\n              {\n                "pattern": "^sha256:[0-9a-f]{64}$",\n                "type": "string"\n              },\n              {\n                "type": "null"\n              }\n            ]\n          },\n          "status": {\n            "enum": [\n              "PASS",\n              "FAIL",\n              "BLOCKED",\n              "UNKNOWN",\n              "UNEXECUTED"\n            ]\n          }\n        },\n        "required": [\n          "case_id",\n          "status",\n          "evidence_digest"\n        ],\n        "type": "object"\n      },\n      "type": "array"\n    },\n    "claims": {\n      "additionalProperties": false,\n      "properties": {\n        "authority_effect": {\n          "const": "NONE"\n        },\n        "compatibility_claim": {\n          "const": false\n        },\n        "migration_authority": {\n          "const": false\n        },\n        "production_authority": {\n          "const": false\n        },\n        "qualification": {\n          "const": false\n        },\n        "release_authority": {\n          "const": false\n        },\n        "selected_candidates": {\n          "const": []\n        },\n        "selection_effect": {\n          "const": "NONE"\n        }\n      },\n      "required": [\n        "qualification",\n        "compatibility_claim",\n        "selected_candidates",\n        "selection_effect",\n        "production_authority",\n        "migration_authority",\n        "release_authority",\n        "authority_effect"\n      ],\n      "type": "object"\n    },\n    "findings": {\n      "items": {\n        "additionalProperties": false,\n        "properties": {\n          "id": {\n            "minLength": 1,\n            "type": "string"\n          },\n          "severity": {\n            "enum": [\n              "CRITICAL",\n              "HIGH",\n              "MEDIUM",\n              "LOW",\n              "INFORMATIONAL",\n              "UNCLASSIFIED"\n            ]\n          },\n          "state": {\n            "enum": [\n              "OPEN",\n              "CLOSED",\n              "ACCEPTED_RISK"\n            ]\n          }\n        },\n        "required": [\n          "id",\n          "severity",\n          "state"\n        ],\n        "type": "object"\n      },\n      "type": "array"\n    },\n    "repository": {\n      "additionalProperties": false,\n      "properties": {\n        "full_name": {\n          "const": "TrillionniumFoundation/HeptaBao"\n        },\n        "id": {\n          "const": 1349115072\n        }\n      },\n      "required": [\n        "id",\n        "full_name"\n      ],\n      "type": "object"\n    },\n    "schema": {\n      "const": "heptabao.external-completion-evidence.v1"\n    },\n    "scope": {\n      "items": {\n        "minLength": 1,\n        "type": "string"\n      },\n      "type": "array"\n    },\n    "separation": {\n      "additionalProperties": {\n        "minLength": 2,\n        "type": "string"\n      },\n      "type": "object"\n    },\n    "signatures": {\n      "items": {\n        "additionalProperties": false,\n        "properties": {\n          "algorithm": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "expires_at": {\n            "format": "date-time",\n            "type": "string"\n          },\n          "key_id": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "payload_digest": {\n            "pattern": "^sha256:[0-9a-f]{64}$",\n            "type": "string"\n          },\n          "revocation_evidence_digest": {\n            "pattern": "^sha256:[0-9a-f]{64}$",\n            "type": "string"\n          },\n          "role": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "signature": {\n            "minLength": 16,\n            "type": "string"\n          },\n          "signed_at": {\n            "format": "date-time",\n            "type": "string"\n          },\n          "signer_id": {\n            "minLength": 3,\n            "type": "string"\n          },\n          "transparency_checkpoint_digest": {\n            "pattern": "^sha256:[0-9a-f]{64}$",\n            "type": "string"\n          },\n          "trust_root_id": {\n            "minLength": 3,\n            "type": "string"\n          }\n        },\n        "required": [\n          "signer_id",\n          "role",\n          "key_id",\n          "algorithm",\n          "signed_at",\n          "expires_at",\n          "trust_root_id",\n          "transparency_checkpoint_digest",\n          "revocation_evidence_digest",\n          "payload_digest",\n          "signature"\n        ],\n        "type": "object"\n      },\n      "type": "array"\n    },\n    "source": {\n      "additionalProperties": false,\n      "properties": {\n        "base_commit": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "commit": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "manifest_digest": {\n          "anyOf": [\n            {\n              "pattern": "^sha256:[0-9a-f]{64}$",\n              "type": "string"\n            },\n            {\n              "type": "null"\n            }\n          ]\n        },\n        "merge_commit": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "merge_parent_one": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "merge_parent_two": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "merge_tree": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        },\n        "plan_digest": {\n          "anyOf": [\n            {\n              "pattern": "^sha256:[0-9a-f]{64}$",\n              "type": "string"\n            },\n            {\n              "type": "null"\n            }\n          ]\n        },\n        "tree": {\n          "pattern": "^[0-9a-f]{40}$",\n          "type": [\n            "string",\n            "null"\n          ]\n        }\n      },\n      "required": [\n        "commit",\n        "tree",\n        "base_commit",\n        "merge_commit",\n        "merge_tree",\n        "merge_parent_one",\n        "merge_parent_two",\n        "plan_digest",\n        "manifest_digest"\n      ],\n      "type": "object"\n    },\n    "state": {\n      "enum": [\n        "UNEXECUTED",\n        "EXECUTED_PENDING_REVIEW",\n        "ACCEPTED",\n        "REJECTED",\n        "REVOKED"\n      ]\n    }\n  },\n  "required": [\n    "schema",\n    "blocker_id",\n    "state",\n    "repository",\n    "source",\n    "scope",\n    "actors",\n    "separation",\n    "checks",\n    "artifacts",\n    "findings",\n    "signatures",\n    "claims"\n  ],\n  "title": "HeptaBao external completion evidence envelope v1",\n  "type": "object"\n}\n')
 
 def external_validator_source() -> str:
-    return textwrap.dedent(
-        r'''#!/usr/bin/env python3
-from __future__ import annotations
-
-import argparse
-import json
-import re
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-
-REPOSITORY_ID = 1349115072
-REPOSITORY_FULL_NAME = "TrillionniumFoundation/HeptaBao"
-ALLOWED_BLOCKERS = {"HB-BLK-CTRL-001", *{f"HB-BLK-EXT-{i:03d}" for i in range(1, 8)}}
-REQUIRED_ROLES = {
-    "HB-BLK-CTRL-001": {"repository_administrator", "independent_control_reviewer"},
-    "HB-BLK-EXT-001": {"program_reviewer", "security_reviewer", "storage_reviewer"},
-    "HB-BLK-EXT-002": {"legal_signer", "independent_program_reviewer"},
-    "HB-BLK-EXT-003": {"security_operations", "backup_incident_commander", "independent_observer"},
-    "HB-BLK-EXT-004": {"root_key_custodian", "crypto_reviewer", "independent_observer"},
-    "HB-BLK-EXT-005": {"oracle_operator", "sanitization_operator", "transfer_custodian", "compatibility_reviewer"},
-    "HB-BLK-EXT-006": {"storage_lab_operator", "storage_reviewer"},
-    "HB-BLK-EXT-007": {"independent_reproduction_operator", "independent_reproduction_reviewer"},
-}
-SEPARATION_KEYS = {
-    "HB-BLK-EXT-007": {
-        "credential_root", "runner_admin", "cache_admin", "artifact_custody", "signing_root", "network_egress"
-    },
-    "HB-BLK-EXT-006": {"runner_admin", "artifact_custody", "signing_root", "power_cut_control"},
-    "HB-BLK-EXT-005": {"raw_capture_acl", "implementation_acl", "artifact_custody", "signing_root"},
-    "HB-BLK-EXT-004": {"root_custody", "delegated_custody", "observer_custody", "transparency_custody"},
-}
-HEX40 = re.compile(r"^[0-9a-f]{40}$")
-DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-PLACEHOLDERS = {"todo", "tbd", "unknown", "unexecuted", "placeholder", "example", "none", "n/a"}
-
-
-def fail(message: str) -> None:
-    raise ValueError(message)
-
-
-def non_placeholder(value: Any, field: str) -> str:
-    if not isinstance(value, str) or len(value.strip()) < 2:
-        fail(f"{field}: missing")
-    lowered = value.strip().lower()
-    if lowered in PLACEHOLDERS or any(token in lowered for token in ("<", ">", "replace-me")):
-        fail(f"{field}: placeholder")
-    return value
-
-
-def parse_time(value: str, field: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as error:
-        fail(f"{field}: invalid date-time: {error}")
-    if parsed.tzinfo is None:
-        fail(f"{field}: timezone required")
-    return parsed.astimezone(timezone.utc)
-
-
-def validate_envelope(
-    data: dict[str, Any], *, require_closure: bool = False, expected_source: dict[str, str] | None = None,
-    now: datetime | None = None,
-) -> None:
-    if data.get("schema") != "heptabao.external-completion-evidence.v1":
-        fail("schema mismatch")
-    blocker = data.get("blocker_id")
-    if blocker not in ALLOWED_BLOCKERS:
-        fail("unsupported blocker")
-    repository = data.get("repository")
-    if repository != {"id": REPOSITORY_ID, "full_name": REPOSITORY_FULL_NAME}:
-        fail("repository identity mismatch")
-    if data.get("claims") != {
-        "qualification": False,
-        "compatibility_claim": False,
-        "selected_candidates": [],
-        "selection_effect": "NONE",
-        "production_authority": False,
-        "migration_authority": False,
-        "release_authority": False,
-        "authority_effect": "NONE",
-    }:
-        fail("authority drift")
-    state = data.get("state")
-    if state not in {"UNEXECUTED", "EXECUTED_PENDING_REVIEW", "ACCEPTED", "REJECTED", "REVOKED"}:
-        fail("invalid state")
-    source = data.get("source")
-    if not isinstance(source, dict):
-        fail("source missing")
-    if require_closure:
-        if state != "ACCEPTED":
-            fail("closure requires ACCEPTED")
-        for key in ("commit", "tree", "merge_commit", "merge_tree"):
-            value = source.get(key)
-            if not isinstance(value, str) or not HEX40.fullmatch(value):
-                fail(f"source.{key}: exact SHA required")
-            if expected_source and value != expected_source.get(key):
-                fail(f"source.{key}: expected-source mismatch")
-        for key in ("plan_digest", "manifest_digest"):
-            if not isinstance(source.get(key), str) or not DIGEST.fullmatch(source[key]):
-                fail(f"source.{key}: exact digest required")
-        scope = data.get("scope")
-        if not isinstance(scope, list) or not scope:
-            fail("closure scope empty")
-        for index, value in enumerate(scope):
-            non_placeholder(value, f"scope[{index}]")
-        actors = data.get("actors")
-        if not isinstance(actors, list):
-            fail("actors missing")
-        roles: set[str] = set()
-        actor_ids: set[str] = set()
-        for index, actor in enumerate(actors):
-            if not isinstance(actor, dict):
-                fail(f"actors[{index}]: object required")
-            stable_id = non_placeholder(actor.get("stable_id"), f"actors[{index}].stable_id")
-            role = non_placeholder(actor.get("role"), f"actors[{index}].role")
-            non_placeholder(actor.get("organization"), f"actors[{index}].organization")
-            if stable_id in actor_ids:
-                fail("actor identities must be distinct")
-            actor_ids.add(stable_id)
-            roles.add(role)
-            if role.startswith("independent_") or role.endswith("_reviewer") or role == "independent_observer":
-                if actor.get("independent") is not True:
-                    fail(f"{role}: independence not affirmed")
-                conflicts = actor.get("conflicts")
-                if not isinstance(conflicts, list) or conflicts:
-                    fail(f"{role}: unresolved conflicts")
-        missing_roles = REQUIRED_ROLES[blocker] - roles
-        if missing_roles:
-            fail(f"missing roles: {sorted(missing_roles)}")
-        separation = data.get("separation")
-        if not isinstance(separation, dict):
-            fail("separation missing")
-        for key in SEPARATION_KEYS.get(blocker, set()):
-            non_placeholder(separation.get(key), f"separation.{key}")
-        checks = data.get("checks")
-        if not isinstance(checks, list) or not checks:
-            fail("checks missing")
-        case_ids: set[str] = set()
-        for index, check in enumerate(checks):
-            case_id = non_placeholder(check.get("case_id"), f"checks[{index}].case_id")
-            if case_id in case_ids:
-                fail("duplicate check case")
-            case_ids.add(case_id)
-            if check.get("status") != "PASS":
-                fail(f"{case_id}: non-PASS status")
-            if not isinstance(check.get("evidence_digest"), str) or not DIGEST.fullmatch(check["evidence_digest"]):
-                fail(f"{case_id}: evidence digest missing")
-        artifacts = data.get("artifacts")
-        if not isinstance(artifacts, list) or not artifacts:
-            fail("artifacts missing")
-        for index, artifact in enumerate(artifacts):
-            non_placeholder(artifact.get("name"), f"artifacts[{index}].name")
-            if not isinstance(artifact.get("digest"), str) or not DIGEST.fullmatch(artifact["digest"]):
-                fail(f"artifacts[{index}].digest invalid")
-            non_placeholder(artifact.get("custody_uri"), f"artifacts[{index}].custody_uri")
-            if artifact.get("classification") not in {"PUBLIC", "SANITIZED", "RESTRICTED_REFERENCE"}:
-                fail(f"artifacts[{index}].classification invalid")
-        for finding in data.get("findings", []):
-            if finding.get("severity") in {"CRITICAL", "HIGH", "UNCLASSIFIED"} and finding.get("state") != "CLOSED":
-                fail("critical/high/unclassified finding remains open")
-        signatures = data.get("signatures")
-        if not isinstance(signatures, list) or len(signatures) < 2:
-            fail("at least two signatures required")
-        current = now or datetime.now(timezone.utc)
-        signed_ids: set[str] = set()
-        for index, signature in enumerate(signatures):
-            signer_id = non_placeholder(signature.get("signer_id"), f"signatures[{index}].signer_id")
-            if signer_id in signed_ids:
-                fail("signer identities must be distinct")
-            signed_ids.add(signer_id)
-            non_placeholder(signature.get("role"), f"signatures[{index}].role")
-            non_placeholder(signature.get("key_id"), f"signatures[{index}].key_id")
-            non_placeholder(signature.get("algorithm"), f"signatures[{index}].algorithm")
-            non_placeholder(signature.get("signature"), f"signatures[{index}].signature")
-            signed_at = parse_time(signature.get("signed_at"), f"signatures[{index}].signed_at")
-            expires_at = parse_time(signature.get("expires_at"), f"signatures[{index}].expires_at")
-            if signed_at > current or expires_at <= current or expires_at <= signed_at:
-                fail("signature freshness invalid")
-            if signature.get("verification") != "VALID":
-                fail("signature not valid and current")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("paths", nargs="+")
-    parser.add_argument("--require-closure", action="store_true")
-    parser.add_argument("--expected-commit")
-    parser.add_argument("--expected-tree")
-    parser.add_argument("--expected-merge-commit")
-    parser.add_argument("--expected-merge-tree")
-    args = parser.parse_args()
-    expected = None
-    if args.require_closure:
-        expected = {
-            "commit": args.expected_commit,
-            "tree": args.expected_tree,
-            "merge_commit": args.expected_merge_commit,
-            "merge_tree": args.expected_merge_tree,
-        }
-        if any(value is None for value in expected.values()):
-            parser.error("all expected source identities are required with --require-closure")
-    for raw_path in args.paths:
-        path = Path(raw_path)
-        value = json.loads(path.read_text(encoding="utf-8"))
-        validate_envelope(value, require_closure=args.require_closure, expected_source=expected)
-        print(f"PASS {path}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-'''
-    ).lstrip()
-
+    return '#!/usr/bin/env python3\nfrom __future__ import annotations\n\nimport argparse\nimport base64\nimport copy\nimport hashlib\nimport json\nimport re\nimport subprocess\nfrom collections.abc import Callable, Sequence\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Any\n\nfrom jsonschema import Draft202012Validator, FormatChecker\n\nREPOSITORY_ID = 1349115072\nREPOSITORY_FULL_NAME = "TrillionniumFoundation/HeptaBao"\nSCHEMA_NAME = "heptabao.external-completion-evidence.v1"\nDOMAIN = b"HEPTABAO_EXTERNAL_COMPLETION_EVIDENCE_V1\\x00"\nROOT = Path(__file__).resolve().parents[1]\nSCHEMA_PATH = ROOT / "schemas/heptabao_external_completion_evidence_v1.schema.json"\nALLOWED_BLOCKERS = {"HB-BLK-CTRL-001", *{f"HB-BLK-EXT-{i:03d}" for i in range(1, 8)}}\nREQUIRED_ROLES = {\n    "HB-BLK-CTRL-001": {"repository_administrator", "independent_control_reviewer"},\n    "HB-BLK-EXT-001": {"program_reviewer", "security_reviewer", "storage_reviewer"},\n    "HB-BLK-EXT-002": {"legal_signer", "independent_program_reviewer"},\n    "HB-BLK-EXT-003": {"security_operations", "backup_incident_commander", "independent_observer"},\n    "HB-BLK-EXT-004": {"root_key_custodian", "crypto_reviewer", "independent_observer"},\n    "HB-BLK-EXT-005": {"oracle_operator", "sanitization_operator", "transfer_custodian", "compatibility_reviewer"},\n    "HB-BLK-EXT-006": {"storage_lab_operator", "storage_reviewer"},\n    "HB-BLK-EXT-007": {"independent_reproduction_operator", "independent_reproduction_reviewer"},\n}\nINDEPENDENT_ROLES = {\n    "independent_control_reviewer", "program_reviewer", "security_reviewer", "storage_reviewer",\n    "legal_signer", "independent_program_reviewer", "independent_observer", "crypto_reviewer",\n    "oracle_operator", "sanitization_operator", "transfer_custodian", "compatibility_reviewer",\n    "storage_lab_operator", "independent_reproduction_operator", "independent_reproduction_reviewer",\n}\nREQUIRED_CASES = {\n    "HB-BLK-CTRL-001": {\n        "live-api-readback", "failing-head-check-blocked", "missing-arbitration-blocked",\n        "stale-approval-dismissed", "non-codeowner-rejected", "force-push-rejected",\n        "branch-delete-rejected", "admin-bypass-rejected", "lookalike-context-rejected",\n    },\n    "HB-BLK-EXT-001": {\n        "program-review", "security-review", "storage-review", "identity-separation",\n        "signature-validation", "revocation-check",\n    },\n    "HB-BLK-EXT-002": {\n        "outbound-license", "contributor-policy", "mpl-interop", "third-party-materials",\n        "clean-room", "trademark", "patent", "export-crypto", "source-offer",\n        "retention-destruction", "signer-authority", "exact-source-binding",\n    },\n    "HB-BLK-EXT-003": {\n        "private-intake", "primary-coverage", "backup-coverage", "root-material-tabletop",\n        "policy-bypass-tabletop", "data-loss-tabletop", "split-brain-tabletop",\n        "supply-chain-tabletop", "signer-compromise-tabletop", "oracle-exposure-tabletop",\n        "freeze-drill", "revocation-propagation", "independent-observation",\n    },\n    "HB-BLK-EXT-004": {\n        "profile-approval", "root-key-ceremony", "delegated-key-ceremony",\n        "offline-trust-root-verification", "transparency-inclusion", "normal-rotation",\n        "delegated-compromise", "root-compromise", "consumer-revocation", "independent-observation",\n    },\n    "HB-BLK-EXT-005": {\n        "acl-role-separation", "oracle-profile-freeze", "uninitialized-health", "sealed-health",\n        "seal-status", "canonicalization-errors", "malformed-request", "side-effect-observation",\n        "deterministic-sanitization", "secret-scan", "semantic-review", "signed-transfer",\n        "implementation-receipt",\n    },\n    "HB-BLK-EXT-006": {\n        "environment-attestation", "power-cut-controller-proof", "durability-boundary-matrix",\n        "acknowledged-write-preservation", "corruption-rejection", "empty-init-forbidden",\n        "recovery-idempotence", "rpo-rto", "negative-missing-fsync", "independent-storage-review",\n    },\n    "HB-BLK-EXT-007": {\n        "environment-independence", "source-identity", "dependency-checksums", "build-from-source",\n        "exact-head-matrix", "prospective-merge-matrix", "artifact-comparison",\n        "normalizer-control", "divergence-closure", "independence-review",\n    },\n}\nREQUIRED_ARTIFACT_KINDS = {\n    "HB-BLK-CTRL-001": {"LIVE_API_READBACK", "NEGATIVE_TEST_BUNDLE", "INDEPENDENT_REVIEW"},\n    "HB-BLK-EXT-001": {"ROLE_REGISTRY", "SCOPED_REVIEW_RECEIPTS", "SIGNATURE_VERIFICATION"},\n    "HB-BLK-EXT-002": {"LEGAL_DISPOSITION", "REVIEWED_INPUT_MANIFEST", "SIGNATURE_VERIFICATION"},\n    "HB-BLK-EXT-003": {"READINESS_ATTESTATION", "DRILL_BUNDLE", "INDEPENDENT_REVIEW"},\n    "HB-BLK-EXT-004": {\n        "SIGNING_PROFILE", "CEREMONY_TRANSCRIPT", "TRANSPARENCY_CHECKPOINT",\n        "REVOCATION_DRILL", "INDEPENDENT_REVIEW",\n    },\n    "HB-BLK-EXT-005": {\n        "RESTRICTED_CAPTURE_REFERENCE", "SANITIZATION_REPORT", "SANITIZED_FIXTURE", "TRANSFER_COMPLETION",\n    },\n    "HB-BLK-EXT-006": {\n        "LAB_ENVIRONMENT_ATTESTATION", "CRASH_MATRIX", "RAW_EVIDENCE_MANIFEST", "INDEPENDENT_REVIEW",\n    },\n    "HB-BLK-EXT-007": {\n        "INDEPENDENCE_ATTESTATION", "REPRODUCTION_BUNDLE", "CROSS_ENVIRONMENT_COMPARISON", "INDEPENDENT_REVIEW",\n    },\n}\nSEPARATION_KEYS = {\n    "HB-BLK-CTRL-001": {"repository_admin_control", "independent_review_control"},\n    "HB-BLK-EXT-001": {"author_control", "program_review_control", "security_review_control", "storage_review_control"},\n    "HB-BLK-EXT-002": {"implementation_control", "legal_control", "program_review_control"},\n    "HB-BLK-EXT-003": {"primary_oncall_control", "backup_oncall_control", "observer_control", "evidence_custody"},\n    "HB-BLK-EXT-004": {"root_custody", "delegated_custody", "observer_custody", "transparency_custody"},\n    "HB-BLK-EXT-005": {"raw_capture_acl", "implementation_acl", "sanitizer_control", "transfer_custody", "signing_root"},\n    "HB-BLK-EXT-006": {\n        "primary_runner_admin", "lab_runner_admin", "primary_artifact_custody", "lab_artifact_custody",\n        "primary_signing_root", "lab_signing_root", "power_cut_control",\n    },\n    "HB-BLK-EXT-007": {\n        "primary_credential_root", "reproduction_credential_root", "primary_runner_admin", "reproduction_runner_admin",\n        "primary_cache_admin", "reproduction_cache_admin", "primary_artifact_custody", "reproduction_artifact_custody",\n        "primary_signing_root", "reproduction_signing_root", "primary_network_egress", "reproduction_network_egress",\n    },\n}\nUNEQUAL_SEPARATION_PAIRS = {\n    "HB-BLK-CTRL-001": [("repository_admin_control", "independent_review_control")],\n    "HB-BLK-EXT-001": [\n        ("author_control", "program_review_control"), ("author_control", "security_review_control"),\n        ("author_control", "storage_review_control"), ("program_review_control", "security_review_control"),\n        ("program_review_control", "storage_review_control"), ("security_review_control", "storage_review_control"),\n    ],\n    "HB-BLK-EXT-002": [\n        ("implementation_control", "legal_control"), ("implementation_control", "program_review_control"),\n        ("legal_control", "program_review_control"),\n    ],\n    "HB-BLK-EXT-003": [\n        ("primary_oncall_control", "backup_oncall_control"), ("primary_oncall_control", "observer_control"),\n        ("backup_oncall_control", "observer_control"),\n    ],\n    "HB-BLK-EXT-004": [\n        ("root_custody", "delegated_custody"), ("root_custody", "observer_custody"),\n        ("root_custody", "transparency_custody"), ("delegated_custody", "observer_custody"),\n        ("delegated_custody", "transparency_custody"), ("observer_custody", "transparency_custody"),\n    ],\n    "HB-BLK-EXT-005": [\n        ("raw_capture_acl", "implementation_acl"), ("raw_capture_acl", "sanitizer_control"),\n        ("implementation_acl", "transfer_custody"), ("sanitizer_control", "transfer_custody"),\n    ],\n    "HB-BLK-EXT-006": [\n        ("primary_runner_admin", "lab_runner_admin"),\n        ("primary_artifact_custody", "lab_artifact_custody"),\n        ("primary_signing_root", "lab_signing_root"),\n    ],\n    "HB-BLK-EXT-007": [\n        ("primary_credential_root", "reproduction_credential_root"),\n        ("primary_runner_admin", "reproduction_runner_admin"),\n        ("primary_cache_admin", "reproduction_cache_admin"),\n        ("primary_artifact_custody", "reproduction_artifact_custody"),\n        ("primary_signing_root", "reproduction_signing_root"),\n        ("primary_network_egress", "reproduction_network_egress"),\n    ],\n}\nHEX40 = re.compile(r"^[0-9a-f]{40}$")\nDIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")\nPLACEHOLDERS = {"todo", "tbd", "unknown", "unexecuted", "placeholder", "example", "none", "n/a"}\nSIGNATURE_METADATA_FIELDS = (\n    "signer_id", "role", "key_id", "algorithm", "signed_at", "expires_at", "trust_root_id",\n    "transparency_checkpoint_digest", "revocation_evidence_digest",\n)\nSignatureVerifier = Callable[[dict[str, Any], dict[str, Any], bytes], bool]\n\n\ndef fail(message: str) -> None:\n    raise ValueError(message)\n\n\ndef non_placeholder(value: Any, field: str) -> str:\n    if not isinstance(value, str) or len(value.strip()) < 2:\n        fail(f"{field}: missing")\n    lowered = value.strip().lower()\n    if lowered in PLACEHOLDERS or any(token in lowered for token in ("<", ">", "replace-me")):\n        fail(f"{field}: placeholder")\n    return value.strip()\n\n\ndef parse_time(value: Any, field: str) -> datetime:\n    if not isinstance(value, str):\n        fail(f"{field}: string date-time required")\n    try:\n        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))\n    except ValueError as error:\n        fail(f"{field}: invalid date-time: {error}")\n    if parsed.tzinfo is None:\n        fail(f"{field}: timezone required")\n    return parsed.astimezone(timezone.utc)\n\n\ndef schema_validator() -> Draft202012Validator:\n    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))\n    Draft202012Validator.check_schema(schema)\n    return Draft202012Validator(schema, format_checker=FormatChecker())\n\n\ndef validate_schema(data: dict[str, Any]) -> None:\n    errors = sorted(schema_validator().iter_errors(data), key=lambda item: list(item.absolute_path))\n    if errors:\n        error = errors[0]\n        location = ".".join(str(item) for item in error.absolute_path) or "$"\n        fail(f"schema validation failed at {location}: {error.message}")\n\n\ndef signing_payload(data: dict[str, Any], signature: dict[str, Any]) -> bytes:\n    envelope = copy.deepcopy(data)\n    envelope["signatures"] = []\n    metadata = {field: signature.get(field) for field in SIGNATURE_METADATA_FIELDS}\n    document = {"domain": DOMAIN[:-1].decode("ascii"), "envelope": envelope, "signature_metadata": metadata}\n    return DOMAIN + json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")\n\n\ndef sha256_digest(value: bytes) -> str:\n    return "sha256:" + hashlib.sha256(value).hexdigest()\n\n\ndef command_signature_verifier(command: Sequence[str]) -> SignatureVerifier:\n    if not command:\n        fail("signature verifier command missing")\n\n    def verify(signature: dict[str, Any], actor: dict[str, Any], payload: bytes) -> bool:\n        request = {\n            "schema": "heptabao.signature-verification-request.v1",\n            "payload_base64": base64.b64encode(payload).decode("ascii"),\n            "payload_digest": sha256_digest(payload),\n            "actor": actor,\n            "signature": signature,\n        }\n        completed = subprocess.run(\n            list(command), input=json.dumps(request, sort_keys=True), text=True,\n            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,\n        )\n        if completed.returncode != 0:\n            return False\n        try:\n            response = json.loads(completed.stdout)\n        except json.JSONDecodeError:\n            return False\n        return response == {\n            "verified": True,\n            "signer_id": signature["signer_id"],\n            "role": signature["role"],\n            "organization": actor["organization"],\n            "credential_id": actor["credential_id"],\n            "credential_status": "CURRENT_SCOPE_BOUND",\n            "key_id": signature["key_id"],\n            "trust_root_id": signature["trust_root_id"],\n            "payload_digest": signature["payload_digest"],\n            "revocation_status": "CURRENT",\n            "transparency_status": "INCLUDED",\n        }\n\n    return verify\n\n\ndef validate_envelope(\n    data: dict[str, Any], *, require_closure: bool = False,\n    expected_source: dict[str, str] | None = None, now: datetime | None = None,\n    signature_verifier: SignatureVerifier | None = None,\n) -> None:\n    validate_schema(data)\n    if data.get("schema") != SCHEMA_NAME:\n        fail("schema mismatch")\n    blocker = data.get("blocker_id")\n    if blocker not in ALLOWED_BLOCKERS:\n        fail("unsupported blocker")\n    if data.get("repository") != {"id": REPOSITORY_ID, "full_name": REPOSITORY_FULL_NAME}:\n        fail("repository identity mismatch")\n    if data.get("claims") != {\n        "qualification": False, "compatibility_claim": False, "selected_candidates": [],\n        "selection_effect": "NONE", "production_authority": False, "migration_authority": False,\n        "release_authority": False, "authority_effect": "NONE",\n    }:\n        fail("authority drift")\n    if not require_closure:\n        return\n    if data.get("state") != "ACCEPTED":\n        fail("closure requires ACCEPTED")\n    if expected_source is None:\n        fail("closure requires caller-supplied exact source expectations")\n    source = data["source"]\n    source_keys = (\n        "commit", "tree", "base_commit", "merge_commit", "merge_tree",\n        "merge_parent_one", "merge_parent_two", "plan_digest", "manifest_digest",\n    )\n    if set(expected_source) != set(source_keys):\n        fail("expected source must contain every exact identity and digest")\n    for key in source_keys:\n        value = source.get(key)\n        pattern = DIGEST if key.endswith("_digest") else HEX40\n        if not isinstance(value, str) or not pattern.fullmatch(value):\n            fail(f"source.{key}: exact value required")\n        if value != expected_source[key]:\n            fail(f"source.{key}: expected-source mismatch")\n    if source["merge_parent_one"] != source["base_commit"] or source["merge_parent_two"] != source["commit"]:\n        fail("merge parent declaration mismatch")\n    if source["merge_commit"] in {source["commit"], source["base_commit"]}:\n        fail("merge identity must be distinct from both parents")\n\n    scope = data["scope"]\n    if not scope or len(scope) != len(set(scope)):\n        fail("closure scope must be non-empty and unique")\n    for index, value in enumerate(scope):\n        non_placeholder(value, f"scope[{index}]")\n\n    current = now or datetime.now(timezone.utc)\n    actors = data["actors"]\n    roles: dict[str, dict[str, Any]] = {}\n    actor_ids: set[str] = set()\n    credential_ids: set[str] = set()\n    for index, actor in enumerate(actors):\n        stable_id = non_placeholder(actor.get("stable_id"), f"actors[{index}].stable_id")\n        role = non_placeholder(actor.get("role"), f"actors[{index}].role")\n        non_placeholder(actor.get("organization"), f"actors[{index}].organization")\n        credential_id = non_placeholder(actor.get("credential_id"), f"actors[{index}].credential_id")\n        non_placeholder(actor.get("credential_issuer"), f"actors[{index}].credential_issuer")\n        non_placeholder(actor.get("revocation_authority"), f"actors[{index}].revocation_authority")\n        credential_not_before = parse_time(\n            actor.get("credential_not_before"), f"actors[{index}].credential_not_before"\n        )\n        credential_not_after = parse_time(\n            actor.get("credential_not_after"), f"actors[{index}].credential_not_after"\n        )\n        if credential_not_before > current or credential_not_after <= current or credential_not_after <= credential_not_before:\n            fail(f"actors[{index}]: accountable credential is not current")\n        if actor.get("conflicts") != []:\n            fail(f"{role}: unresolved conflicts")\n        if stable_id in actor_ids:\n            fail("actor identities must be distinct")\n        if credential_id in credential_ids:\n            fail("actor credential identities must be distinct")\n        if role in roles:\n            fail("actor roles must be unique")\n        actor_ids.add(stable_id)\n        credential_ids.add(credential_id)\n        roles[role] = actor\n        if role in INDEPENDENT_ROLES and actor.get("independent") is not True:\n            fail(f"{role}: independence not affirmed")\n    missing_roles = REQUIRED_ROLES[blocker] - set(roles)\n    if missing_roles:\n        fail(f"missing roles: {sorted(missing_roles)}")\n\n    separation = data["separation"]\n    expected_separation = SEPARATION_KEYS[blocker]\n    if set(separation) != expected_separation:\n        fail(f"separation key mismatch: expected {sorted(expected_separation)}")\n    for key in sorted(expected_separation):\n        non_placeholder(separation[key], f"separation.{key}")\n    for left, right in UNEQUAL_SEPARATION_PAIRS[blocker]:\n        if separation[left] == separation[right]:\n            fail(f"shared control prohibited: {left} == {right}")\n\n    checks = data["checks"]\n    case_ids: set[str] = set()\n    for index, check in enumerate(checks):\n        case_id = non_placeholder(check.get("case_id"), f"checks[{index}].case_id")\n        if case_id in case_ids:\n            fail("duplicate check case")\n        case_ids.add(case_id)\n        if check.get("status") != "PASS":\n            fail(f"{case_id}: non-PASS status")\n        if not isinstance(check.get("evidence_digest"), str) or not DIGEST.fullmatch(check["evidence_digest"]):\n            fail(f"{case_id}: evidence digest missing")\n    missing_cases = REQUIRED_CASES[blocker] - case_ids\n    if missing_cases:\n        fail(f"required cases missing: {sorted(missing_cases)}")\n\n    artifacts = data["artifacts"]\n    artifact_kinds: set[str] = set()\n    for index, artifact in enumerate(artifacts):\n        kind = non_placeholder(artifact.get("kind"), f"artifacts[{index}].kind")\n        if kind in artifact_kinds:\n            fail("duplicate artifact kind")\n        artifact_kinds.add(kind)\n        non_placeholder(artifact.get("name"), f"artifacts[{index}].name")\n        if not isinstance(artifact.get("digest"), str) or not DIGEST.fullmatch(artifact["digest"]):\n            fail(f"artifacts[{index}].digest invalid")\n        custody = non_placeholder(artifact.get("custody_uri"), f"artifacts[{index}].custody_uri")\n        if not (custody.startswith("urn:") or custody.startswith("https://")):\n            fail(f"artifacts[{index}].custody_uri must be an absolute URN or HTTPS URI")\n    missing_artifacts = REQUIRED_ARTIFACT_KINDS[blocker] - artifact_kinds\n    if missing_artifacts:\n        fail(f"required artifact kinds missing: {sorted(missing_artifacts)}")\n\n    finding_ids: set[str] = set()\n    for finding in data["findings"]:\n        finding_id = non_placeholder(finding.get("id"), "findings.id")\n        if finding_id in finding_ids:\n            fail("duplicate finding id")\n        finding_ids.add(finding_id)\n        if finding.get("severity") in {"CRITICAL", "HIGH", "UNCLASSIFIED"} and finding.get("state") != "CLOSED":\n            fail("critical/high/unclassified finding remains open")\n\n    if signature_verifier is None:\n        fail("closure requires an external cryptographic signature verifier")\n    signatures = data["signatures"]\n    signed_ids: set[str] = set()\n    signed_roles: set[str] = set()\n    key_ids: set[str] = set()\n    for index, signature in enumerate(signatures):\n        signer_id = non_placeholder(signature.get("signer_id"), f"signatures[{index}].signer_id")\n        role = non_placeholder(signature.get("role"), f"signatures[{index}].role")\n        key_id = non_placeholder(signature.get("key_id"), f"signatures[{index}].key_id")\n        algorithm = non_placeholder(signature.get("algorithm"), f"signatures[{index}].algorithm")\n        if any(token in algorithm.lower() for token in ("test", "mock", "example")):\n            fail("test/mock/example signature algorithm prohibited in closure mode")\n        if signer_id in signed_ids or role in signed_roles or key_id in key_ids:\n            fail("signer identities, roles and keys must be distinct")\n        signed_ids.add(signer_id); signed_roles.add(role); key_ids.add(key_id)\n        actor = roles.get(role)\n        if actor is None or actor["stable_id"] != signer_id:\n            fail("signature signer and role must bind to one declared actor")\n        for field in ("trust_root_id", "signature"):\n            non_placeholder(signature.get(field), f"signatures[{index}].{field}")\n        for field in ("transparency_checkpoint_digest", "revocation_evidence_digest", "payload_digest"):\n            value = signature.get(field)\n            if not isinstance(value, str) or not DIGEST.fullmatch(value):\n                fail(f"signatures[{index}].{field}: exact digest required")\n        signed_at = parse_time(signature.get("signed_at"), f"signatures[{index}].signed_at")\n        expires_at = parse_time(signature.get("expires_at"), f"signatures[{index}].expires_at")\n        if signed_at > current or expires_at <= current or expires_at <= signed_at:\n            fail("signature freshness invalid")\n        payload = signing_payload(data, signature)\n        if signature["payload_digest"] != sha256_digest(payload):\n            fail("signature payload digest mismatch")\n        if not signature_verifier(signature, actor, payload):\n            fail("external cryptographic signature and accountable-role verification failed")\n    missing_signatures = REQUIRED_ROLES[blocker] - signed_roles\n    if missing_signatures:\n        fail(f"required role signatures missing: {sorted(missing_signatures)}")\n\n\ndef main() -> int:\n    parser = argparse.ArgumentParser()\n    parser.add_argument("paths", nargs="+")\n    parser.add_argument("--require-closure", action="store_true")\n    for field in (\n        "commit", "tree", "base-commit", "merge-commit", "merge-tree",\n        "merge-parent-one", "merge-parent-two", "plan-digest", "manifest-digest",\n    ):\n        parser.add_argument(f"--expected-{field}")\n    parser.add_argument("--signature-verifier")\n    parser.add_argument("--signature-verifier-arg", action="append", default=[])\n    args = parser.parse_args()\n    expected = None\n    verifier = None\n    if args.require_closure:\n        expected = {\n            "commit": args.expected_commit, "tree": args.expected_tree,\n            "base_commit": args.expected_base_commit, "merge_commit": args.expected_merge_commit,\n            "merge_tree": args.expected_merge_tree, "merge_parent_one": args.expected_merge_parent_one,\n            "merge_parent_two": args.expected_merge_parent_two, "plan_digest": args.expected_plan_digest,\n            "manifest_digest": args.expected_manifest_digest,\n        }\n        if any(value is None for value in expected.values()):\n            parser.error("all expected source identities and digests are required with --require-closure")\n        if not args.signature_verifier:\n            parser.error("--signature-verifier is required with --require-closure")\n        verifier = command_signature_verifier([args.signature_verifier, *args.signature_verifier_arg])\n    for raw_path in args.paths:\n        path = Path(raw_path)\n        value = json.loads(path.read_text(encoding="utf-8"))\n        validate_envelope(value, require_closure=args.require_closure, expected_source=expected, signature_verifier=verifier)\n        print(f"PASS {path}")\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n'
 
 def external_test_source() -> str:
-    return textwrap.dedent(
-        r'''from __future__ import annotations
-
-import copy
-import importlib.util
-import json
-import unittest
-from datetime import datetime, timezone
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location(
-    "external_validator", ROOT / "scripts/validate_external_completion_evidence_v1.py"
-)
-assert SPEC and SPEC.loader
-VALIDATOR = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(VALIDATOR)
-DIGEST = "sha256:" + "a" * 64
-EXPECTED = {
-    "commit": "1" * 40,
-    "tree": "2" * 40,
-    "merge_commit": "3" * 40,
-    "merge_tree": "4" * 40,
-}
-
-
-def accepted_ext007() -> dict:
-    return {
-        "schema": "heptabao.external-completion-evidence.v1",
-        "blocker_id": "HB-BLK-EXT-007",
-        "state": "ACCEPTED",
-        "repository": {"id": 1349115072, "full_name": "TrillionniumFoundation/HeptaBao"},
-        "source": {**EXPECTED, "plan_digest": DIGEST, "manifest_digest": DIGEST},
-        "scope": ["exact head and prospective merge full reproduction"],
-        "actors": [
-            {"stable_id": "operator-001", "role": "independent_reproduction_operator", "organization": "Lab A", "independent": True, "conflicts": []},
-            {"stable_id": "reviewer-002", "role": "independent_reproduction_reviewer", "organization": "Lab B", "independent": True, "conflicts": []},
-        ],
-        "separation": {
-            "credential_root": "credential-root-a",
-            "runner_admin": "runner-admin-a",
-            "cache_admin": "cache-admin-a",
-            "artifact_custody": "custody-a",
-            "signing_root": "signing-root-a",
-            "network_egress": "egress-a",
-        },
-        "checks": [{"case_id": "full-matrix", "status": "PASS", "evidence_digest": DIGEST}],
-        "artifacts": [{"name": "raw execution bundle", "digest": DIGEST, "custody_uri": "urn:lab-a:bundle:1", "classification": "RESTRICTED_REFERENCE"}],
-        "findings": [],
-        "signatures": [
-            {"signer_id": "operator-001", "role": "operator", "key_id": "key-operator-001", "algorithm": "test-ed25519-profile", "signed_at": "2026-09-01T00:00:00Z", "expires_at": "2027-09-01T00:00:00Z", "signature": "a" * 64, "verification": "VALID"},
-            {"signer_id": "reviewer-002", "role": "reviewer", "key_id": "key-reviewer-002", "algorithm": "test-ed25519-profile", "signed_at": "2026-09-01T00:00:00Z", "expires_at": "2027-09-01T00:00:00Z", "signature": "b" * 64, "verification": "VALID"},
-        ],
-        "claims": {
-            "qualification": False,
-            "compatibility_claim": False,
-            "selected_candidates": [],
-            "selection_effect": "NONE",
-            "production_authority": False,
-            "migration_authority": False,
-            "release_authority": False,
-            "authority_effect": "NONE",
-        },
-    }
-
-
-class ExternalCompletionEvidenceTests(unittest.TestCase):
-    def validate(self, value: dict) -> None:
-        VALIDATOR.validate_envelope(
-            value,
-            require_closure=True,
-            expected_source=EXPECTED,
-            now=datetime(2026, 9, 2, tzinfo=timezone.utc),
-        )
-
-    def test_bounded_valid_closure_envelope_passes(self) -> None:
-        self.validate(accepted_ext007())
-
-    def test_templates_are_schema_shaped_but_not_closure(self) -> None:
-        for path in sorted((ROOT / "qualifications/external/templates").glob("*.json")):
-            value = json.loads(path.read_text(encoding="utf-8"))
-            VALIDATOR.validate_envelope(value, require_closure=False)
-            with self.assertRaises(ValueError):
-                self.validate(value)
-
-    def test_non_pass_case_fails_closed(self) -> None:
-        value = accepted_ext007()
-        value["checks"][0]["status"] = "UNKNOWN"
-        with self.assertRaises(ValueError):
-            self.validate(value)
-
-    def test_shared_actor_identity_fails_closed(self) -> None:
-        value = accepted_ext007()
-        value["actors"][1]["stable_id"] = value["actors"][0]["stable_id"]
-        with self.assertRaises(ValueError):
-            self.validate(value)
-
-    def test_source_drift_fails_closed(self) -> None:
-        value = accepted_ext007()
-        value["source"]["tree"] = "f" * 40
-        with self.assertRaises(ValueError):
-            self.validate(value)
-
-    def test_expired_or_revoked_signature_fails_closed(self) -> None:
-        for field, replacement in (("expires_at", "2026-09-01T00:00:00Z"), ("verification", "REVOKED")):
-            value = accepted_ext007()
-            value["signatures"][0][field] = replacement
-            with self.assertRaises(ValueError):
-                self.validate(value)
-
-    def test_authority_elevation_fails_closed(self) -> None:
-        value = accepted_ext007()
-        value["claims"]["production_authority"] = True
-        with self.assertRaises(ValueError):
-            self.validate(value)
-
-
-if __name__ == "__main__":
-    unittest.main()
-'''
-    ).lstrip()
-
+    return 'from __future__ import annotations\n\nimport copy\nimport importlib.util\nimport json\nimport unittest\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[2]\nSPEC = importlib.util.spec_from_file_location(\n    "external_validator", ROOT / "scripts/validate_external_completion_evidence_v1.py"\n)\nassert SPEC and SPEC.loader\nVALIDATOR = importlib.util.module_from_spec(SPEC)\nSPEC.loader.exec_module(VALIDATOR)\nDIGEST = "sha256:" + "a" * 64\nEXPECTED = {\n    "commit": "1" * 40,\n    "tree": "2" * 40,\n    "base_commit": "0" * 40,\n    "merge_commit": "3" * 40,\n    "merge_tree": "4" * 40,\n    "merge_parent_one": "0" * 40,\n    "merge_parent_two": "1" * 40,\n    "plan_digest": "sha256:" + "b" * 64,\n    "manifest_digest": "sha256:" + "c" * 64,\n}\nNOW = datetime(2026, 9, 2, tzinfo=timezone.utc)\n\n\ndef accepted_ext007() -> dict:\n    roles = sorted(VALIDATOR.REQUIRED_ROLES["HB-BLK-EXT-007"])\n    actors = [\n        {\n            "stable_id": f"actor-{index:03d}",\n            "role": role,\n            "organization": f"Independent Lab {index}",\n            "independent": True,\n            "conflicts": [],\n            "credential_id": f"credential-{index:03d}",\n            "credential_issuer": f"Independent Credential Authority {index}",\n            "credential_not_before": "2026-09-01T00:00:00Z",\n            "credential_not_after": "2027-09-01T00:00:00Z",\n            "revocation_authority": f"urn:revocation:authority:{index:03d}",\n        }\n        for index, role in enumerate(roles, 1)\n    ]\n    separation = {\n        "primary_credential_root": "urn:primary:credential-root",\n        "reproduction_credential_root": "urn:reproduction:credential-root",\n        "primary_runner_admin": "urn:primary:runner-admin",\n        "reproduction_runner_admin": "urn:reproduction:runner-admin",\n        "primary_cache_admin": "urn:primary:cache-admin",\n        "reproduction_cache_admin": "urn:reproduction:cache-admin",\n        "primary_artifact_custody": "urn:primary:artifact-custody",\n        "reproduction_artifact_custody": "urn:reproduction:artifact-custody",\n        "primary_signing_root": "urn:primary:signing-root",\n        "reproduction_signing_root": "urn:reproduction:signing-root",\n        "primary_network_egress": "urn:primary:network-egress",\n        "reproduction_network_egress": "urn:reproduction:network-egress",\n    }\n    value = {\n        "schema": "heptabao.external-completion-evidence.v1",\n        "blocker_id": "HB-BLK-EXT-007",\n        "state": "ACCEPTED",\n        "repository": {"id": 1349115072, "full_name": "TrillionniumFoundation/HeptaBao"},\n        "source": dict(EXPECTED),\n        "scope": ["exact head and prospective merge full reproduction"],\n        "actors": actors,\n        "separation": separation,\n        "checks": [\n            {"case_id": case_id, "status": "PASS", "evidence_digest": DIGEST}\n            for case_id in sorted(VALIDATOR.REQUIRED_CASES["HB-BLK-EXT-007"])\n        ],\n        "artifacts": [\n            {\n                "kind": kind,\n                "name": kind.lower().replace("_", " "),\n                "digest": DIGEST,\n                "custody_uri": f"urn:lab:artifact:{kind.lower()}",\n                "classification": "RESTRICTED_REFERENCE",\n            }\n            for kind in sorted(VALIDATOR.REQUIRED_ARTIFACT_KINDS["HB-BLK-EXT-007"])\n        ],\n        "findings": [],\n        "signatures": [\n            {\n                "signer_id": actor["stable_id"],\n                "role": actor["role"],\n                "key_id": f"key-{index:03d}",\n                "algorithm": "ed25519-profile-v1",\n                "signed_at": "2026-09-01T00:00:00Z",\n                "expires_at": "2027-09-01T00:00:00Z",\n                "trust_root_id": f"trust-root-{index:03d}",\n                "transparency_checkpoint_digest": "sha256:" + "d" * 64,\n                "revocation_evidence_digest": "sha256:" + "e" * 64,\n                "payload_digest": DIGEST,\n                "signature": ("ab" if index == 1 else "cd") * 32,\n            }\n            for index, actor in enumerate(actors, 1)\n        ],\n        "claims": {\n            "qualification": False,\n            "compatibility_claim": False,\n            "selected_candidates": [],\n            "selection_effect": "NONE",\n            "production_authority": False,\n            "migration_authority": False,\n            "release_authority": False,\n            "authority_effect": "NONE",\n        },\n    }\n    for signature in value["signatures"]:\n        signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n    return value\n\n\ndef accepting_verifier(signature: dict, actor: dict, payload: bytes) -> bool:\n    return (\n        actor["stable_id"] == signature["signer_id"]\n        and actor["role"] == signature["role"]\n        and signature["payload_digest"] == VALIDATOR.sha256_digest(payload)\n    )\n\n\nclass ExternalCompletionEvidenceTests(unittest.TestCase):\n    def validate(self, value: dict, *, verifier=accepting_verifier) -> None:\n        VALIDATOR.validate_envelope(\n            value,\n            require_closure=True,\n            expected_source=EXPECTED,\n            now=NOW,\n            signature_verifier=verifier,\n        )\n\n    def test_bounded_valid_closure_envelope_passes_with_external_verifier(self) -> None:\n        self.validate(accepted_ext007())\n\n    def test_templates_are_schema_shaped_but_not_closure(self) -> None:\n        for path in sorted((ROOT / "qualifications/external/templates").glob("*.json")):\n            value = json.loads(path.read_text(encoding="utf-8"))\n            VALIDATOR.validate_envelope(value, require_closure=False)\n            with self.assertRaises(ValueError):\n                self.validate(value)\n\n    def test_self_asserted_validity_without_external_verifier_fails(self) -> None:\n        value = accepted_ext007()\n        with self.assertRaisesRegex(ValueError, "external cryptographic signature verifier"):\n            self.validate(value, verifier=None)\n\n    def test_schema_rejects_unknown_self_asserted_verification_field(self) -> None:\n        value = accepted_ext007()\n        value["signatures"][0]["verification"] = "VALID"\n        with self.assertRaisesRegex(ValueError, "schema validation failed"):\n            self.validate(value)\n\n    def test_tampered_payload_fails_digest_binding(self) -> None:\n        value = accepted_ext007()\n        value["scope"].append("tampered scope")\n        with self.assertRaisesRegex(ValueError, "payload digest mismatch"):\n            self.validate(value)\n\n    def test_external_verifier_rejection_fails_closed(self) -> None:\n        with self.assertRaisesRegex(ValueError, "external cryptographic"):\n            self.validate(accepted_ext007(), verifier=lambda _signature, _actor, _payload: False)\n\n    def test_missing_required_case_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["checks"].pop()\n        for signature in value["signatures"]:\n            signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n        with self.assertRaisesRegex(ValueError, "required cases missing"):\n            self.validate(value)\n\n    def test_missing_required_artifact_kind_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["artifacts"].pop()\n        for signature in value["signatures"]:\n            signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n        with self.assertRaisesRegex(ValueError, "required artifact kinds missing"):\n            self.validate(value)\n\n    def test_non_pass_case_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["checks"][0]["status"] = "UNKNOWN"\n        with self.assertRaises(ValueError):\n            self.validate(value)\n\n    def test_shared_actor_identity_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["actors"][1]["stable_id"] = value["actors"][0]["stable_id"]\n        with self.assertRaises(ValueError):\n            self.validate(value)\n\n\n    def test_actor_credential_is_schema_mandatory(self) -> None:\n        value = accepted_ext007()\n        del value["actors"][0]["credential_id"]\n        with self.assertRaisesRegex(ValueError, "schema validation failed"):\n            self.validate(value)\n\n    def test_expired_actor_credential_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["actors"][0]["credential_not_after"] = "2026-09-01T00:00:00Z"\n        for signature in value["signatures"]:\n            signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n        with self.assertRaisesRegex(ValueError, "accountable credential is not current"):\n            self.validate(value)\n\n    def test_duplicate_actor_credential_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["actors"][1]["credential_id"] = value["actors"][0]["credential_id"]\n        for signature in value["signatures"]:\n            signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n        with self.assertRaisesRegex(ValueError, "credential identities must be distinct"):\n            self.validate(value)\n\n    def test_signature_must_bind_to_declared_actor_and_role(self) -> None:\n        value = accepted_ext007()\n        value["signatures"][0]["signer_id"] = "undeclared-signer"\n        with self.assertRaisesRegex(ValueError, "declared actor"):\n            self.validate(value)\n\n    def test_shared_primary_and_reproduction_control_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["separation"]["reproduction_runner_admin"] = value["separation"]["primary_runner_admin"]\n        for signature in value["signatures"]:\n            signature["payload_digest"] = VALIDATOR.sha256_digest(VALIDATOR.signing_payload(value, signature))\n        with self.assertRaisesRegex(ValueError, "shared control prohibited"):\n            self.validate(value)\n\n    def test_source_or_parent_drift_fails_closed(self) -> None:\n        for field in ("tree", "merge_parent_two"):\n            value = accepted_ext007()\n            value["source"][field] = "f" * 40\n            with self.assertRaises(ValueError):\n                self.validate(value)\n\n    def test_expired_signature_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["signatures"][0]["expires_at"] = "2026-09-01T00:00:00Z"\n        with self.assertRaises(ValueError):\n            self.validate(value)\n\n    def test_test_algorithm_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["signatures"][0]["algorithm"] = "test-ed25519-profile"\n        value["signatures"][0]["payload_digest"] = VALIDATOR.sha256_digest(\n            VALIDATOR.signing_payload(value, value["signatures"][0])\n        )\n        with self.assertRaisesRegex(ValueError, "test/mock/example"):\n            self.validate(value)\n\n    def test_authority_elevation_fails_closed(self) -> None:\n        value = accepted_ext007()\n        value["claims"]["production_authority"] = True\n        with self.assertRaises(ValueError):\n            self.validate(value)\n\n\nif __name__ == "__main__":\n    unittest.main()\n'
 
 def module_test_source() -> str:
     return textwrap.dedent(
@@ -903,6 +449,10 @@ REQUIRED = [
     "schemas/heptabao_external_completion_evidence_v1.schema.json",
     "scripts/render_plan_v1_4_7.py",
     "scripts/validate_external_completion_evidence_v1.py",
+    "tests/plan/test_external_completion_evidence_v1.py",
+    "tests/plan/test_module_source_truth_v1_4_7.py",
+    "tests/plan/test_plan_v1_4_7.py",
+    "qualifications/external/README.md",
     ".github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml",
 ]
 
@@ -1103,7 +653,7 @@ jobs:
             test "$SOURCE_SHA" = "$HEAD_SHA"
           fi
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          printf 'source_kind=%s\nsource_sha=%s\ntree=%s\n' "$SOURCE_KIND" "$SOURCE_SHA" "$(git rev-parse HEAD^{tree})"
+          printf 'source_kind=%s\\nsource_sha=%s\\ntree=%s\\n' "$SOURCE_KIND" "$SOURCE_SHA" "$(git rev-parse HEAD^{tree})"
 
       - name: Install exact Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -1120,6 +670,7 @@ jobs:
           python scripts/validate_plan_v1_4_7.py
           python -m unittest discover -s tests/plan -p 'test_*v1_4_7.py' -v
           python -m unittest discover -s tests/plan -p 'test_external_completion_evidence_v1.py' -v
+          python -m unittest discover -s tests/plan -p 'test_*.py' -v
           python scripts/validate_plan_v1_4_6.py
           python -m unittest discover -s tests/plan -p 'test_plan_v1_4_6.py' -v
           python scripts/validate_plan_v1_4_5.py
@@ -1150,7 +701,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -R "authority_effect: NONE" planning/HEPTABAO_*V1_4_7*.yaml planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
-          ! grep -R "production_authority: true\|release_authority: true\|migration_authority: true\|compatibility_claim: true" \
+          ! grep -R "production_authority: true\\|release_authority: true\\|migration_authority: true\\|compatibility_claim: true" \
             planning/HEPTABAO_*V1_4_7*.yaml planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
 '''
     ).lstrip()
@@ -1219,6 +770,69 @@ External completion documents are admitted only through the strict V1.4.7 envelo
     ).lstrip()
 
 
+
+def current_readme() -> str:
+    return textwrap.dedent(
+        '''# HeptaBao
+
+HeptaBao is an independent clean-room Rust reimplementation program for an OpenBao-compatible secrets-management server.
+
+## Current truth
+
+- Current plan: **V1.4.7 post-merge truth and external admission**.
+- Current integration baseline: signed **V1.4.6 authoritative recovery closure** merge `54d524214df443752a2ecaeff6d4a05625bf52c7`, tree `c22288f561fdd711e908ce8a70c0116601d519e5`.
+- Inherited immutable baselines: **V1.4.5 security invariant closure** and **V1.4.4** module-documentation closure recorded by `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`.
+- Current implemented foundation: the inherited 19-crate safety/recovery kernel, source-bound module documentation, and strict fail-closed external completion admission.
+- Current Cargo workspace documentation: **19 / 19** crates have source-bound developer guides under `docs/modules/`.
+- Qualification: **false**.
+- Compatibility claim: **false**.
+- Dependency selections: **none with production authority**.
+- Production, migration, release and mixed-cluster authority: **false**.
+- Supported production versions: **none**.
+
+The repository is **not production-deployable** and is **not a production-deployable secrets server**. Do not use it to protect real secrets and do not place real tokens, unseal shares, recovery keys, private keys or production snapshots in source, tests or CI.
+
+## Current normative entry points
+
+1. `docs/CURRENT_DOCUMENTATION.md`
+2. `docs/plan/HEPTABAO_PLAN_V1_4_7_POST_MERGE_TRUTH_AND_EXTERNAL_ADMISSION.md`
+3. `planning/HEPTABAO_V1_4_7_POST_MERGE_TRUTH_STATUS.yaml`
+4. `planning/HEPTABAO_BLOCKER_REGISTER_V1_4_7.yaml`
+5. `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_7.yaml`
+6. `planning/HEPTABAO_MODULE_SOURCE_TRUTH_V1_4_7.yaml`
+7. `docs/modules/MODULE_DOCUMENTATION_STANDARD_V2.md`
+8. `docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md`
+9. `planning/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_V1.yaml`
+10. `.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml`
+
+## Architecture boundary
+
+The current code remains a safety-oriented kernel and loopback-only P0 development server. A production composition root, policy, identity, token, lease, namespace, plugin host, secrets engines, Raft/HA, CLI, Agent, Proxy and full OpenBao compatibility remain later product work. Target documents and unexecuted evidence templates do not imply that those capabilities are implemented or qualified.
+
+## Evidence and authority boundary
+
+Repository-controlled tests can validate source and admission logic but cannot manufacture live branch protection, accountable independent identities, legal disposition, 24x7 operations, isolated signing custody, restricted Oracle transfer, destructive storage-laboratory evidence or independently controlled reproduction. Those blockers close only through externally verified, current, scope-bound completion objects.
+
+## Development
+
+Run the current renderer, current gate and the complete inherited plan/platform/Oracle regressions:
+
+```text
+python scripts/render_plan_v1_4_7.py --check
+python scripts/validate_plan_v1_4_7.py
+python -m unittest discover -s tests/plan -p 'test_*.py' -v
+python -m unittest discover -s tests/platform -p 'test_*.py' -v
+python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+cargo +1.98.0 fmt --all -- --check
+cargo +1.98.0 test --locked --workspace --all-targets
+cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+```
+
+Exact current source and prospective-merge identities come from the active pull request and immutable read-only workflows, not from an unversioned `latest` alias.
+'''
+    ).lstrip()
+
+
 def module_standard_v2() -> str:
     return textwrap.dedent(
         '''# HeptaBao Module Documentation Standard V2
@@ -1258,63 +872,7 @@ Critical modules require a reviewer to inspect both semantic narrative and gener
 
 
 def external_protocol() -> str:
-    return textwrap.dedent(
-        '''# HeptaBao External Completion Admission Protocol V1
-
-## Purpose
-
-This protocol turns the factual control and external blockers into strict machine-admission inputs without pretending that repository automation can perform the external work.
-
-## Envelope
-
-Every candidate completion object uses `heptabao.external-completion-evidence.v1` and binds:
-
-- repository ID and full name;
-- exact source commit/tree and prospective merge commit/tree;
-- plan and normative-manifest digests;
-- explicit scope;
-- stable actor identities, roles, organizations, independence and conflicts;
-- required control-separation roots;
-- complete case inventory with PASS/FAIL/BLOCKED/UNKNOWN/UNEXECUTED status;
-- raw or sanitized artifact digests and custody references;
-- findings and dispositions;
-- current, unrevoked signatures;
-- an immutable `authority_effect: NONE` boundary.
-
-## Fail-closed admission
-
-Closure admission rejects a document when any required case is not PASS, any exact identity or digest drifts, a required role is missing, independent roles share identity, separation evidence is absent, a Critical/High/Unclassified finding remains open, a signature is stale or revoked, an artifact lacks custody, or any authority flag is raised.
-
-Templates under `qualifications/external/templates/` are intentionally `UNEXECUTED`; they can be schema-shaped planning aids but can never pass `--require-closure`.
-
-## Blocker-specific roles
-
-- `HB-BLK-CTRL-001`: repository administrator plus independent control reviewer.
-- `HB-BLK-EXT-001`: program, security and storage reviewers as distinct accountable identities.
-- `HB-BLK-EXT-002`: accountable legal signer plus independent program reviewer.
-- `HB-BLK-EXT-003`: security operations, backup incident commander and independent observer.
-- `HB-BLK-EXT-004`: root-key custodian, cryptography reviewer and independent observer.
-- `HB-BLK-EXT-005`: Oracle operator, sanitization operator, transfer custodian and compatibility reviewer.
-- `HB-BLK-EXT-006`: independently controlled storage-lab operator and storage reviewer.
-- `HB-BLK-EXT-007`: independent reproduction operator and separate reproduction reviewer.
-
-## Invocation
-
-```text
-python scripts/validate_external_completion_evidence_v1.py candidate.json
-python scripts/validate_external_completion_evidence_v1.py \
-  --require-closure \
-  --expected-commit <40-hex> \
-  --expected-tree <40-hex> \
-  --expected-merge-commit <40-hex> \
-  --expected-merge-tree <40-hex> \
-  candidate.json
-```
-
-The first command validates planning shape. Only the second performs closure admission, and only against caller-supplied immutable source identities.
-'''
-    ).lstrip()
-
+    return '# HeptaBao External Completion Admission Protocol V1\n\n## Purpose\n\nThis protocol admits completion evidence for `HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007` without converting repository automation, templates or self-assertions into external facts. Closure admission is fail-closed and binds one exact reviewed head, base, two-parent merge, plan digest and normative-manifest digest.\n\n## Envelope and schema\n\nEvery candidate uses `heptabao.external-completion-evidence.v1` and must validate against `schemas/heptabao_external_completion_evidence_v1.schema.json`. Unknown properties are rejected. Non-closure validation checks only shape and immutable authority nonclaims; it never promotes an `UNEXECUTED` or pending object.\n\nClosure mode additionally requires:\n\n- exact head, tree, base, merge, merge tree and ordered merge-parent identities supplied independently by the admitting caller;\n- exact plan and normative-manifest SHA-256 digests supplied independently by the admitting caller;\n- the complete blocker-specific mandatory case inventory, with every case `PASS` and evidence-digest bound;\n- all blocker-specific artifact kinds, each digest bound and held at an absolute URN or HTTPS custody reference;\n- distinct actors for every required role, current issuer-bound accountable credentials, explicit independence and zero unresolved conflicts;\n- blocker-specific control-separation identifiers and explicit inequality between primary and external/control roots;\n- no open Critical, High or Unclassified finding;\n- one payload-bound signature from every required role;\n- a caller-supplied external cryptographic verifier for every signature.\n\n## Signature contract\n\nThe envelope never proves its own signatures. A text field such as `verification: VALID` is prohibited by the schema and cannot close a blocker.\n\nEach signer signs a domain-separated canonical payload:\n\n```text\nHEPTABAO_EXTERNAL_COMPLETION_EVIDENCE_V1\\0\n  || canonical-json({\n       domain,\n       envelope-with-empty-signatures,\n       signature-metadata\n     })\n```\n\nThe signed envelope binds each actor’s stable identity, organization, credential identifier and issuer, credential validity interval and revocation authority. Signature metadata additionally binds signer, accountable role, key, algorithm, signing and expiry times, trust-root identifier, transparency-checkpoint digest and revocation-evidence digest. The envelope carries the resulting payload SHA-256. Admission recomputes it before invoking the verifier.\n\nThe external verifier receives the canonical payload plus signature metadata and bytes. It must independently validate the signature, key role/scope, current trust root, transparency inclusion and revocation state. Closure fails unless the verifier returns an exact result containing:\n\n```text\nverified=true\nmatching signer_id\nmatching accountable role and organization\nmatching current credential_id with credential_status=CURRENT_SCOPE_BOUND\nmatching key_id and trust_root_id\nmatching payload_digest\nrevocation_status=CURRENT\ntransparency_status=INCLUDED\n```\n\nRepository tests may inject a deterministic callback only to test validator control flow. Test, mock or example algorithms are rejected in real closure mode.\n\n## Mandatory case and artifact catalogs\n\nThe validator owns a minimum case catalog and artifact-kind catalog for every blocker. Supplying one generic `PASS` row, omitting a negative/control case, omitting a raw-evidence manifest or relabelling a partial run as complete fails closure. Additional cases and artifacts are allowed, but duplicate IDs/kinds are rejected.\n\nThe catalogs cover, among other things:\n\n- ruleset API readback and blocked bypass/force-push/deletion/look-alike checks;\n- program, security and storage reviews with identity and revocation checks;\n- every required legal scope and signer-authority check;\n- private intake, continuous primary/backup coverage, tabletop and freeze/revocation drills;\n- key ceremonies, transparency, rotation, compromise and consumer revocation;\n- Oracle ACL separation, real behavior captures, deterministic sanitization and signed transfer;\n- controller-proven power cuts, durability boundaries, acknowledged-write preservation, corruption and repeat-recovery controls;\n- independent source acquisition, dependency resolution, full head/merge execution, artifact comparison, normalizer control and divergence review.\n\n## Invocation\n\nPlanning-only shape validation:\n\n```text\npython scripts/validate_external_completion_evidence_v1.py candidate.json\n```\n\nClosure admission requires every expected identity/digest and an external verifier executable:\n\n```text\npython scripts/validate_external_completion_evidence_v1.py \\\n  --require-closure \\\n  --expected-commit <40-hex-head> \\\n  --expected-tree <40-hex-head-tree> \\\n  --expected-base-commit <40-hex-base> \\\n  --expected-merge-commit <40-hex-merge> \\\n  --expected-merge-tree <40-hex-merge-tree> \\\n  --expected-merge-parent-one <40-hex-base> \\\n  --expected-merge-parent-two <40-hex-head> \\\n  --expected-plan-digest sha256:<64-hex> \\\n  --expected-manifest-digest sha256:<64-hex> \\\n  --signature-verifier /isolated/bin/heptabao-signature-verifier \\\n  candidate.json\n```\n\nThe verifier executable reads one JSON verification request on standard input and returns the exact verification result on standard output. Nonzero exit, malformed output, mismatched identity, stale/expired signature, missing transparency inclusion or non-current revocation status fails closure.\n\n## Templates and authority boundary\n\nTemplates under `qualifications/external/templates/` are deliberately `UNEXECUTED`, contain null source identities and no signatures, and can never pass closure mode. Repository ownership, administrator access, CI success, a generated receipt, a self-signed test key or a populated `verification` field cannot manufacture independent people, legal authority, operational coverage, isolated custody, restricted Oracle provenance, destructive laboratory control or independent reproduction.\n\nAdmission closes only the named factual blocker for its exact scope after authentic verification. It does not by itself grant compatibility, provider selection, qualification, production, migration or release authority.\n'
 
 def plan_document() -> str:
     return textwrap.dedent(
@@ -1330,9 +888,10 @@ This tranche starts from the signed GitHub merge `{BASELINE_COMMIT}`, tree `{BAS
 2. close `HB-BLK-REPO-049` through `HB-BLK-REPO-058` only in repository scope, without closing role, legal, operational, custody, laboratory or reproduction blockers;
 3. replace title-only module-documentation validation with exact source, API, dependency, test and digest binding for every current crate;
 4. make stale hand-written Public API tables detectable and regenerate them from candidate source;
-5. provide one strict, blocker-specific external completion envelope and fail-closed admission tool;
-6. ensure templates, owner assertions, same-identity reviews, stale signatures, incomplete cases and authority elevation cannot close a blocker;
-7. bind all changes to distinct exact-head and prospective-merge pull-request checks.
+5. provide one strict, blocker-specific external completion envelope with complete case/artifact catalogs and a mandatory external cryptographic verifier;
+6. ensure templates, owner assertions, self-asserted signature validity, missing negative cases, shared controls, stale/revoked signatures and authority elevation cannot close a blocker;
+7. bind all changes to distinct exact-head and prospective-merge pull-request checks;
+8. bind the complete current Python validator and plan/platform/Oracle regression surface into the normative manifest so historical-gate repairs cannot drift outside exact-source review.
 
 ## 3. V1.4.6 post-merge closure
 
@@ -1340,13 +899,13 @@ The V1.4.6 head `{SOURCE_HEAD}` and prospective merge `{BASELINE_COMMIT}` passed
 
 ## 4. Module source truth
 
-The V2 renderer derives the workspace package set, Cargo manifest hashes, Rust source hashes, workspace-internal dependency declarations, public lexical declarations and discovered test functions. It rewrites the Public API section of each guide and adds a generated facts block. Check mode recomputes every fact and rejects source/documentation drift.
+The V2 renderer derives the workspace package set, Cargo manifest hashes, Rust source hashes, workspace-internal dependency declarations, public lexical declarations and discovered test functions. It rewrites the Public API section of each guide and adds a generated facts block. Check mode recomputes every fact and rejects source/documentation drift. The V1.4.7 normative manifest also hashes every current Python script and every plan, platform and Oracle regression file executed by the current gate.
 
 The parser is intentionally bounded and lexical. It does not claim Rust name resolution or semantic compatibility. That limitation is part of the normative output rather than an implicit weakness.
 
 ## 5. External completion admission
 
-`HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007` each receive an `UNEXECUTED` template. The validator can inspect planning shape without closure, but closure mode requires exact source identities, complete PASS-only cases, distinct accountable roles, blocker-specific separation, artifact custody, no unresolved Critical/High/Unclassified finding, fresh valid signatures and unchanged authority flags.
+`HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007` each receive an `UNEXECUTED` template. The validator can inspect planning shape without closure, but closure mode first enforces the strict JSON schema and independently supplied head/tree/base/two-parent-merge/plan/manifest identities. It then requires the complete blocker-specific case and artifact-kind catalogs, distinct accountable roles, explicit primary-versus-external control separation, no unresolved Critical/High/Unclassified finding, and one domain-separated payload signature from every required role. Signature validity is never accepted from an envelope field: a caller-supplied external verifier must validate cryptography, key role and scope, trust-root state, transparency inclusion and revocation state.
 
 Repository automation cannot populate real identities, legal authority, operating coverage, HSM custody, restricted raw Oracle evidence, independent power-cut control or separately controlled reproduction. Those facts remain open until external operators submit authentic evidence.
 
@@ -1355,7 +914,7 @@ Repository automation cannot populate real identities, legal authority, operatin
 - `HB-BLK-REPO-059`: V1.4.6 post-merge repository closure was not canonicalized.
 - `HB-BLK-REPO-060`: module guides were structurally present but not source/API/dependency/test bound.
 - `HB-BLK-REPO-061`: external completion inputs lacked one strict fail-closed admission envelope.
-- `HB-BLK-REPO-062`: current documentation still selected the pre-merge V1.4.6 status.
+- `HB-BLK-REPO-062`: current entry points and inherited current-plan validation could become stale or reject valid successor revisions.
 
 All four are implemented in source by this candidate and remain review-required until exact-head and prospective-merge CI pass and an independent reviewer accepts the final candidate.
 
@@ -1366,6 +925,7 @@ python scripts/render_plan_v1_4_7.py --check
 python scripts/validate_plan_v1_4_7.py
 python -m unittest discover -s tests/plan -p 'test_*v1_4_7.py' -v
 python -m unittest discover -s tests/plan -p 'test_external_completion_evidence_v1.py' -v
+python -m unittest discover -s tests/plan -p 'test_*.py' -v
 python scripts/validate_plan_v1_4_6.py
 python scripts/validate_plan_v1_4_5.py
 python scripts/validate_module_documentation_v1_4_4.py
@@ -1408,6 +968,7 @@ def status_document() -> dict[str, Any]:
             "blocker_specific_negative_tests": "IMPLEMENTED_SOURCE",
             "current_documentation_supersession": "IMPLEMENTED_SOURCE",
             "exact_head_and_prospective_merge_gate": "IMPLEMENTED_SOURCE",
+            "complete_python_regression_surface_manifest": "IMPLEMENTED_SOURCE",
         },
         "repository_open": [f"HB-BLK-REPO-{index:03d}" for index in range(59, 63)],
         "external_open": ["HB-BLK-CTRL-001"] + [f"HB-BLK-EXT-{index:03d}" for index in range(1, 8)],
@@ -1473,7 +1034,9 @@ def blocker_register() -> dict[str, Any]:
             "closure_criteria": [
                 "one schema covers control and external blocker completion envelopes",
                 "closure mode binds exact source and merge identities",
-                "required roles separation cases artifacts findings signatures and authority flags fail closed",
+                "schema validation exact merge parents complete blocker-specific cases and artifact kinds fail closed",
+                "every required role signs a domain-separated payload verified by an external cryptographic verifier",
+                "separation roots findings freshness transparency revocation and authority flags fail closed",
                 "UNEXECUTED templates cannot be admitted as closure",
             ],
             "evidence": [
@@ -1488,14 +1051,38 @@ def blocker_register() -> dict[str, Any]:
             "id": "HB-BLK-REPO-062",
             "class": "REPOSITORY_CONTROLLED",
             "severity": "MEDIUM",
-            "title": "current documentation still selected the pre-merge V1.4.6 status",
+            "title": "current entry points and inherited plan-marker validation could become stale or reject successors",
             "state": "IMPLEMENTED_SOURCE_REVIEW_REQUIRED",
             "closure_criteria": [
-                "single current portal selects V1.4.7 plan status blocker register and manifest",
+                "README and the single current portal select V1.4.7 plan status blocker register and manifest",
+                "inherited validators accept a well-formed versioned successor marker without accepting an unversioned latest alias",
                 "V1.4.6 remains immutable inherited evidence",
+                "the full historical plan, platform and Oracle regression surfaces execute in the current gate and are digest-bound by the V1.4.7 manifest",
                 "external authority boundary remains explicit",
             ],
-            "evidence": ["docs/CURRENT_DOCUMENTATION.md"],
+            "evidence": [
+                "README.md",
+                "docs/CURRENT_DOCUMENTATION.md",
+                "scripts/validate_plan_v1_2.py",
+                "tests/plan/test_plan_v1_2.py",
+                "scripts/validate_plan_v1_2_1.py",
+                "tests/plan/test_plan_v1_2_1.py",
+                "scripts/validate_plan_v1_3.py",
+                "tests/plan/test_plan_v1_3.py",
+                "scripts/validate_plan_v1_3_1.py",
+                "tests/plan/test_plan_v1_3_1.py",
+                "scripts/validate_plan_v1_4.py",
+                "tests/plan/test_plan_v1_4.py",
+                "scripts/validate_plan_v1_4_1.py",
+                "tests/plan/test_plan_v1_4_1.py",
+                "scripts/validate_plan_v1_4_2.py",
+                "tests/plan/test_plan_v1_4_2.py",
+                "scripts",
+                "tests/plan",
+                "tests/platform",
+                "tests/oracle",
+                ".github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml",
+            ],
             "closure_receipt_required": True,
         },
     ]
@@ -1563,7 +1150,10 @@ def admission_catalog() -> dict[str, Any]:
         "envelope_schema": "schemas/heptabao_external_completion_evidence_v1.schema.json",
         "validator": "scripts/validate_external_completion_evidence_v1.py",
         "protocol": "docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md",
-        "closure_mode": "FAIL_CLOSED_EXACT_SOURCE_REQUIRED",
+        "closure_mode": "FAIL_CLOSED_EXACT_SOURCE_AND_EXTERNAL_CRYPTOGRAPHIC_VERIFIER_REQUIRED",
+        "required_case_catalog": "embedded-in-validator",
+        "required_artifact_kind_catalog": "embedded-in-validator",
+        "signature_policy": "domain-separated-payload-external-verifier-only",
         "blockers": [
             {
                 "id": blocker,
@@ -1575,7 +1165,6 @@ def admission_catalog() -> dict[str, Any]:
         "claims": CLAIMS,
     }
 
-
 def template(blocker: str) -> dict[str, Any]:
     return {
         "schema": "heptabao.external-completion-evidence.v1",
@@ -1585,8 +1174,11 @@ def template(blocker: str) -> dict[str, Any]:
         "source": {
             "commit": None,
             "tree": None,
+            "base_commit": None,
             "merge_commit": None,
             "merge_tree": None,
+            "merge_parent_one": None,
+            "merge_parent_two": None,
             "plan_digest": None,
             "manifest_digest": None,
         },
@@ -1600,14 +1192,13 @@ def template(blocker: str) -> dict[str, Any]:
         "claims": CLAIMS,
     }
 
-
 def qualifications_readme() -> str:
     return textwrap.dedent(
         '''# External completion evidence
 
 This directory contains only fail-closed input templates for `HB-BLK-CTRL-001` and `HB-BLK-EXT-001..007`.
 
-Every committed template is `UNEXECUTED` and non-authoritative. It is not evidence that an operator, reviewer, legal function, incident team, key custodian, Oracle lane, storage laboratory or reproduction environment exists. A populated candidate must be held under the declared custody system and admitted with the exact source identities through `scripts/validate_external_completion_evidence_v1.py --require-closure`.
+Every committed template is `UNEXECUTED` and non-authoritative. It is not evidence that an operator, reviewer, legal function, incident team, key custodian, Oracle lane, storage laboratory or reproduction environment exists. A populated candidate must be held under the declared custody system and admitted with independently supplied exact source identities, the complete mandatory case/artifact catalogs, and an external cryptographic verifier through `scripts/validate_external_completion_evidence_v1.py --require-closure`.
 
 Do not commit restricted raw Oracle captures, private vulnerability details, production credentials, private signing keys or destructive-laboratory secrets here. Commit only an approved sanitized object or immutable restricted reference.
 '''
@@ -1616,6 +1207,7 @@ Do not commit restricted raw Oracle captures, private vulnerability details, pro
 
 def static_files() -> dict[Path, str]:
     values: dict[Path, str] = {
+        Path("README.md"): current_readme(),
         Path("docs/CURRENT_DOCUMENTATION.md"): current_documentation(),
         Path("docs/modules/MODULE_DOCUMENTATION_STANDARD_V2.md"): module_standard_v2(),
         Path("docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md"): external_protocol(),
@@ -1642,6 +1234,7 @@ def static_files() -> dict[Path, str]:
 
 def normative_paths(truth: dict[str, Any]) -> list[Path]:
     paths = [
+        Path("README.md"),
         Path("docs/CURRENT_DOCUMENTATION.md"),
         Path("docs/plan/HEPTABAO_PLAN_V1_4_7_POST_MERGE_TRUTH_AND_EXTERNAL_ADMISSION.md"),
         Path("planning/HEPTABAO_V1_4_7_POST_MERGE_TRUTH_STATUS.yaml"),
@@ -1658,8 +1251,13 @@ def normative_paths(truth: dict[str, Any]) -> list[Path]:
         Path("scripts/validate_external_completion_evidence_v1.py"),
         Path(".github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml"),
     ]
+    paths.append(Path("qualifications/external/README.md"))
     paths.extend(Path(module["module_guide"]) for module in truth["modules"])
     paths.extend(sorted(Path("qualifications/external/templates").glob("*.json")))
+    paths.extend(sorted(Path("scripts").glob("*.py")))
+    paths.extend(sorted(Path("tests/plan").glob("test_*.py")))
+    paths.extend(sorted(Path("tests/platform").glob("test_*.py")))
+    paths.extend(sorted(Path("tests/oracle").glob("test_*.py")))
     return sorted(set(paths), key=lambda item: item.as_posix())
 
 
