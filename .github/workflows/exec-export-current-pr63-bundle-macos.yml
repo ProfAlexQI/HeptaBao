@@ -1,0 +1,39 @@
+name: exec export current PR63 git bundle macOS
+
+on:
+  push:
+    branches:
+      - exec/current-pr63-bundle-macos-v1
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable current PR63 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 7396101fa06a447d677e8590995b8ef3cc675785
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind and create exact git bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "7396101fa06a447d677e8590995b8ef3cc675785"
+          test "$(git rev-parse HEAD^{tree})" = "4482ae5047e1f2e649f3472eb2c8280b593dc36a"
+          git bundle create "$RUNNER_TEMP/heptabao-pr63-7396101.bundle" HEAD
+          git bundle verify "$RUNNER_TEMP/heptabao-pr63-7396101.bundle"
+          shasum -a 256 "$RUNNER_TEMP/heptabao-pr63-7396101.bundle"
+
+      - name: Upload immutable git bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: heptabao-pr63-7396101-git-bundle
+          path: ${{ runner.temp }}/heptabao-pr63-7396101.bundle
+          if-no-files-found: error
+          retention-days: 1
