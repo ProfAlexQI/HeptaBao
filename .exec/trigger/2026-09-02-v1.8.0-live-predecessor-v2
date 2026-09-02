@@ -1,0 +1,7 @@
+repository=TrillionniumFoundation/HeptaBao
+stage=V1.8.0
+predecessor=codex/plan-v1.7.0-http-ha-plugin-compatibility-v1
+predecessor_resolution=LIVE_BRANCH_HEAD
+stale_evidence_transfer=PROHIBITED
+mode=fail-closed-stacked-candidate
+authority_effect=NONE
