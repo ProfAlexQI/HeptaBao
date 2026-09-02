@@ -1,0 +1,180 @@
+name: exec V1.6.0 dynamic runtime operations materializer
+
+on:
+  push:
+    branches: [exec/v1.6.0-runtime-operations-materializer-v2]
+    paths: [.exec/trigger/v1.6.0]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: exec-v1.6.0-runtime-operations-materializer-v2
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/heptabao-v160-target
+    steps:
+      - name: Checkout execution controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Freeze and compile generator and admission verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .exec/materialize_v1_6_0.py "$RUNNER_TEMP/materialize_v1_6_0.py"
+          cp .exec/patch_v1_6_0.py "$RUNNER_TEMP/patch_v1_6_0.py"
+          cp .exec/admit_reviewed_predecessor.py "$RUNNER_TEMP/admit_reviewed_predecessor.py"
+          python "$RUNNER_TEMP/patch_v1_6_0.py" "$RUNNER_TEMP/materialize_v1_6_0.py"
+          python -m py_compile \
+            "$RUNNER_TEMP/materialize_v1_6_0.py" \
+            "$RUNNER_TEMP/patch_v1_6_0.py" \
+            "$RUNNER_TEMP/admit_reviewed_predecessor.py"
+
+      - name: Admit exact merged V1.5.0 predecessor and bind its actual PR number
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          admission="$RUNNER_TEMP/v1.5.0-admission.json"
+          python "$RUNNER_TEMP/admit_reviewed_predecessor.py" \
+            --expected-head-branch codex/plan-v1.5.0-control-plane-vertical-slice-v1 \
+            --integration-branch integration/v1.4.4-technical-candidate \
+            --required-reviewer ProfHepta \
+            --required-reviewer Tomasrgbsf \
+            --required-workflow "current-head review admission" \
+            --required-workflow "HeptaBao V1.5.0 control-plane vertical slice" \
+            --required-workflow "HeptaBao V1.4.7 post-merge truth and external admission" \
+            --required-workflow "HeptaBao V1.4.6 authoritative recovery closure" \
+            --required-workflow "plan-v1.4.5-security-invariant-closure" \
+            --required-workflow "plan-v1.4.4-module-documentation" \
+            --output "$admission"
+
+          predecessor_pr="$(jq -r .pull_request "$admission")"
+          PREDECESSOR_PR="$predecessor_pr" python - "$RUNNER_TEMP/materialize_v1_6_0.py" <<'PY'
+          import os, re, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          value = int(os.environ['PREDECESSOR_PR'])
+          source = path.read_text(encoding='utf-8')
+          source, count = re.subn(
+              r'("pull_request"\s*:\s*)64\b',
+              lambda match: match.group(1) + str(value),
+              source,
+          )
+          if count != 1:
+              raise SystemExit(f'V1.6 receipt PR patch count mismatch: {count}')
+          path.write_text(source, encoding='utf-8')
+          PY
+          python -m py_compile "$RUNNER_TEMP/materialize_v1_6_0.py"
+
+          merge_sha="$(jq -r .merge_commit "$admission")"
+          reviewed_head="$(jq -r .reviewed_head "$admission")"
+          base_sha="$(jq -r .base_commit "$admission")"
+          git fetch --no-tags origin "$merge_sha" "$reviewed_head" "$base_sha"
+          read -r observed parent_one parent_two extra <<<"$(git rev-list --parents -n 1 "$merge_sha")"
+          test "$observed" = "$merge_sha"
+          test "$parent_one" = "$base_sha"
+          test "$parent_two" = "$reviewed_head"
+          test -z "${extra:-}"
+          git switch --detach "$merge_sha"
+          git switch -C codex/plan-v1.6.0-runtime-recovery-operations-v1
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'predecessor_pr=%s\nreviewed_head=%s\nmerge_commit=%s\nmerge_tree=%s\n' \
+            "$predecessor_pr" "$reviewed_head" "$merge_sha" "$(git rev-parse HEAD^{tree})"
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Materialize source documentation and exact module truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python "$RUNNER_TEMP/materialize_v1_6_0.py" .
+          python scripts/render_module_source_truth_v1_6_0.py --check
+          git diff --check
+
+      - name: Validate V1.6 and all inherited contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_6_0.py
+          python scripts/validate_plan_v1_5_0.py
+          python scripts/validate_plan_v1_4_7.py
+          python scripts/validate_plan_v1_4_6.py
+          python scripts/validate_plan_v1_4_5.py
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m compileall -q scripts tests
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Validate locked expanded workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Export validated candidate workflow
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.6.0-candidate-workflow-${{ github.run_id }}
+          path: .github/workflows/plan-v1.6.0-runtime-recovery-operations.yml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish clean candidate by fast-forward only
+        shell: bash
+        env:
+          CANDIDATE_BRANCH: codex/plan-v1.6.0-runtime-recovery-operations-v1
+        run: |
+          set -euo pipefail
+          candidate_workflow=.github/workflows/plan-v1.6.0-runtime-recovery-operations.yml
+          test -f "$candidate_workflow"
+          workflow_digest="$(sha256sum "$candidate_workflow" | awk '{print $1}')"
+          git config user.name "HeptaBao execution controller"
+          git config user.email "heptabao-exec@users.noreply.github.com"
+          git add --all
+          git reset -- "$candidate_workflow"
+          rm "$candidate_workflow"
+          git commit -m "feat(v1.6.0): add runtime recovery providers and operations state"
+          candidate_sha="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          remote_head="$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH" | awk '{print $1}')"
+          test -n "$remote_head"
+          git merge-base --is-ancestor "$remote_head" "$candidate_sha"
+          git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH"
+          {
+            echo '## V1.6.0 clean candidate published'
+            echo "- prior reserved ref: \`$remote_head\`"
+            echo "- commit: \`$candidate_sha\`"
+            echo "- tree: \`$candidate_tree\`"
+            echo "- candidate workflow SHA-256: \`$workflow_digest\`"
+            echo '- workspace crates: 32'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
