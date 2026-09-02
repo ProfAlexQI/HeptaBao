@@ -41,7 +41,13 @@ jobs:
           new_return = '''    facts_block = "\\n".join(facts_lines)\n    if BEGIN_FACTS in text and END_FACTS in text:\n        text = replace_marked(text, BEGIN_FACTS, END_FACTS, facts_block)\n    else:\n        text = text.rstrip() + "\\n\\n## Machine-verified source truth\\n\\n" + facts_block + "\\n"\n    return text.rstrip() + "\\n"'''
           if old_return not in text:
               raise SystemExit("facts return patch target missing")
-          path.write_text(text.replace(old_return, new_return, 1), encoding="utf-8")
+          text = text.replace(old_return, new_return, 1)
+          old_row = '''| V1.4.6 recovery gate | `.github/workflows/plan-v1.4.6-authoritative-recovery-closure.yml` |'''
+          new_row = '''| V1.4.6 authoritative recovery protocol | `docs/recovery/HEPTABAO_AUTHORITATIVE_RECOVERY_PROTOCOL_V1.md` |\n| V1.4.6 recovery gate | `.github/workflows/plan-v1.4.6-authoritative-recovery-closure.yml` |'''
+          if old_row not in text:
+              raise SystemExit("inherited recovery protocol patch target missing")
+          text = text.replace(old_row, new_row, 1)
+          path.write_text(text, encoding="utf-8")
           PY
           git fetch origin 54d524214df443752a2ecaeff6d4a05625bf52c7 --depth=1
           git switch --detach 54d524214df443752a2ecaeff6d4a05625bf52c7
