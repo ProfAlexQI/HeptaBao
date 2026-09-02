@@ -1,0 +1,28 @@
+name: exec mark reviewed PR 60 ready
+
+on:
+  push:
+    branches:
+      - exec/full-gap-closure-source-export-v1
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mark-ready:
+    if: github.repository == 'TrillionniumFoundation/HeptaBao'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark exact reviewed pull request ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_head="$(gh api repos/${GITHUB_REPOSITORY}/pulls/60 --jq .head.sha)"
+          test "$current_head" = "837668cb879683bc60808584d2ebdedd42a397aa"
+          current_state="$(gh api graphql -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isDraft state headRefOid}}}' -F owner='TrillionniumFoundation' -F name='HeptaBao' -F number=60 --jq '.data.repository.pullRequest')"
+          test "$(jq -r .state <<<"$current_state")" = "OPEN"
+          test "$(jq -r .headRefOid <<<"$current_state")" = "837668cb879683bc60808584d2ebdedd42a397aa"
+          gh pr ready 60 --repo "$GITHUB_REPOSITORY"
+          test "$(gh api graphql -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isDraft}}}' -F owner='TrillionniumFoundation' -F name='HeptaBao' -F number=60 --jq '.data.repository.pullRequest.isDraft')" = "false"
