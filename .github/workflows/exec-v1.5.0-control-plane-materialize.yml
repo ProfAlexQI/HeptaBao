@@ -6,7 +6,9 @@ on:
       - exec/v1.5.0-control-plane-materializer-v1
 
 permissions:
+  actions: read
   contents: write
+  pull-requests: read
 
 concurrency:
   group: exec-v1.5.0-control-plane-materializer
@@ -23,23 +25,69 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Freeze generator and switch to exact V1.4.7 predecessor
+      - name: Freeze generator and admit exact merged V1.4.7 predecessor
         shell: bash
         env:
-          PREDECESSOR_BRANCH: codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
-          EXPECTED_PREDECESSOR_SHA: 7396101fa06a447d677e8590995b8ef3cc675785
+          GH_TOKEN: ${{ github.token }}
+          PREDECESSOR_PR: "63"
+          INTEGRATION_BRANCH: integration/v1.4.4-technical-candidate
         run: |
           set -euo pipefail
           cp .exec/materialize_v1_5_0.py "$RUNNER_TEMP/materialize_v1_5_0.py"
           cp .exec/patch_v1_5_0.py "$RUNNER_TEMP/patch_v1_5_0.py"
           python "$RUNNER_TEMP/patch_v1_5_0.py" "$RUNNER_TEMP/materialize_v1_5_0.py"
           python -m py_compile "$RUNNER_TEMP/materialize_v1_5_0.py"
-          git fetch --no-tags origin "refs/heads/$PREDECESSOR_BRANCH:refs/remotes/origin/$PREDECESSOR_BRANCH"
-          test "$(git rev-parse "refs/remotes/origin/$PREDECESSOR_BRANCH")" = "$EXPECTED_PREDECESSOR_SHA"
-          git switch --detach "$EXPECTED_PREDECESSOR_SHA"
+
+          pr_json="$RUNNER_TEMP/predecessor-pr.json"
+          reviews_json="$RUNNER_TEMP/predecessor-reviews.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PREDECESSOR_PR" > "$pr_json"
+          test "$(jq -r .state "$pr_json")" = closed
+          test "$(jq -r .merged "$pr_json")" = true
+          reviewed_head="$(jq -r .head.sha "$pr_json")"
+          merge_sha="$(jq -r .merge_commit_sha "$pr_json")"
+          test "$reviewed_head" != null
+          test "$merge_sha" != null
+
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PREDECESSOR_PR/reviews?per_page=100" > "$reviews_json"
+          HEAD_SHA="$reviewed_head" REVIEWS_JSON="$reviews_json" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          required = {'ProfHepta', 'Tomasrgbsf'}
+          reviews = json.loads(Path(os.environ['REVIEWS_JSON']).read_text(encoding='utf-8'))
+          latest = {}
+          for review in sorted(reviews, key=lambda item: item.get('submitted_at') or ''):
+              login = (review.get('user') or {}).get('login')
+              if login:
+                  latest[login] = review
+          waiting = []
+          for login in sorted(required):
+              review = latest.get(login)
+              if not review or review.get('state') != 'APPROVED' or review.get('commit_id') != os.environ['HEAD_SHA']:
+                  waiting.append(login)
+          if waiting:
+              raise SystemExit('predecessor lacks exact-head approvals: ' + ', '.join(waiting))
+          blocking = sorted(login for login, review in latest.items() if review.get('commit_id') == os.environ['HEAD_SHA'] and review.get('state') == 'CHANGES_REQUESTED')
+          if blocking:
+              raise SystemExit('predecessor has current-head change requests: ' + ', '.join(blocking))
+          print('predecessor exact-head review admission: PASS')
+          PY
+
+          git fetch --no-tags origin "refs/heads/$INTEGRATION_BRANCH:refs/remotes/origin/$INTEGRATION_BRANCH"
+          integration_sha="$(git rev-parse "refs/remotes/origin/$INTEGRATION_BRANCH")"
+          test "$integration_sha" = "$merge_sha"
+          git fetch --no-tags origin "$reviewed_head" "$merge_sha"
+          read -r observed_merge parent_one parent_two extra <<<"$(git rev-list --parents -n 1 "$merge_sha")"
+          test "$observed_merge" = "$merge_sha"
+          test "$parent_one" = "54d524214df443752a2ecaeff6d4a05625bf52c7"
+          test "$parent_two" = "$reviewed_head"
+          test -z "${extra:-}"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$merge_sha" --jq .commit.verification.verified)" = true
+
+          git switch --detach "$merge_sha"
           git switch -C codex/plan-v1.5.0-control-plane-vertical-slice-v1
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          printf 'predecessor_branch=%s\npredecessor_commit=%s\npredecessor_tree=%s\n' "$PREDECESSOR_BRANCH" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"
+          printf 'predecessor_pr=%s\nreviewed_head=%s\nmerge_commit=%s\nmerge_tree=%s\n' "$PREDECESSOR_PR" "$reviewed_head" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"
 
       - name: Install exact Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -86,7 +134,15 @@ jobs:
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Publish clean candidate source without overwrite
+      - name: Export validated candidate workflow
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.5.0-candidate-workflow-${{ github.run_id }}
+          path: .github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish clean candidate source by fast-forward only
         shell: bash
         env:
           CANDIDATE_BRANCH: codex/plan-v1.5.0-control-plane-vertical-slice-v1
@@ -97,7 +153,6 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=all | grep '^?? target/' || true)"
           candidate_workflow=.github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml
           test -f "$candidate_workflow"
-          cp "$candidate_workflow" "$RUNNER_TEMP/plan-v1.5.0-control-plane-vertical-slice.yml"
           workflow_digest="$(sha256sum "$candidate_workflow" | awk '{print $1}')"
           git config user.name "HeptaBao execution controller"
           git config user.email "heptabao-exec@users.noreply.github.com"
@@ -107,22 +162,21 @@ jobs:
           git commit -m "feat(v1.5.0): implement mandatory control-plane vertical slice"
           candidate_sha="$(git rev-parse HEAD)"
           candidate_tree="$(git rev-parse HEAD^{tree})"
-          if git ls-remote --exit-code --heads origin "refs/heads/$CANDIDATE_BRANCH" >/dev/null 2>&1; then
-            echo "refusing to overwrite existing candidate branch: $CANDIDATE_BRANCH" >&2
-            exit 1
-          fi
+          remote_head="$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH" | awk '{print $1}')"
+          test -n "$remote_head"
+          git merge-base --is-ancestor "$remote_head" "$candidate_sha"
           git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH"
           {
             echo '## V1.5.0 clean candidate source published'
             echo
-            echo "- predecessor: \`7396101fa06a447d677e8590995b8ef3cc675785\`"
             echo "- branch: \`$CANDIDATE_BRANCH\`"
+            echo "- prior reserved ref: \`$remote_head\`"
             echo "- source commit before workflow admission: \`$candidate_sha\`"
             echo "- source tree before workflow admission: \`$candidate_tree\`"
             echo "- validated candidate workflow SHA-256: \`$workflow_digest\`"
             echo '- workspace crates: 28'
             echo '- all plan/platform/oracle tests: PASS'
             echo '- Rust 1.98 fmt/test/strict-Clippy: PASS'
-            echo '- workflow admission is a separate repository contents write'
+            echo '- workflow artifact exported for separate contents-API admission'
             echo '- authority effect: NONE'
           } >> "$GITHUB_STEP_SUMMARY"
