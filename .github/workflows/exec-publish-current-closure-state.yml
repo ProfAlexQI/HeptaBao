@@ -1,0 +1,160 @@
+name: exec publish current closure state
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: read
+  checks: read
+  actions: read
+
+concurrency:
+  group: exec-publish-current-closure-state
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Build strict live API snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_BRANCH: evidence/current-gap-closure-2026-09-02
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          out="$RUNNER_TEMP/current-state.json"
+          pr63="$RUNNER_TEMP/pr63.json"
+          reviews="$RUNNER_TEMP/reviews.json"
+          checks="$RUNNER_TEMP/checks.json"
+          rulesets="$RUNNER_TEMP/rulesets.json"
+          pulls="$RUNNER_TEMP/pulls.json"
+          gh api "repos/$repo/pulls/63" > "$pr63"
+          head="$(jq -r .head.sha "$pr63")"
+          gh api --paginate "repos/$repo/pulls/63/reviews?per_page=100" > "$reviews"
+          gh api "repos/$repo/commits/$head/check-runs?per_page=100" > "$checks"
+          gh api "repos/$repo/rulesets?per_page=100" > "$rulesets"
+          gh api --paginate "repos/$repo/pulls?state=all&per_page=100&sort=updated&direction=desc" > "$pulls"
+          python3 - "$pr63" "$reviews" "$checks" "$rulesets" "$pulls" "$out" <<'PY'
+          import json, sys
+          from datetime import datetime, timezone
+          pr_path, reviews_path, checks_path, rulesets_path, pulls_path, out_path = sys.argv[1:]
+          pr = json.load(open(pr_path, encoding='utf-8'))
+          reviews = json.load(open(reviews_path, encoding='utf-8'))
+          checks = json.load(open(checks_path, encoding='utf-8')).get('check_runs', [])
+          rulesets = json.load(open(rulesets_path, encoding='utf-8'))
+          pulls = json.load(open(pulls_path, encoding='utf-8'))
+          head = pr['head']['sha']
+          latest = {}
+          for review in reviews:
+              user = (review.get('user') or {}).get('login')
+              if user:
+                  latest[user] = review
+          current = [
+              {
+                  'user': user,
+                  'state': review.get('state'),
+                  'commit_id': review.get('commit_id'),
+              }
+              for user, review in latest.items()
+              if review.get('commit_id') == head
+          ]
+          required = {
+              'current-head-review-admission',
+              'v1.4.7 / pull_request / exact-head',
+              'v1.4.7 / pull_request / prospective-merge',
+          }
+          observed = {
+              check.get('name'): {
+                  'id': check.get('id'),
+                  'status': check.get('status'),
+                  'conclusion': check.get('conclusion'),
+                  'details_url': check.get('details_url'),
+              }
+              for check in checks
+              if check.get('name') in required
+          }
+          stack_heads = [
+              'codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1',
+              'codex/plan-v1.5.0-product-control-plane-v1',
+              'codex/plan-v1.6.0-runtime-recovery-and-operations-v1',
+              'codex/plan-v1.7.0-http-ha-plugin-compatibility-v1',
+              'codex/plan-v1.8.0-product-truth-runtime-hardening-v1',
+              'codex/plan-v1.8.1-repository-closure-v1',
+              'codex/plan-v1.9.0-audit-phase-and-repository-control-v1',
+              'codex/v1.9.0-repository-control-bootstrap-v1',
+          ]
+          by_head = {}
+          for candidate in pulls:
+              ref = (candidate.get('head') or {}).get('ref')
+              if ref in stack_heads and ref not in by_head:
+                  by_head[ref] = {
+                      'number': candidate.get('number'),
+                      'state': candidate.get('state'),
+                      'draft': candidate.get('draft'),
+                      'base': (candidate.get('base') or {}).get('ref'),
+                      'head_sha': (candidate.get('head') or {}).get('sha'),
+                      'html_url': candidate.get('html_url'),
+                  }
+          active = [r for r in rulesets if r.get('name') == 'HeptaBao canonical branch controls v1.9.0' and r.get('enforcement') == 'active']
+          result = {
+              'schema': 'heptabao.current-gap-closure-snapshot.v1',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'repository': {'full_name': 'TrillionniumFoundation/HeptaBao', 'id': 1349115072},
+              'pr63': {
+                  'state': pr.get('state'),
+                  'draft': pr.get('draft'),
+                  'merged': pr.get('merged'),
+                  'base_sha': pr.get('base', {}).get('sha'),
+                  'head_sha': head,
+                  'prospective_merge': pr.get('merge_commit_sha'),
+                  'mergeable': pr.get('mergeable'),
+                  'mergeable_state': pr.get('mergeable_state'),
+                  'current_head_reviews': current,
+                  'required_checks': observed,
+              },
+              'stack_pull_requests': by_head,
+              'canonical_ruleset_active': bool(active),
+              'ruleset_ids': [r.get('id') for r in active],
+              'blockers': {
+                  'HB-BLK-CTRL-001': 'CLOSED' if active else 'OPEN',
+                  **{f'HB-BLK-EXT-{i:03d}': 'OPEN_REQUIRES_AUTHENTIC_EXTERNAL_COMPLETION' for i in range(1, 8)},
+              },
+              'all_gaps_closed': False,
+              'qualification': False,
+              'compatibility_claim': False,
+              'production_authority': False,
+              'migration_authority': False,
+              'release_authority': False,
+              'authority_effect': 'NONE',
+          }
+          json.dump(result, open(out_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(out_path, 'a', encoding='utf-8').write('\n')
+          PY
+
+      - name: Publish snapshot to isolated evidence branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_BRANCH: evidence/current-gap-closure-2026-09-02
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          target='evidence/current-gap-closure/2026-09-02/current-state.json'
+          file="$RUNNER_TEMP/current-state.json"
+          encoded="$(base64 -w0 "$file")"
+          existing="$(gh api "repos/$repo/contents/$target?ref=$EVIDENCE_BRANCH" --jq .sha 2>/dev/null || true)"
+          args=(--method PUT "repos/$repo/contents/$target" -f message='evidence: refresh current gap-closure snapshot' -f content="$encoded" -f branch="$EVIDENCE_BRANCH")
+          if test -n "$existing"; then
+            args+=(-f sha="$existing")
+          fi
+          gh api "${args[@]}" >/dev/null
+          gh api "repos/$repo/contents/$target?ref=$EVIDENCE_BRANCH" --jq -r .content | tr -d '\r\n' | base64 --decode > "$RUNNER_TEMP/readback.json"
+          cmp "$file" "$RUNNER_TEMP/readback.json"
+          sha256sum "$RUNNER_TEMP/readback.json"
