@@ -103,4 +103,4 @@ jobs:
         run: |
           set -euo pipefail
           grep -R "authority_effect: NONE" planning/HEPTABAO_*V1_4_7*.yaml planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
-          ! grep -R "production_authority: true\|release_authority: true\|migration_authority: true\|compatibility_claim: true" planning/HEPTABAO_*V1_4_7*.yaml planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
+          ! grep -R "production_authority: true\|release_authority: true\|migration_authority: true\|compatibility_claim: true"             planning/HEPTABAO_*V1_4_7*.yaml planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
