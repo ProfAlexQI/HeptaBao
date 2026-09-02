@@ -18,53 +18,21 @@ if present != required:
         f"extra={sorted(present - required)}"
     )
 
-replacements = 0
 for path in sorted(root.glob("*.rs")):
     text = path.read_text(encoding="utf-8")
-    count = text.count("assert!(false);")
-    if count:
-        text = text.replace(
-            "assert!(false);",
-            "assert!(std::hint::black_box(false));",
-        )
-        replacements += count
-        path.write_text(text, encoding="utf-8")
+    if "assert!(false);" in text:
+        raise SystemExit(f"constant assertion survived V1.7 hardening: {path.name}")
 
-ha = root / "ha_core.rs"
-text = ha.read_text(encoding="utf-8")
-old = '''        if let Some(current) = self.leader_fence {
-            if fence.term < current.term
-                || (fence.term == current.term && fence.epoch <= current.epoch)
-            {
-                return Err(HaError::StaleFence);
-            }
-        }'''
-new = '''        if self.leader_fence.is_some_and(|current| {
-            fence.term < current.term
-                || (fence.term == current.term && fence.epoch <= current.epoch)
-        }) {
-            return Err(HaError::StaleFence);
-        }'''
-if text.count(old) != 1:
-    raise SystemExit("V1.7 leader-fence Clippy patch target mismatch")
-text = text.replace(old, new, 1)
-old = '''        if snapshot.applied_index == self.applied_index {
-            if self.snapshot_digest.is_some_and(|digest| digest != snapshot.state_digest) {
-                return Err(HaError::SnapshotConflict);
-            }
-        }'''
-new = '''        if snapshot.applied_index == self.applied_index
-            && self
-                .snapshot_digest
-                .is_some_and(|digest| digest != snapshot.state_digest)
-        {
-            return Err(HaError::SnapshotConflict);
-        }'''
-if text.count(old) != 1:
-    raise SystemExit("V1.7 snapshot Clippy patch target mismatch")
-ha.write_text(text.replace(old, new, 1), encoding="utf-8")
+http = (root / "http_api.rs").read_text(encoding="utf-8")
+if "trim_matches(|character| matches!(character, ' ' | '\\t'))" not in http:
+    raise SystemExit("V1.7 HTTP canonical trim hardening missing")
 
-print(
-    "PASS V1.7 strict-Clippy asset hardening "
-    f"constant_assertions_rewritten={replacements} nested_conditions_rewritten=2"
-)
+ha = (root / "ha_core.rs").read_text(encoding="utf-8")
+if ha.count("if self.leader_fence.is_some_and(|current| {") != 1:
+    raise SystemExit("V1.7 leader-fence hardening missing or duplicated")
+if ha.count("snapshot.applied_index == self.applied_index") != 1:
+    raise SystemExit("V1.7 snapshot comparison hardening missing or duplicated")
+if "SnapshotConflict" not in ha:
+    raise SystemExit("V1.7 snapshot conflict outcome missing")
+
+print("PASS V1.7 terminal asset hardening verification")
