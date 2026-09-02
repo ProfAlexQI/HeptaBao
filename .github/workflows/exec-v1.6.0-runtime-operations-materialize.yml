@@ -34,6 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           cp .exec/materialize_v1_6_0.py "$RUNNER_TEMP/materialize_v1_6_0.py"
+          cp .exec/patch_v1_6_0.py "$RUNNER_TEMP/patch_v1_6_0.py"
+          python "$RUNNER_TEMP/patch_v1_6_0.py" "$RUNNER_TEMP/materialize_v1_6_0.py"
           python -m py_compile "$RUNNER_TEMP/materialize_v1_6_0.py"
 
           pr_json="$RUNNER_TEMP/predecessor-pr.json"
