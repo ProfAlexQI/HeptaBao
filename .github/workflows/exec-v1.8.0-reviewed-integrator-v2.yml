@@ -1,0 +1,52 @@
+name: exec V1.8.0 dynamic reviewed integrator
+
+on:
+  push:
+    branches: [exec/v1.8.0-reviewed-integrator-v2]
+    paths: [.exec/trigger/integrate-v1.8.0]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exec-v1.8.0-reviewed-integrator-v2
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact integration controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Merge only the unique exact-reviewed V1.8.0 candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m py_compile .exec/merge_reviewed_candidate.py
+          python .exec/merge_reviewed_candidate.py \
+            --expected-head-branch codex/plan-v1.8.0-operational-service-v1 \
+            --integration-branch integration/v1.4.4-technical-candidate \
+            --required-reviewer ProfHepta \
+            --required-reviewer Tomasrgbsf \
+            --required-workflow "current-head review admission" \
+            --required-workflow "HeptaBao V1.8.0 operational service" \
+            --required-workflow "HeptaBao V1.7.0 service HA plugin compatibility" \
+            --required-workflow "HeptaBao V1.6.0 runtime recovery operations" \
+            --required-workflow "HeptaBao V1.5.0 control-plane vertical slice" \
+            --required-workflow "HeptaBao V1.4.7 post-merge truth and external admission" \
+            --required-workflow "HeptaBao V1.4.6 authoritative recovery closure" \
+            --required-workflow "plan-v1.4.5-security-invariant-closure" \
+            --required-workflow "plan-v1.4.4-module-documentation" \
+            --commit-title "feat(v1.8.0): add operational service vertical slice" \
+            --commit-message "Merged through the ordinary PR API only after exact-head and prospective-merge validation, two eligible current-head approvals, post-review admission, no blocking review or unresolved thread, and immutable tuple readback. External/control blockers and authority claims remain open." \
+            --output "$RUNNER_TEMP/v1.8.0-merge-receipt.json"
+          cat "$RUNNER_TEMP/v1.8.0-merge-receipt.json" >> "$GITHUB_STEP_SUMMARY"
