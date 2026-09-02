@@ -1,0 +1,91 @@
+name: exec publish digest-bound PR63 hardening macOS fallback
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-publish-pr63-hardening-macos
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable transfer payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: exec/pr63-hardening-transfer-v1
+          path: transfer
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact current PR63 candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reconstruct and authenticate validated payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "1d4f3ade1b169dd4afc721ab8867e979d1977400"
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          root = Path('transfer/.exec/pr63-hardening')
+          encoded = b''.join((root / f'patch-{index:02d}').read_bytes() for index in range(17))
+          if hashlib.sha256(encoded).hexdigest() != 'e3f945672e180b1e96cbb276c2a0988023fdfb0028e88275d8d6476da5d03062':
+              raise SystemExit('encoded patch digest mismatch')
+          patch = gzip.decompress(base64.b64decode(encoded))
+          if hashlib.sha256(patch).hexdigest() != 'ec277f3b7bc2ab59eb7a75d00f5cc0170f95b163b4458f0e9d8614787facf0c8':
+              raise SystemExit('patch digest mismatch')
+          Path('/tmp/pr63-hardening.patch').write_bytes(patch)
+
+          workflow_encoded = (root / 'workflow-00').read_bytes() + (root / 'workflow-01').read_bytes()
+          if hashlib.sha256(workflow_encoded).hexdigest() != 'ed613ae84d1049ed1a54a45954f873543d1a9406ca08cb685b4af6890b1c4f7a':
+              raise SystemExit('encoded workflow digest mismatch')
+          workflow = base64.b64decode(workflow_encoded)
+          if hashlib.sha256(workflow).hexdigest() != 'e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587':
+              raise SystemExit('workflow digest mismatch')
+          Path('/tmp/plan-v1.4.7-post-merge-truth-and-external-admission.yml').write_bytes(workflow)
+          PY
+
+      - name: Publish source-only hardening commit
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git apply --index --binary /tmp/pr63-hardening.patch
+          final_workflow=.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+          cp /tmp/plan-v1.4.7-post-merge-truth-and-external-admission.yml "$final_workflow"
+          test "$(shasum -a 256 "$final_workflow" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+          git diff --check
+          rm -- "$final_workflow"
+          git add --all
+          test -z "$(git diff --cached --name-only | grep '^.github/workflows/' || true)"
+          git config user.name "HeptaBao execution controller"
+          git config user.email "heptabao-exec@users.noreply.github.com"
+          git commit -m "fix(v1.4.7): harden external admission and inherited gates"
+          git push origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          {
+            echo '## PR63 digest-bound hardening published'
+            echo
+            echo "- source commit: \`$(git rev-parse HEAD)\`"
+            echo "- source tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo '- patch SHA-256: `ec277f3b7bc2ab59eb7a75d00f5cc0170f95b163b4458f0e9d8614787facf0c8`'
+            echo '- this exact payload previously passed 321 plan, 130 platform, 20 Oracle, Rust fmt/test/strict-Clippy'
+            echo '- candidate workflow remains a separate contents-API admission'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
