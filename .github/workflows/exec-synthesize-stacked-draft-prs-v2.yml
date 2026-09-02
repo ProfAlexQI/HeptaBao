@@ -1,0 +1,79 @@
+name: exec synthesize ancestry-valid stacked Draft PRs v2
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: exec-synthesize-stacked-draft-prs
+  cancel-in-progress: true
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Create Draft PRs only for live descendant branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          cat > "$RUNNER_TEMP/stack.tsv" <<'EOF'
+          V1.5.0	codex/plan-v1.5.0-product-control-plane-v1	codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1	feat(v1.5.0): product control-plane vertical slice
+          V1.6.0	codex/plan-v1.6.0-runtime-recovery-and-operations-v1	codex/plan-v1.5.0-product-control-plane-v1	feat(v1.6.0): runtime recovery and operations layer
+          V1.7.0	codex/plan-v1.7.0-http-ha-plugin-compatibility-v1	codex/plan-v1.6.0-runtime-recovery-and-operations-v1	feat(v1.7.0): strict HTTP, HA seams and plugin compatibility
+          V1.8.0	codex/plan-v1.8.0-product-truth-runtime-hardening-v1	codex/plan-v1.7.0-http-ha-plugin-compatibility-v1	feat(v1.8.0): operational service and product-truth hardening
+          V1.8.1	codex/plan-v1.8.1-repository-closure-v1	codex/plan-v1.8.0-product-truth-runtime-hardening-v1	fix(v1.8.1): close repository-controlled product gaps
+          V1.9.0	codex/plan-v1.9.0-audit-phase-and-repository-control-v1	codex/plan-v1.8.1-repository-closure-v1	fix(v1.9.0): audit phase semantics and repository-control admission
+          CONTROL	codex/v1.9.0-repository-control-bootstrap-v1	codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1	feat(control): bootstrap fail-closed repository ruleset admission
+          EOF
+          while IFS=$'\t' read -r version head base title; do
+            test -n "$head" || continue
+            head_sha="$(gh api "repos/$repo/git/ref/heads/$head" --jq .object.sha 2>/dev/null || true)"
+            test -n "$head_sha" || continue
+            base_sha="$(gh api "repos/$repo/git/ref/heads/$base" --jq .object.sha 2>/dev/null || true)"
+            test -n "$base_sha" || { echo "$version base missing: $base" >&2; exit 1; }
+            relation="$(gh api "repos/$repo/compare/$base_sha...$head_sha" --jq .status)"
+            case "$relation" in
+              ahead|identical) ;;
+              *) echo "$version is not a descendant of $base: $relation" >&2; exit 1 ;;
+            esac
+            number="$(gh api --paginate "repos/$repo/pulls?state=all&head=TrillionniumFoundation:$head&per_page=100" --jq '.[0].number // empty')"
+            if test -z "$number"; then
+              body="$RUNNER_TEMP/body.md"
+              cat > "$body" <<EOF_BODY
+          ## Stacked review admission
+
+          \`$version\` is bound to live predecessor \`$base@$base_sha\` and candidate \`$head@$head_sha\`; the observed ancestry relation is \`$relation\`.
+
+          This PR is review-only while based on its predecessor. It must remain Draft and must not merge into that predecessor. After prior stages enter canonical integration, regenerate or rebase this branch, rerun all gates, retarget it to canonical integration, and obtain fresh current-head review. Historical evidence is non-transferable.
+
+          \`\`\`text
+          qualification=false
+          compatibility_claim=false
+          production_authority=false
+          migration_authority=false
+          release_authority=false
+          authority_effect=NONE
+          \`\`\`
+          EOF_BODY
+              sed -i 's/^          //' "$body"
+              gh pr create --repo "$repo" --draft --head "$head" --base "$base" --title "$title" --body-file "$body" >/dev/null
+              number="$(gh api --paginate "repos/$repo/pulls?state=open&head=TrillionniumFoundation:$head&per_page=100" --jq '.[0].number // empty')"
+              test -n "$number"
+            else
+              live_base="$(gh api "repos/$repo/pulls/$number" --jq .base.ref)"
+              test "$live_base" = "$base" || { echo "$version PR #$number has unexpected base $live_base" >&2; exit 1; }
+              merged="$(gh api "repos/$repo/pulls/$number" --jq .merged)"
+              test "$merged" = false || { echo "$version review-only PR #$number was merged into predecessor" >&2; exit 1; }
+            fi
+            gh api --method POST "repos/$repo/pulls/$number/requested_reviewers" -f 'reviewers[]=Tomasrgbsf' -f 'reviewers[]=ProfHepta' >/dev/null || true
+          done < "$RUNNER_TEMP/stack.tsv"
