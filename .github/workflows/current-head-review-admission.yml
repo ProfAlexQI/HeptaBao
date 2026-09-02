@@ -1,11 +1,15 @@
 name: current-head review admission
 
+# This gate is intentionally post-review. Head synchronization runs the technical
+# exact-head and prospective-merge workflows; after an eligible reviewer approves
+# that unchanged head, a pull-request metadata edit triggers this admission gate
+# without moving the reviewed source SHA.
 on:
   pull_request:
     branches:
       - integration/v1.4.4-technical-candidate
       - main
-    types: [opened, synchronize, reopened, ready_for_review, review_requested]
+    types: [edited]
 
 permissions:
   contents: read
@@ -17,6 +21,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Bind the post-review trigger to the unchanged pull-request head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .head.sha)"
+          test "$live_head" = "$EVENT_HEAD_SHA"
+          test "$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .draft)" = false
+          printf 'pr=%s\nunchanged_head=%s\n' "$EVENT_PR_NUMBER" "$EVENT_HEAD_SHA"
+
       - name: Require a fresh independent approval and no current-head change request
         env:
           GH_TOKEN: ${{ github.token }}
