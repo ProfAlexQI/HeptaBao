@@ -1,0 +1,5 @@
+repository=TrillionniumFoundation/HeptaBao
+stage=V1.5.0
+predecessor=codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+mode=fail-closed-stacked-candidate
+authority_effect=NONE
