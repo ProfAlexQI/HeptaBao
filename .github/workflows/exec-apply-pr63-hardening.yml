@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C candidate rev-parse HEAD)" = "eef7acb441698ddbca00a323728964ddbd0b3753"
+          test "$(git -C candidate rev-parse HEAD)" = "1d4f3ade1b169dd4afc721ab8867e979d1977400"
           : > "$RUNNER_TEMP/hardening.patch.gz.b64"
           for index in $(seq -w 0 16); do
             part="transfer/.exec/pr63-hardening/patch-$index"
