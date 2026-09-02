@@ -105,7 +105,7 @@ jobs:
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Commit and publish clean candidate branch
+      - name: Commit and publish clean candidate source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -113,21 +113,29 @@ jobs:
           set -euo pipefail
           test ! -e .exec
           test ! -e .github/workflows/exec-v1.4.7-post-merge-truth-materialize.yml
+          candidate_workflow=.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+          test -f "$candidate_workflow"
+          cp "$candidate_workflow" "$RUNNER_TEMP/plan-v1.4.7-post-merge-truth-and-external-admission.yml"
+          workflow_digest="$(sha256sum "$candidate_workflow" | awk '{print $1}')"
           git status --short
           git config user.name "HeptaBao execution controller"
           git config user.email "heptabao-exec@users.noreply.github.com"
           git add --all
+          git reset -- "$candidate_workflow"
+          rm "$candidate_workflow"
           git commit -m "docs(v1.4.7): bind post-merge module truth and external admission"
           candidate_sha="$(git rev-parse HEAD)"
           candidate_tree="$(git rev-parse HEAD^{tree})"
           git push --force origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
-          printf 'candidate_sha=%s\ncandidate_tree=%s\n' "$candidate_sha" "$candidate_tree" | tee "$RUNNER_TEMP/v1.4.7-candidate.txt"
+          printf 'candidate_sha=%s\ncandidate_tree=%s\nworkflow_sha256=%s\n' "$candidate_sha" "$candidate_tree" "$workflow_digest" | tee "$RUNNER_TEMP/v1.4.7-candidate.txt"
           {
-            echo '## V1.4.7 clean candidate published'
+            echo '## V1.4.7 clean candidate source published'
             echo
             echo "- branch: \`codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1\`"
-            echo "- commit: \`$candidate_sha\`"
-            echo "- tree: \`$candidate_tree\`"
+            echo "- source commit before workflow admission: \`$candidate_sha\`"
+            echo "- source tree before workflow admission: \`$candidate_tree\`"
+            echo "- validated candidate workflow SHA-256: \`$workflow_digest\`"
             echo '- full inherited Python and Rust 1.98 matrix: PASS'
+            echo '- workflow admission is a separate repository contents write'
             echo '- authority effect: NONE'
           } >> "$GITHUB_STEP_SUMMARY"
