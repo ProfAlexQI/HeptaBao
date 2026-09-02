@@ -1,0 +1,38 @@
+name: exec export exact PR63 head
+
+on:
+  push:
+    branches:
+      - exec/v1.4.7-post-merge-truth-materializer-v1
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable PR63 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: eef7acb441698ddbca00a323728964ddbd0b3753
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind and archive exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "eef7acb441698ddbca00a323728964ddbd0b3753"
+          test "$(git rev-parse HEAD^{tree})" = "1ea34322ebd2195ae479bf3b9f865dd14a0db6a4"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/heptabao-pr63-eef7acb.tar.gz" HEAD
+          sha256sum "$RUNNER_TEMP/heptabao-pr63-eef7acb.tar.gz"
+
+      - name: Upload immutable source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: heptabao-pr63-eef7acb-source
+          path: ${{ runner.temp }}/heptabao-pr63-eef7acb.tar.gz
+          if-no-files-found: error
+          retention-days: 1
