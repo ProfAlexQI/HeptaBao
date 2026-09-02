@@ -1,0 +1,123 @@
+name: exec V1.8.1 reviewed integrator
+
+on:
+  push:
+    branches: [exec/v1.8.1-reviewed-integrator-v1]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exec-v1.8.1-reviewed-integrator
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Verify and merge exact reviewed V1.8.1 closure candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          pr=68
+          candidate='codex/plan-v1.8.1-repository-scope-closure-v1'
+          ready=false
+          for attempt in $(seq 1 210); do
+            gh api "repos/$repo/pulls/$pr" > "$RUNNER_TEMP/pr.json"
+            if [[ "$(jq -r .state "$RUNNER_TEMP/pr.json")" != open ]]; then
+              test "$(jq -r .merged "$RUNNER_TEMP/pr.json")" = true
+              echo 'already merged through reviewed path'
+              exit 0
+            fi
+            test "$(jq -r .draft "$RUNNER_TEMP/pr.json")" = false
+            test "$(jq -r .base.ref "$RUNNER_TEMP/pr.json")" = 'integration/v1.4.4-technical-candidate'
+            test "$(jq -r .head.ref "$RUNNER_TEMP/pr.json")" = "$candidate"
+            head="$(jq -r .head.sha "$RUNNER_TEMP/pr.json")"
+            test "$head" = "$(gh api "repos/$repo/git/ref/heads/$candidate" --jq .object.sha)"
+
+            gh api "repos/$repo/pulls/$pr/reviews?per_page=100" > "$RUNNER_TEMP/reviews.json"
+            gh api "repos/$repo/actions/runs?event=pull_request&head_sha=$head&per_page=100" > "$RUNNER_TEMP/runs.json"
+            gh api graphql \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+              -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$pr" > "$RUNNER_TEMP/threads.json"
+
+            set +e
+            HEAD_SHA="$head" REVIEWS="$RUNNER_TEMP/reviews.json" RUNS="$RUNNER_TEMP/runs.json" THREADS="$RUNNER_TEMP/threads.json" python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          required = {
+              'HeptaBao V1.8.1 repository scope closure',
+              'HeptaBao V1.8.0 operational service',
+              'HeptaBao V1.7.0 service HA plugin compatibility',
+              'HeptaBao V1.6.0 runtime recovery operations',
+              'HeptaBao V1.5.0 control-plane vertical slice',
+              'HeptaBao V1.4.7 post-merge truth and external admission',
+              'HeptaBao V1.4.6 authoritative recovery closure',
+              'plan-v1.4.5-security-invariant-closure',
+              'plan-v1.4.4-module-documentation',
+          }
+          runs = json.loads(Path(os.environ['RUNS']).read_text())['workflow_runs']
+          latest = {}
+          for run in sorted(runs, key=lambda value: value['id']):
+              latest[run['name']] = run
+          missing = required - set(latest)
+          if missing:
+              print('PENDING workflow families', sorted(missing))
+              sys.exit(10)
+          for name in sorted(required):
+              run = latest[name]
+              if run['head_sha'] != os.environ['HEAD_SHA']:
+                  print('HARD wrong workflow head', name)
+                  sys.exit(2)
+              if run['status'] != 'completed':
+                  print('PENDING workflow', name, run['status'])
+                  sys.exit(10)
+              if run.get('conclusion') != 'success':
+                  print('HARD failed workflow', name, run.get('conclusion'))
+                  sys.exit(2)
+
+          reviews = json.loads(Path(os.environ['REVIEWS']).read_text())
+          latest_reviews = {}
+          for review in sorted(reviews, key=lambda value: value.get('submitted_at') or ''):
+              latest_reviews[review['user']['login']] = review
+          blocking = [login for login, review in latest_reviews.items() if review.get('state') == 'CHANGES_REQUESTED']
+          if blocking:
+              print('HARD blocking latest reviews', blocking)
+              sys.exit(2)
+          for reviewer in ('ProfHepta', 'Tomasrgbsf'):
+              review = latest_reviews.get(reviewer)
+              if not review or review.get('state') != 'APPROVED' or review.get('commit_id') != os.environ['HEAD_SHA']:
+                  print('PENDING exact-head approval', reviewer)
+                  sys.exit(10)
+
+          threads = json.loads(Path(os.environ['THREADS']).read_text())['data']['repository']['pullRequest']['reviewThreads']
+          if threads['pageInfo']['hasNextPage']:
+              print('HARD review-thread pagination exceeds bounded verifier')
+              sys.exit(2)
+          if any(not node['isResolved'] for node in threads['nodes']):
+              print('PENDING unresolved review thread')
+              sys.exit(10)
+          print('READY exact head, nine workflow families, two current approvals, no blocking review/thread')
+          PY
+            result=$?
+            set -e
+            if [[ $result -eq 0 ]]; then ready=true; break; fi
+            if [[ $result -eq 2 ]]; then exit 2; fi
+            sleep 15
+          done
+          test "$ready" = true
+
+          result="$(gh api -X PUT "repos/$repo/pulls/$pr/merge" \
+            -f sha="$head" \
+            -f merge_method=merge \
+            -f commit_title='chore(v1.8.1): close all repository-controlled blockers' \
+            -f commit_message='Merged only after nine exact workflow families, two current exact-head approvals, no blocking review and no unresolved thread. Repository blockers HB-BLK-REPO-049..093 are closed in repository scope; external/control blockers and authority claims remain open.')"
+          test "$(jq -r .merged <<<"$result")" = true
+          echo "merge_sha=$(jq -r .sha <<<"$result")"
