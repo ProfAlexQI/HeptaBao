@@ -42,14 +42,17 @@ jobs:
           cp -R .exec/v1_7_assets "$RUNNER_TEMP/v1_7_assets"
           cp .exec/patch_v1_7_assets.py "$RUNNER_TEMP/patch_v1_7_assets.py"
           cp .exec/patch_v1_7_assets_v2.py "$RUNNER_TEMP/patch_v1_7_assets_v2.py"
+          cp .exec/patch_v1_7_assets_v3.py "$RUNNER_TEMP/patch_v1_7_assets_v3.py"
           cp .exec/admit_reviewed_predecessor.py \
             "$RUNNER_TEMP/admit_reviewed_predecessor.py"
           python "$RUNNER_TEMP/patch_v1_7_assets.py" "$RUNNER_TEMP/v1_7_assets"
           python "$RUNNER_TEMP/patch_v1_7_assets_v2.py" "$RUNNER_TEMP/v1_7_assets"
+          python "$RUNNER_TEMP/patch_v1_7_assets_v3.py" "$RUNNER_TEMP/v1_7_assets"
           python -m py_compile \
             "$RUNNER_TEMP/materialize_v1_7_0.py" \
             "$RUNNER_TEMP/patch_v1_7_assets.py" \
             "$RUNNER_TEMP/patch_v1_7_assets_v2.py" \
+            "$RUNNER_TEMP/patch_v1_7_assets_v3.py" \
             "$RUNNER_TEMP/admit_reviewed_predecessor.py"
 
       - name: Admit exact reviewed V1.6.0 merge and switch to it
@@ -94,13 +97,16 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-plan.txt
 
-      - name: Install exact Rust 1.98
+      - name: Install exact Rust 1.98 and format immutable V1.7 assets
         shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           rustc +1.98.0 --version --verbose
           cargo +1.98.0 --version --verbose
+          for source in "$RUNNER_TEMP"/v1_7_assets/*.rs; do
+            rustfmt +1.98.0 --edition 2024 "$source"
+          done
 
       - name: Materialize and validate V1.7
         shell: bash
