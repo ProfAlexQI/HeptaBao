@@ -1,0 +1,37 @@
+name: exec full-gap source export
+
+on:
+  push:
+    branches:
+      - exec/full-gap-closure-source-export-v1
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Export immutable candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate=837668cb879683bc60808584d2ebdedd42a397aa
+          git cat-file -e "${candidate}^{commit}"
+          git archive --format=tar.gz --output="heptabao-${candidate}.tar.gz" "${candidate}"
+          sha256sum "heptabao-${candidate}.tar.gz" > SHA256SUMS
+          git show -s --format='%H%n%T%n%P%n%s' "${candidate}" > SOURCE_IDENTITY.txt
+      - name: Upload immutable source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: heptabao-source-837668cb879683bc60808584d2ebdedd42a397aa
+          path: |
+            heptabao-837668cb879683bc60808584d2ebdedd42a397aa.tar.gz
+            SHA256SUMS
+            SOURCE_IDENTITY.txt
+          if-no-files-found: error
+          retention-days: 1
