@@ -1,0 +1,47 @@
+name: exec route stacked candidate reviews
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: exec-route-stacked-reviews
+  cancel-in-progress: true
+
+jobs:
+  route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Route only exact known stack heads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          cat > "$RUNNER_TEMP/heads" <<'EOF'
+          codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          codex/plan-v1.5.0-product-control-plane-v1
+          codex/plan-v1.6.0-runtime-recovery-and-operations-v1
+          codex/plan-v1.7.0-http-ha-plugin-compatibility-v1
+          codex/plan-v1.8.0-product-truth-runtime-hardening-v1
+          codex/plan-v1.8.1-repository-closure-v1
+          codex/plan-v1.9.0-audit-phase-and-repository-control-v1
+          codex/v1.9.0-repository-control-bootstrap-v1
+          EOF
+          while IFS= read -r head; do
+            test -n "$head" || continue
+            number="$(gh api --paginate "repos/$repo/pulls?state=open&head=TrillionniumFoundation:$head&per_page=100" --jq '.[0].number // empty')"
+            test -n "$number" || continue
+            gh api --method POST "repos/$repo/pulls/$number/requested_reviewers" \
+              -f 'reviewers[]=Tomasrgbsf' -f 'reviewers[]=ProfHepta' >/dev/null || true
+            gh api --method POST "repos/$repo/issues/$number/comments" \
+              -f body='Review routing refreshed. Approval must bind the current exact head and current prospective merge; any ancestor or head update invalidates historical approval. This routing action is not an approval, merge, qualification, or authority grant.' >/dev/null
+          done < "$RUNNER_TEMP/heads"
