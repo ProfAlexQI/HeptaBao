@@ -1,0 +1,130 @@
+name: exec V1.5.0 reviewed integrator
+
+on:
+  push:
+    branches:
+      - exec/v1.5.0-reviewed-integrator-v1
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exec-v1.5.0-reviewed-integrator
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Verify immutable candidate and all review gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          pr=64
+          candidate_branch='codex/plan-v1.5.0-control-plane-vertical-slice-v1'
+          pr_json="$RUNNER_TEMP/pr.json"
+          reviews_json="$RUNNER_TEMP/reviews.json"
+          runs_json="$RUNNER_TEMP/runs.json"
+          threads_json="$RUNNER_TEMP/threads.json"
+
+          gh api "repos/$repo/pulls/$pr" > "$pr_json"
+          test "$(jq -r .state "$pr_json")" = open
+          test "$(jq -r .draft "$pr_json")" = false
+          test "$(jq -r .base.ref "$pr_json")" = 'integration/v1.4.4-technical-candidate'
+          test "$(jq -r .head.ref "$pr_json")" = "$candidate_branch"
+          head="$(jq -r .head.sha "$pr_json")"
+          branch_head="$(gh api "repos/$repo/git/ref/heads/$candidate_branch" --jq .object.sha)"
+          test "$head" = "$branch_head"
+
+          gh api --paginate "repos/$repo/pulls/$pr/reviews?per_page=100" --slurp > "$RUNNER_TEMP/review-pages.json"
+          jq -s 'add' "$RUNNER_TEMP/review-pages.json" > "$reviews_json"
+          gh api "repos/$repo/actions/runs?event=pull_request&head_sha=$head&per_page=100" > "$runs_json"
+
+          OWNER="${repo%%/*}" NAME="${repo#*/}" PR="$pr" gh api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+            -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$pr" > "$threads_json"
+
+          HEAD_SHA="$head" REVIEWS_JSON="$reviews_json" RUNS_JSON="$runs_json" THREADS_JSON="$threads_json" python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          required_runs = {
+              'HeptaBao V1.5.0 control-plane vertical slice',
+              'HeptaBao V1.4.7 post-merge truth and external admission',
+              'HeptaBao V1.4.6 authoritative recovery closure',
+              'plan-v1.4.5-security-invariant-closure',
+              'plan-v1.4.4-module-documentation',
+          }
+          required_reviewers = {'ProfHepta', 'Tomasrgbsf'}
+          runs = json.loads(Path(os.environ['RUNS_JSON']).read_text())['workflow_runs']
+          latest_runs = {}
+          for run in sorted(runs, key=lambda value: value['id']):
+              latest_runs[run['name']] = run
+          missing = required_runs - set(latest_runs)
+          if missing:
+              raise SystemExit(f'missing required workflow runs: {sorted(missing)}')
+          for name in sorted(required_runs):
+              run = latest_runs[name]
+              if run['head_sha'] != os.environ['HEAD_SHA']:
+                  raise SystemExit(f'{name}: wrong head SHA')
+              if run['status'] != 'completed' or run.get('conclusion') != 'success':
+                  raise SystemExit(f'{name}: not terminal success: {run["status"]}/{run.get("conclusion")}')
+
+          reviews = json.loads(Path(os.environ['REVIEWS_JSON']).read_text())
+          latest_reviews = {}
+          for review in sorted(reviews, key=lambda value: value.get('submitted_at') or ''):
+              latest_reviews[review['user']['login']] = review
+          for reviewer in sorted(required_reviewers):
+              review = latest_reviews.get(reviewer)
+              if not review or review.get('state') != 'APPROVED':
+                  raise SystemExit(f'{reviewer}: latest review is not APPROVED')
+              if review.get('commit_id') != os.environ['HEAD_SHA']:
+                  raise SystemExit(f'{reviewer}: approval is not bound to exact head')
+          blocking = sorted(
+              login for login, review in latest_reviews.items()
+              if review.get('state') == 'CHANGES_REQUESTED'
+          )
+          if blocking:
+              raise SystemExit(f'blocking latest reviews remain: {blocking}')
+
+          threads = json.loads(Path(os.environ['THREADS_JSON']).read_text())['data']['repository']['pullRequest']['reviewThreads']
+          if threads['pageInfo']['hasNextPage']:
+              raise SystemExit('review thread pagination exceeds bounded verifier')
+          unresolved = [node for node in threads['nodes'] if not node['isResolved']]
+          if unresolved:
+              raise SystemExit(f'unresolved review threads: {len(unresolved)}')
+          print('PASS exact head, five workflow families, two exact-head approvals and review-thread closure')
+          PY
+
+          printf '%s' "$head" > "$RUNNER_TEMP/approved-head.txt"
+
+      - name: Merge through ordinary pull-request API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head="$(cat "$RUNNER_TEMP/approved-head.txt")"
+          result="$(gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/64/merge" \
+            -f sha="$head" \
+            -f merge_method=merge \
+            -f commit_title='feat(v1.5.0): implement mandatory control-plane vertical slice' \
+            -f commit_message='Merge only after five exact-head/prospective-merge workflow families, two exact-head approvals, no blocking latest review and no unresolved review thread. External/control blockers and authority claims remain open.')"
+          test "$(jq -r .merged <<< "$result")" = true
+          merge_sha="$(jq -r .sha <<< "$result")"
+          test "$merge_sha" != null
+          printf 'merged_head=%s\nmerge_sha=%s\n' "$head" "$merge_sha"
+          {
+            echo '## V1.5.0 integrated through verified PR path'
+            echo
+            echo "- reviewed head: \`$head\`"
+            echo "- merge commit: \`$merge_sha\`"
+            echo '- administrator bypass: not used'
+            echo '- external/control authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
