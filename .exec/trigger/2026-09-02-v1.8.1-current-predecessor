@@ -1,0 +1,5 @@
+repository=TrillionniumFoundation/HeptaBao
+stage=V1.8.1
+predecessor=codex/plan-v1.8.0-product-truth-runtime-hardening-v1
+mode=fail-closed-stacked-candidate
+authority_effect=NONE
