@@ -1,0 +1,127 @@
+name: exec V1.4.7 post-merge truth materializer
+
+on:
+  push:
+    branches:
+      - exec/v1.4.7-post-merge-truth-materializer-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1.4.7-post-merge-truth-materializer
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout execution controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prepare clean candidate from immutable V1.4.6 merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .exec/materialize_v1_4_7.py "$RUNNER_TEMP/render_plan_v1_4_7.py"
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("${{ runner.temp }}/render_plan_v1_4_7.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    facts_lines = [\n        "## Machine-verified source truth",\n        "",\n        BEGIN_FACTS,'''
+          new = '''    facts_lines = [\n        BEGIN_FACTS,'''
+          if old not in text:
+              raise SystemExit("facts prefix patch target missing")
+          text = text.replace(old, new, 1)
+          old_return = '''    return replace_marked(text, BEGIN_FACTS, END_FACTS, "\\n".join(facts_lines)).rstrip() + "\\n"'''
+          new_return = '''    facts_block = "\\n".join(facts_lines)\n    if BEGIN_FACTS in text and END_FACTS in text:\n        text = replace_marked(text, BEGIN_FACTS, END_FACTS, facts_block)\n    else:\n        text = text.rstrip() + "\\n\\n## Machine-verified source truth\\n\\n" + facts_block + "\\n"\n    return text.rstrip() + "\\n"'''
+          if old_return not in text:
+              raise SystemExit("facts return patch target missing")
+          path.write_text(text.replace(old_return, new_return, 1), encoding="utf-8")
+          PY
+          git fetch origin 54d524214df443752a2ecaeff6d4a05625bf52c7 --depth=1
+          git switch --detach 54d524214df443752a2ecaeff6d4a05625bf52c7
+          git switch -C codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          mkdir -p scripts
+          cp "$RUNNER_TEMP/render_plan_v1_4_7.py" scripts/render_plan_v1_4_7.py
+          test "$(git rev-parse HEAD)" = "54d524214df443752a2ecaeff6d4a05625bf52c7"
+          test "$(git rev-parse HEAD^{tree})" = "c22288f561fdd711e908ce8a70c0116601d519e5"
+
+      - name: Install Python dependencies
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Render V1.4.7 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python scripts/render_plan_v1_4_7.py --write
+          python scripts/render_plan_v1_4_7.py --check
+          git diff --check
+
+      - name: Validate V1.4.7 and inherited Python contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_4_7.py
+          python -m unittest discover -s tests/plan -p 'test_*v1_4_7.py' -v
+          python -m unittest discover -s tests/plan -p 'test_external_completion_evidence_v1.py' -v
+          python scripts/validate_plan_v1_4_6.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_6.py' -v
+          python scripts/validate_plan_v1_4_5.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_4_5.py' -v
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_module_documentation_v1_4_4.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Validate locked Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Commit and publish clean candidate branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test ! -e .exec
+          test ! -e .github/workflows/exec-v1.4.7-post-merge-truth-materialize.yml
+          git status --short
+          git config user.name "HeptaBao execution controller"
+          git config user.email "heptabao-exec@users.noreply.github.com"
+          git add --all
+          git commit -m "docs(v1.4.7): bind post-merge module truth and external admission"
+          candidate_sha="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          git push --force origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          printf 'candidate_sha=%s\ncandidate_tree=%s\n' "$candidate_sha" "$candidate_tree" | tee "$RUNNER_TEMP/v1.4.7-candidate.txt"
+          {
+            echo '## V1.4.7 clean candidate published'
+            echo
+            echo "- branch: \`codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1\`"
+            echo "- commit: \`$candidate_sha\`"
+            echo "- tree: \`$candidate_tree\`"
+            echo '- full inherited Python and Rust 1.98 matrix: PASS'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
