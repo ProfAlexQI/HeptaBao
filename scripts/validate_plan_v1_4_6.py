@@ -48,9 +48,13 @@ def load_yaml(root: Path, path: str):
 
 def require_tokens(errors: list[str], root: Path, path: str, tokens: tuple[str, ...]) -> None:
     value = text(root, path)
+    compact_value = "".join(value.split()) if path.endswith(".rs") else value
     for token in tokens:
-        if token not in value:
-            errors.append(f"{path} missing required semantic token {token!r}")
+        if token in value:
+            continue
+        if path.endswith(".rs") and "".join(token.split()) in compact_value:
+            continue
+        errors.append(f"{path} missing required semantic token {token!r}")
 
 
 def forbid_tokens(errors: list[str], root: Path, path: str, tokens: tuple[str, ...]) -> None:
@@ -77,11 +81,20 @@ def validate(root: Path) -> list[str]:
         "crates/heptabao-rollback-anchor/src/lib.rs",
         (
             "pub enum AnchorFenceError",
+            "CheckpointNotCurrent",
+            "ProviderBeforeEntry",
+            "OutcomeUnknownAfterEntry",
             "fn with_current_fence<T, F>",
             "F: FnOnce() -> T",
-            "AnchorFenceError::CheckpointNotCurrent",
+            "AnchorCoordinatorError::FenceOutcomeUnknown",
             "current_checkpoint_fence_rejects_stale_checkpoint",
         ),
+    )
+    forbid_tokens(
+        errors,
+        root,
+        "crates/heptabao-rollback-anchor/src/lib.rs",
+        ("AnchorFenceError::Provider(error)",),
     )
     require_tokens(
         errors,
@@ -90,8 +103,12 @@ def validate(root: Path) -> list[str]:
         (
             "pub enum StageFailure",
             "fn stage_if_empty(",
-            "anchor.with_current_fence(&publish_checkpoint",
+            "with_current_fence(&publish_checkpoint",
+            "map_anchor_restore_error",
+            "AnchorFenceOutcomeUnknown",
+            "CheckpointAuthenticator",
             "anchor_fence_is_held_across_target_publication",
+            "post_entry_anchor_fence_failure_is_outcome_unknown",
             "PublishReceiptMismatchOutcomeUnknown",
         ),
     )
@@ -103,6 +120,7 @@ def validate(root: Path) -> list[str]:
             "fn is_empty(&self) -> Result<bool",
             "fn stage(&mut self, image: AuthorizedRecoveryImage)",
             "anchor.verify_current(&publish_checkpoint)",
+            ".map_err(|_| {\n                RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)",
         ),
     )
     require_tokens(
@@ -195,7 +213,7 @@ def validate(root: Path) -> list[str]:
     blocker = load_yaml(root, "planning/HEPTABAO_BLOCKER_REGISTER_V1_4_6.yaml")
     status = load_yaml(root, "planning/HEPTABAO_V1_4_6_AUTHORITATIVE_RECOVERY_STATUS.yaml")
     manifest = load_yaml(root, "planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_6.yaml")
-    expected_ids = [f"HB-BLK-REPO-{number:03d}" for number in range(49, 57)]
+    expected_ids = [f"HB-BLK-REPO-{number:03d}" for number in range(49, 59)]
     actual_ids = [item.get("id") for item in blocker.get("added_blockers", [])]
     if actual_ids != expected_ids:
         errors.append(f"V1.4.6 blocker set drifted: {actual_ids!r}")
@@ -214,6 +232,42 @@ def validate(root: Path) -> list[str]:
         if not isinstance(path, str) or not (root / path).is_file():
             errors.append(f"V1.4.6 manifest path missing: {path!r}")
 
+    implementation = status.get("implementation") or {}
+    for key in (
+        "phase_aware_anchor_fence_error",
+        "typed_anchor_contract_provider_and_authenticator_errors",
+        "post_entry_fence_uncertainty_hostile_test",
+        "rustfmt_stable_inherited_semantic_validation",
+    ):
+        if implementation.get(key) != "IMPLEMENTED_SOURCE":
+            errors.append(f"status missing implemented source state for {key!r}")
+
+    require_tokens(
+        errors,
+        root,
+        "scripts/validate_plan_v1_4_5.py",
+        (
+            'compact_value = "".join(value.split()) if path.endswith(".rs") else value',
+            '"".join(token.split()) in compact_value',
+        ),
+    )
+    require_tokens(
+        errors,
+        root,
+        "tests/plan/test_plan_v1_4_5.py",
+        ("test_rustfmt_whitespace_is_semantically_transparent",),
+    )
+    require_tokens(
+        errors,
+        root,
+        "tests/plan/test_plan_v1_4_6.py",
+        (
+            "test_post_entry_fence_error_downgrade_is_rejected",
+            "test_phase_aware_anchor_error_removal_is_rejected",
+            "test_rustfmt_whitespace_is_semantically_transparent",
+        ),
+    )
+
     require_tokens(
         errors,
         root,
@@ -223,6 +277,26 @@ def validate(root: Path) -> list[str]:
             "`O_CLOEXEC` closes inherited",
             "descriptors at exec rather than at fork",
             "fail-closed `WriterBusy`",
+        ),
+    )
+    require_tokens(
+        errors,
+        root,
+        "docs/modules/heptabao-rollback-anchor.md",
+        (
+            "V1.4.6 phase-aware fence completion",
+            "ProviderBeforeEntry",
+            "OutcomeUnknownAfterEntry",
+        ),
+    )
+    require_tokens(
+        errors,
+        root,
+        "docs/modules/heptabao-recovery-core.md",
+        (
+            "V1.4.6 outer-fence outcome preservation",
+            "AnchorFenceOutcomeUnknown",
+            "reconcile both external anchor and target",
         ),
     )
 
@@ -238,7 +312,19 @@ def validate(root: Path) -> list[str]:
             "Storage crash matrix",
             "Journal append-unknown matrix",
             "CI provenance contract",
+            "OutcomeUnknownAfterEntry",
+            "post_entry_anchor_fence_failure_is_outcome_unknown",
             "Known limitations",
+        ),
+    )
+    require_tokens(
+        errors,
+        root,
+        "docs/plan/HEPTABAO_PLAN_V1_4_6_AUTHORITATIVE_RECOVERY_CLOSURE.md",
+        (
+            "phase-aware",
+            "HB-BLK-REPO-049` through `HB-BLK-REPO-058",
+            "33574894762",
         ),
     )
     require_tokens(
