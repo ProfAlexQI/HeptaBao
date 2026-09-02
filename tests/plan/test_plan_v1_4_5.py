@@ -37,6 +37,23 @@ class PlanV145HostileTests(unittest.TestCase):
     def test_current_tree_passes(self) -> None:
         self.assertEqual(VALIDATOR.validate(ROOT), [])
 
+    def test_rustfmt_whitespace_is_semantically_transparent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "sample.rs"
+            path.write_text(
+                "fn sample() { anchor\n    .verify_current(); }\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            VALIDATOR.require_tokens(
+                errors,
+                root,
+                "sample.rs",
+                ("anchor.verify_current",),
+            )
+            self.assertEqual(errors, [])
+
     def test_raw_durable_store_escape_is_rejected(self) -> None:
         self.assert_rejected(
             "crates/heptabao-durable-core/src/lib.rs",
