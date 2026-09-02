@@ -1,0 +1,136 @@
+name: exec PR63 final tuple slim observer
+
+on:
+  push:
+    branches: [exec/pr63-final-tuple-slim-observer-v1]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: exec-pr63-final-tuple-slim-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: pr63-final / ${{ matrix.source_kind }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        source_kind: [exact-head, prospective-merge]
+    env:
+      SOURCE_KIND: ${{ matrix.source_kind }}
+      SOURCE_HEAD: 8752e2797d3939b3d0f824ac4728f7b498707612
+      SOURCE_HEAD_TREE: 1b08423e40fdcab96256312e4ad1092de207d53d
+      SOURCE_MERGE: fd814cb84899ca291db7d2f9f6b129fede27d6e4
+      SOURCE_MERGE_TREE: 1b08423e40fdcab96256312e4ad1092de207d53d
+      SOURCE_BASE: 54d524214df443752a2ecaeff6d4a05625bf52c7
+      CARGO_TARGET_DIR: /tmp/heptabao-pr63-final-${{ matrix.source_kind }}
+    steps:
+      - name: Checkout immutable observer wrapper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind wrapper and detach exact source object
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_HEAD"
+          mapfile -t changed < <(git diff --name-only "$SOURCE_HEAD" "$GITHUB_SHA")
+          test "${#changed[@]}" = 1
+          test "${changed[0]}" = ".github/workflows/exec-pr63-final-tuple-slim-observer.yml"
+
+          if [[ "$SOURCE_KIND" == "prospective-merge" ]]; then
+            git fetch --no-tags origin \
+              "refs/pull/63/merge:refs/remotes/pull/63/merge"
+            test "$(git rev-parse refs/remotes/pull/63/merge)" = "$SOURCE_MERGE"
+            source_sha="$SOURCE_MERGE"
+            expected_tree="$SOURCE_MERGE_TREE"
+          else
+            source_sha="$SOURCE_HEAD"
+            expected_tree="$SOURCE_HEAD_TREE"
+          fi
+
+          git checkout --detach "$source_sha"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$expected_tree"
+          if [[ "$SOURCE_KIND" == "prospective-merge" ]]; then
+            read -r merge parent_one parent_two extra \
+              <<<"$(git rev-list --parents -n 1 HEAD)"
+            test "$merge" = "$SOURCE_MERGE"
+            test "$parent_one" = "$SOURCE_BASE"
+            test "$parent_two" = "$SOURCE_HEAD"
+            test -z "${extra:-}"
+          fi
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'source_kind=%s\nsource_sha=%s\ntree=%s\n' \
+            "$SOURCE_KIND" "$source_sha" "$expected_tree"
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Validate V1.4.7 and complete inherited Python surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            --requirement requirements-plan.txt
+          python scripts/render_plan_v1_4_7.py --check
+          python scripts/validate_plan_v1_4_7.py
+          python scripts/validate_plan_v1_4_6.py
+          python scripts/validate_plan_v1_4_5.py
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m compileall -q scripts tests
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              https://sh.rustup.rs -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" \
+              -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.98.0 --profile minimal \
+            --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Validate exact locked Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Confirm non-authority observer boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -R "authority_effect: NONE" \
+            planning/HEPTABAO_*V1_4_7*.yaml \
+            planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
+          ! grep -R \
+            "production_authority: true\|release_authority: true\|migration_authority: true\|compatibility_claim: true\|qualification: true" \
+            planning/HEPTABAO_*V1_4_7*.yaml \
+            planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml
+          echo "authority_effect=NONE"
