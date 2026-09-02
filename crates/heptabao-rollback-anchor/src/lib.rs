@@ -275,8 +275,14 @@ pub enum AnchorFenceError<E>
 where
     E: Error + Send + Sync + 'static,
 {
+    /// The exact checkpoint comparison failed before `operation` was invoked.
     CheckpointNotCurrent,
-    Provider(E),
+    /// The provider failed before `operation` was invoked.
+    ProviderBeforeEntry(E),
+    /// `operation` was invoked, but the provider cannot prove that the fence
+    /// remained valid and completed cleanly after entry. The operation result
+    /// is deliberately discarded and callers must reconcile before retry.
+    OutcomeUnknownAfterEntry(E),
 }
 
 impl<E> fmt::Display for AnchorFenceError<E>
@@ -288,12 +294,31 @@ where
             Self::CheckpointNotCurrent => {
                 formatter.write_str("rollback checkpoint is no longer current")
             }
-            Self::Provider(error) => write!(formatter, "rollback anchor fence failure: {error}"),
+            Self::ProviderBeforeEntry(error) => {
+                write!(
+                    formatter,
+                    "rollback anchor fence failed before operation entry: {error}"
+                )
+            }
+            Self::OutcomeUnknownAfterEntry(error) => write!(
+                formatter,
+                "rollback anchor fence outcome is unknown after operation entry: {error}"
+            ),
         }
     }
 }
 
-impl<E> Error for AnchorFenceError<E> where E: Error + Send + Sync + 'static {}
+impl<E> Error for AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CheckpointNotCurrent => None,
+            Self::ProviderBeforeEntry(error) | Self::OutcomeUnknownAfterEntry(error) => Some(error),
+        }
+    }
+}
 
 pub trait RollbackAnchor: fmt::Debug + Send {
     type Error: Error + Send + Sync + 'static;
@@ -303,6 +328,12 @@ pub trait RollbackAnchor: fmt::Debug + Send {
     /// Executes `operation` only while `expected` is the exact current
     /// checkpoint and while the provider's anchor-advance serialization
     /// primitive remains held. `compare_and_swap` must use the same primitive.
+    ///
+    /// `CheckpointNotCurrent` and `ProviderBeforeEntry` guarantee that
+    /// `operation` was not invoked. Once `operation` has been invoked, any
+    /// provider inability to prove fence validity or clean completion must be
+    /// returned as `OutcomeUnknownAfterEntry`; it must never be relabelled as a
+    /// safe pre-entry failure.
     fn with_current_fence<T, F>(
         &mut self,
         expected: &RecoveryCheckpoint,
@@ -475,7 +506,12 @@ where
                 AnchorFenceError::CheckpointNotCurrent => {
                     AnchorCoordinatorError::Contract(AnchorContractError::CheckpointNotCurrent)
                 }
-                AnchorFenceError::Provider(error) => AnchorCoordinatorError::Anchor(error),
+                AnchorFenceError::ProviderBeforeEntry(error) => {
+                    AnchorCoordinatorError::Anchor(error)
+                }
+                AnchorFenceError::OutcomeUnknownAfterEntry(error) => {
+                    AnchorCoordinatorError::FenceOutcomeUnknown(error)
+                }
             })
     }
 
@@ -555,6 +591,7 @@ where
 {
     Contract(AnchorContractError),
     Anchor(A),
+    FenceOutcomeUnknown(A),
     Authenticator(P),
 }
 
@@ -567,6 +604,10 @@ where
         match self {
             Self::Contract(error) => write!(formatter, "rollback anchor contract failure: {error}"),
             Self::Anchor(error) => write!(formatter, "rollback anchor provider failure: {error}"),
+            Self::FenceOutcomeUnknown(error) => write!(
+                formatter,
+                "rollback anchor fence may have failed after operation entry; reconcile before retry: {error}"
+            ),
             Self::Authenticator(error) => {
                 write!(formatter, "checkpoint authenticator failure: {error}")
             }

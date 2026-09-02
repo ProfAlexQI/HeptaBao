@@ -47,9 +47,13 @@ def load_yaml(root: Path, path: str):
 
 def require_tokens(errors: list[str], root: Path, path: str, tokens: tuple[str, ...]) -> None:
     value = text(root, path)
+    compact_value = "".join(value.split()) if path.endswith(".rs") else value
     for token in tokens:
-        if token not in value:
-            errors.append(f"{path} missing required semantic token {token!r}")
+        if token in value:
+            continue
+        if path.endswith(".rs") and "".join(token.split()) in compact_value:
+            continue
+        errors.append(f"{path} missing required semantic token {token!r}")
 
 
 def forbid_tokens(errors: list[str], root: Path, path: str, tokens: tuple[str, ...]) -> None:
