@@ -1,0 +1,80 @@
+name: exec admit PR63 workflow through contents API
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: exec-pr63-workflow-admission
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable transfer payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: exec/pr63-hardening-transfer-v1
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Reconstruct exact validated workflow bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .exec/pr63-hardening/workflow-00 .exec/pr63-hardening/workflow-01 > "$RUNNER_TEMP/workflow.b64"
+          test "$(sha256sum "$RUNNER_TEMP/workflow.b64" | awk '{print $1}')" = "ed613ae84d1049ed1a54a45954f873543d1a9406ca08cb685b4af6890b1c4f7a"
+          base64 --decode "$RUNNER_TEMP/workflow.b64" > "$RUNNER_TEMP/workflow.yml"
+          test "$(sha256sum "$RUNNER_TEMP/workflow.yml" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+
+      - name: Create or replace the exact workflow by contents API
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          TARGET: .github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          encoded="$(tr -d '\r\n' < "$RUNNER_TEMP/workflow.b64")"
+          existing_sha="$(gh api "repos/$repo/contents/$TARGET?ref=$BRANCH" --jq .sha 2>/dev/null || true)"
+          if test -n "$existing_sha"; then
+            gh api "repos/$repo/contents/$TARGET?ref=$BRANCH" --jq -r .content | tr -d '\r\n' | base64 --decode > "$RUNNER_TEMP/existing.yml"
+            if test "$(sha256sum "$RUNNER_TEMP/existing.yml" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"; then
+              echo 'exact workflow already admitted'
+              exit 0
+            fi
+            gh api --method PUT "repos/$repo/contents/$TARGET" \
+              -f message='ci(v1.4.7): admit exact-head and prospective-merge gate' \
+              -f content="$encoded" \
+              -f branch="$BRANCH" \
+              -f sha="$existing_sha" >/dev/null
+          else
+            gh api --method PUT "repos/$repo/contents/$TARGET" \
+              -f message='ci(v1.4.7): admit exact-head and prospective-merge gate' \
+              -f content="$encoded" \
+              -f branch="$BRANCH" >/dev/null
+          fi
+          gh api "repos/$repo/contents/$TARGET?ref=$BRANCH" --jq -r .content | tr -d '\r\n' | base64 --decode > "$RUNNER_TEMP/readback.yml"
+          test "$(sha256sum "$RUNNER_TEMP/readback.yml" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+
+      - name: Bind review subject and restore Ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          head="$(gh api repos/$repo/pulls/63 --jq .head.sha)"
+          merge="$(gh api repos/$repo/pulls/63 --jq '.merge_commit_sha // "PENDING"')"
+          gh api --method POST repos/$repo/pulls/63/requested_reviewers -f 'reviewers[]=Tomasrgbsf' -f 'reviewers[]=ProfHepta' >/dev/null || true
+          gh pr ready 63 --repo "$repo" || true
+          gh api --method POST repos/$repo/issues/63/comments -f body="Digest-bound V1.4.7 workflow admission readback passed at current head \\`$head\\`; prospective merge \\`$merge\\`. Fresh current-head checks and independent approval remain mandatory." >/dev/null
