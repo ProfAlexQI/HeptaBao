@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -30,8 +31,7 @@ def discover_pull_request(
     integration_branch: str,
 ) -> int:
     matches: list[int] = []
-    page = 1
-    while True:
+    for page in range(1, 101):
         query = urllib.parse.urlencode(
             {
                 "state": "closed",
@@ -59,9 +59,9 @@ def discover_pull_request(
                     matches.append(number)
         if len(pulls) < 100:
             break
-        page += 1
-        if page > 100:
-            raise SystemExit("pull-request discovery exceeded bounded pagination")
+    else:
+        raise SystemExit("pull-request discovery exceeded bounded pagination")
+
     unique = sorted(set(matches))
     if len(unique) != 1:
         raise SystemExit(
@@ -74,7 +74,11 @@ def discover_pull_request(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
-    parser.add_argument("--pr", type=int)
+    parser.add_argument(
+        "--pr",
+        type=int,
+        help="legacy non-authoritative hint; exact branch/base discovery is authoritative",
+    )
     parser.add_argument("--expected-head-branch", required=True)
     parser.add_argument("--integration-branch", required=True)
     parser.add_argument("--required-reviewer", action="append", default=[])
@@ -84,12 +88,15 @@ def main() -> int:
     if not args.repository:
         raise SystemExit("repository is required")
 
-    pr_number = args.pr
-    if pr_number is None:
-        pr_number = discover_pull_request(
-            args.repository,
-            args.expected_head_branch,
-            args.integration_branch,
+    pr_number = discover_pull_request(
+        args.repository,
+        args.expected_head_branch,
+        args.integration_branch,
+    )
+    if args.pr is not None and args.pr != pr_number:
+        print(
+            f"legacy PR hint #{args.pr} superseded by exact discovered PR #{pr_number}",
+            file=sys.stderr,
         )
 
     pull = gh(args.repository, f"pulls/{pr_number}")
@@ -211,6 +218,7 @@ def main() -> int:
     value = {
         "repository": args.repository,
         "pull_request": pr_number,
+        "legacy_pr_hint": args.pr,
         "base_branch": args.integration_branch,
         "base_commit": base_sha,
         "reviewed_head": reviewed_head,
