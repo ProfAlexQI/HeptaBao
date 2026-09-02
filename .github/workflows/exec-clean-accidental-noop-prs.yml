@@ -1,0 +1,29 @@
+name: exec clean accidental noop PRs
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Close only exact accidental noop PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate repos/${GITHUB_REPOSITORY}/pulls?state=open --jq '.[] | select(.title == "noop") | select(.head.ref == "exec/pr63-hardening-transfer-v1" or .head.ref == "codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1") | .number' > "$RUNNER_TEMP/noop-prs"
+          while IFS= read -r number; do
+            test -n "$number" || continue
+            gh api --method PATCH repos/${GITHUB_REPOSITORY}/pulls/$number -f state=closed >/dev/null
+            gh api --method POST repos/${GITHUB_REPOSITORY}/issues/$number/comments -f body='Closed automatically: accidental no-op control-plane probe; no source or authority effect.' >/dev/null
+          done < "$RUNNER_TEMP/noop-prs"
