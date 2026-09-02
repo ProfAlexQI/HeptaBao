@@ -119,7 +119,7 @@ jobs:
           final_workflow=.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
           test "$(sha256sum "$final_workflow" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
           cp "$final_workflow" "$RUNNER_TEMP/validated-final-workflow.yml"
-          git checkout HEAD -- "$final_workflow"
+          rm -- "$final_workflow"
           git add --all
           test -z "$(git diff --cached --name-only | grep '^.github/workflows/' || true)"
           git config user.name "HeptaBao execution controller"
