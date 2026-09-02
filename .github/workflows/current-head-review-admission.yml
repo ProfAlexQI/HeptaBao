@@ -2,8 +2,8 @@ name: current-head review admission
 
 # This gate is intentionally post-review. Head synchronization runs the technical
 # exact-head and prospective-merge workflows; after an eligible reviewer approves
-# that unchanged head, a pull-request metadata edit triggers this admission gate
-# without moving the reviewed source SHA.
+# that unchanged head, a pull-request metadata edit adds the exact-head admission
+# marker and triggers this gate without moving the reviewed source SHA.
 on:
   pull_request:
     branches:
@@ -17,7 +17,12 @@ permissions:
 
 jobs:
   current-head-review-admission:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(
+        github.event.pull_request.body,
+        format('<!-- current-head-review-admission:{0} -->', github.event.pull_request.head.sha)
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -25,6 +30,7 @@ jobs:
         env:
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BODY: ${{ github.event.pull_request.body }}
           REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -33,7 +39,12 @@ jobs:
           live_head="$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .head.sha)"
           test "$live_head" = "$EVENT_HEAD_SHA"
           test "$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .draft)" = false
-          printf 'pr=%s\nunchanged_head=%s\n' "$EVENT_PR_NUMBER" "$EVENT_HEAD_SHA"
+          marker="<!-- current-head-review-admission:$EVENT_HEAD_SHA -->"
+          case "$EVENT_BODY" in
+            *"$marker"*) ;;
+            *) echo "missing exact-head admission marker" >&2; exit 1 ;;
+          esac
+          printf 'pr=%s\nunchanged_head=%s\nmarker=%s\n' "$EVENT_PR_NUMBER" "$EVENT_HEAD_SHA" "$marker"
 
       - name: Require a fresh independent approval and no current-head change request
         env:
