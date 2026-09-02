@@ -1,0 +1,92 @@
+name: exec merge PR63 only when admitted
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+
+concurrency:
+  group: exec-merge-pr63-exact-head
+  cancel-in-progress: false
+
+jobs:
+  merge-if-admitted:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Evaluate exact current state and merge normally only on full admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          pr="$RUNNER_TEMP/pr.json"
+          reviews="$RUNNER_TEMP/reviews.json"
+          checks="$RUNNER_TEMP/checks.json"
+          gh api "repos/$repo/pulls/63" > "$pr"
+          state="$(jq -r .state "$pr")"
+          merged="$(jq -r .merged "$pr")"
+          if test "$merged" = true; then
+            echo 'PR63 already merged normally; no action'
+            exit 0
+          fi
+          test "$state" = open
+          test "$(jq -r .draft "$pr")" = false
+          test "$(jq -r .mergeable "$pr")" = true
+          head="$(jq -r .head.sha "$pr")"
+          author="$(jq -r .user.login "$pr")"
+          gh api --paginate "repos/$repo/pulls/63/reviews?per_page=100" > "$reviews"
+          gh api "repos/$repo/commits/$head/check-runs?per_page=100" > "$checks"
+          python3 - "$reviews" "$checks" "$head" "$author" <<'PY'
+          import json, sys
+          reviews_path, checks_path, head, author = sys.argv[1:]
+          reviews = json.load(open(reviews_path, encoding='utf-8'))
+          latest = {}
+          for review in reviews:
+              user = (review.get('user') or {}).get('login')
+              if user:
+                  latest[user] = review
+          changes = []
+          approvals = []
+          for user, review in latest.items():
+              if review.get('commit_id') != head:
+                  continue
+              if review.get('state') == 'CHANGES_REQUESTED':
+                  changes.append(user)
+              if review.get('state') == 'APPROVED' and user != author and not user.endswith('[bot]'):
+                  approvals.append(user)
+          if changes:
+              raise SystemExit('current-head change requests: ' + ', '.join(sorted(changes)))
+          if not approvals:
+              raise SystemExit('no fresh non-author approval for current head')
+          required = {
+              'current-head-review-admission',
+              'v1.4.7 / pull_request / exact-head',
+              'v1.4.7 / pull_request / prospective-merge',
+          }
+          observed = {}
+          for check in json.load(open(checks_path, encoding='utf-8')).get('check_runs', []):
+              if check.get('name') in required:
+                  observed[check['name']] = (check.get('status'), check.get('conclusion'))
+          missing = required - set(observed)
+          if missing:
+              raise SystemExit('missing exact required checks: ' + ', '.join(sorted(missing)))
+          bad = {name: value for name, value in observed.items() if value != ('completed', 'success')}
+          if bad:
+              raise SystemExit('required checks are not successful: ' + repr(bad))
+          print('admitted approval(s): ' + ', '.join(sorted(approvals)))
+          PY
+          gh pr merge 63 --repo "$repo" --merge --match-head-commit "$head"
+          gh api "repos/$repo/pulls/63" > "$RUNNER_TEMP/after.json"
+          test "$(jq -r .merged "$RUNNER_TEMP/after.json")" = true
+          merge="$(jq -r .merge_commit_sha "$RUNNER_TEMP/after.json")"
+          integration="$(gh api "repos/$repo/git/ref/heads/integration/v1.4.4-technical-candidate" --jq .object.sha)"
+          test "$integration" = "$merge"
+          gh api --method POST "repos/$repo/issues/63/comments" -f body="PR #63 merged through the ordinary exact-head path at \\`$merge\\`. The merge creates no qualification, compatibility, production, migration or release authority; external and live-control blockers remain independently admitted facts." >/dev/null
