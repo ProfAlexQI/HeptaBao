@@ -1,0 +1,322 @@
+name: exec V1.7.0 generator and asset preflight
+
+on:
+  push:
+    branches: [exec/v1.7.0-service-materializer-v1]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-v1.7.0-preflight-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout immutable execution source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Reconstruct authenticated generator and patch assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          chunks = [
+              Path(f".exec/v1_7_payload/materializer-{index}").read_text(
+                  encoding="utf-8"
+              )
+              for index in ("00", "01", "02")
+          ]
+          encoded = "".join(chunks).encode()
+          if hashlib.sha256(encoded).hexdigest() != (
+              "a141af7f877da1ddfbb75ea02f12b805"
+              "193d4a03099a8d1760baba3fd2680511"
+          ):
+              raise SystemExit("encoded materializer digest mismatch")
+          source = gzip.decompress(base64.b64decode(encoded))
+          if hashlib.sha256(source).hexdigest() != (
+              "ce077dad259474dc6f978a2f7a2d8e6f"
+              "664244eef40ca331058c6a363df9ddae"
+          ):
+              raise SystemExit("materializer source digest mismatch")
+          Path("/tmp/materialize_v1_7_0.py").write_bytes(source)
+          PY
+          cp -R .exec/v1_7_assets /tmp/v1_7_assets
+          python3 .exec/patch_v1_7_assets.py /tmp/v1_7_assets
+          python3 .exec/patch_v1_7_assets_v2.py /tmp/v1_7_assets
+          python3 -m py_compile \
+            /tmp/materialize_v1_7_0.py \
+            .exec/patch_v1_7_assets.py \
+            .exec/patch_v1_7_assets_v2.py \
+            .exec/admit_reviewed_predecessor.py
+
+      - name: Build isolated compile harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=/tmp/v170-preflight
+          rm -rf "$root"
+          mkdir -p "$root"/crates
+          cp .exec/v1_7_assets/candidate-workflow.yml.tmpl \
+            "$root/candidate-workflow.yml.tmpl"
+          for pair in \
+            heptabao-http-api:http_api.rs \
+            heptabao-ha-core:ha_core.rs \
+            heptabao-plugin-host:plugin_host.rs \
+            heptabao-compat-runner:compat_runner.rs \
+            heptabao-client-tools:client_tools.rs
+          do
+            crate="${pair%%:*}"
+            source="${pair#*:}"
+            mkdir -p "$root/crates/$crate/src"
+            cp "/tmp/v1_7_assets/$source" "$root/crates/$crate/src/lib.rs"
+          done
+          mkdir -p \
+            "$root/crates/heptabao-kms-contracts/src" \
+            "$root/crates/heptabao-plugin-contracts/src"
+
+          cat > "$root/Cargo.toml" <<'TOML'
+          [workspace]
+          resolver = "3"
+          members = ["crates/*"]
+
+          [workspace.package]
+          edition = "2024"
+          rust-version = "1.98"
+
+          [workspace.lints.rust]
+          unsafe_code = "forbid"
+          unused_must_use = "deny"
+
+          [workspace.lints.clippy]
+          all = "warn"
+          expect_used = "deny"
+          panic = "deny"
+          unwrap_used = "deny"
+          TOML
+
+          cat > "$root/crates/heptabao-kms-contracts/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-kms-contracts"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+
+          [lints]
+          workspace = true
+          TOML
+          cat > "$root/crates/heptabao-kms-contracts/src/lib.rs" <<'RS'
+          #![forbid(unsafe_code)]
+
+          #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+          pub struct Digest32([u8; 32]);
+
+          impl Digest32 {
+              pub fn as_bytes(&self) -> &[u8; 32] {
+                  &self.0
+              }
+
+              pub fn to_hex(self) -> String {
+                  const HEX: &[u8; 16] = b"0123456789abcdef";
+                  let mut output = String::with_capacity(64);
+                  for byte in self.0 {
+                      output.push(char::from(HEX[usize::from(byte >> 4)]));
+                      output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+                  }
+                  output
+              }
+          }
+
+          pub fn sha256(value: &[u8]) -> Digest32 {
+              let mut output = [0_u8; 32];
+              for (index, byte) in value.iter().enumerate() {
+                  let slot = index % 32;
+                  output[slot] = output[slot]
+                      .wrapping_add(*byte)
+                      .wrapping_add((index as u8).rotate_left((slot % 8) as u32));
+              }
+              Digest32(output)
+          }
+          RS
+
+          cat > "$root/crates/heptabao-plugin-contracts/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-plugin-contracts"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+
+          [lints]
+          workspace = true
+          TOML
+          cat > "$root/crates/heptabao-plugin-contracts/src/lib.rs" <<'RS'
+          #![forbid(unsafe_code)]
+
+          use std::collections::BTreeSet;
+
+          #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+          pub enum PluginCapability {
+              ReadRequest,
+              ExternalNetwork,
+          }
+
+          #[derive(Clone, Debug, Eq, PartialEq)]
+          pub enum PluginContractError {
+              InvalidIdentity,
+              InvalidDigest,
+              InvalidProtocol,
+              EmptyCapabilities,
+          }
+
+          #[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct PluginId(String);
+
+          impl PluginId {
+              pub fn parse(value: &str) -> Result<Self, PluginContractError> {
+                  if value.is_empty() {
+                      Err(PluginContractError::InvalidIdentity)
+                  } else {
+                      Ok(Self(value.to_owned()))
+                  }
+              }
+          }
+
+          #[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct PluginDigest(String);
+
+          impl PluginDigest {
+              pub fn parse(value: &str) -> Result<Self, PluginContractError> {
+                  if !value.starts_with("sha256:") || value.len() != 71 {
+                      Err(PluginContractError::InvalidDigest)
+                  } else {
+                      Ok(Self(value.to_owned()))
+                  }
+              }
+
+              pub fn as_str(&self) -> &str {
+                  &self.0
+              }
+          }
+
+          #[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct PluginDescriptor {
+              _id: PluginId,
+              digest: PluginDigest,
+              _protocol_version: u16,
+              capabilities: BTreeSet<PluginCapability>,
+          }
+
+          impl PluginDescriptor {
+              pub fn new(
+                  id: PluginId,
+                  digest: PluginDigest,
+                  protocol_version: u16,
+                  capabilities: BTreeSet<PluginCapability>,
+              ) -> Result<Self, PluginContractError> {
+                  if protocol_version == 0 {
+                      return Err(PluginContractError::InvalidProtocol);
+                  }
+                  if capabilities.is_empty() {
+                      return Err(PluginContractError::EmptyCapabilities);
+                  }
+                  Ok(Self {
+                      _id: id,
+                      digest,
+                      _protocol_version: protocol_version,
+                      capabilities,
+                  })
+              }
+
+              pub fn digest(&self) -> &PluginDigest {
+                  &self.digest
+              }
+
+              pub fn capabilities(&self) -> &BTreeSet<PluginCapability> {
+                  &self.capabilities
+              }
+          }
+          RS
+
+          cat > "$root/crates/heptabao-http-api/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-http-api"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+          [lints]
+          workspace = true
+          TOML
+          cat > "$root/crates/heptabao-ha-core/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-ha-core"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+          [lints]
+          workspace = true
+          TOML
+          cat > "$root/crates/heptabao-plugin-host/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-plugin-host"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+          [lints]
+          workspace = true
+          [dependencies]
+          heptabao-kms-contracts = { path = "../heptabao-kms-contracts" }
+          heptabao-plugin-contracts = { path = "../heptabao-plugin-contracts" }
+          TOML
+          cat > "$root/crates/heptabao-compat-runner/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-compat-runner"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+          [lints]
+          workspace = true
+          [dependencies]
+          heptabao-kms-contracts = { path = "../heptabao-kms-contracts" }
+          TOML
+          cat > "$root/crates/heptabao-client-tools/Cargo.toml" <<'TOML'
+          [package]
+          name = "heptabao-client-tools"
+          version = "0.1.0"
+          edition = "2024"
+          rust-version = "1.98"
+          publish = false
+          [lints]
+          workspace = true
+          [dependencies]
+          heptabao-http-api = { path = "../heptabao-http-api" }
+          TOML
+
+      - name: Run exact Rust 1.98 asset tests and strict Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 \
+            --profile minimal --component rustfmt --component clippy
+          cd /tmp/v170-preflight
+          cargo +1.98.0 generate-lockfile --offline
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          echo "authority_effect=NONE"
