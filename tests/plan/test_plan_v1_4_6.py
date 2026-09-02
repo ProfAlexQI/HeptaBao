@@ -37,6 +37,23 @@ class PlanV146HostileTests(unittest.TestCase):
     def test_current_tree_passes(self) -> None:
         self.assertEqual(VALIDATOR.validate(ROOT), [])
 
+    def test_rustfmt_whitespace_is_semantically_transparent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "sample.rs"
+            path.write_text(
+                "fn sample() { anchor\n    .with_current_fence(); }\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            VALIDATOR.require_tokens(
+                errors,
+                root,
+                "sample.rs",
+                ("anchor.with_current_fence",),
+            )
+            self.assertEqual(errors, [])
+
     def test_anchor_fence_removal_is_rejected(self) -> None:
         self.assert_rejected(
             "crates/heptabao-rollback-anchor/src/lib.rs",
@@ -44,6 +61,30 @@ class PlanV146HostileTests(unittest.TestCase):
                 path.read_text(encoding="utf-8").replace(
                     "fn with_current_fence<T, F>",
                     "fn removed_current_fence<T, F>",
+                ),
+                encoding="utf-8",
+            ),
+        )
+
+    def test_phase_aware_anchor_error_removal_is_rejected(self) -> None:
+        self.assert_rejected(
+            "crates/heptabao-rollback-anchor/src/lib.rs",
+            lambda path: path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "OutcomeUnknownAfterEntry",
+                    "RemovedPostEntryFenceState",
+                ),
+                encoding="utf-8",
+            ),
+        )
+
+    def test_post_entry_fence_error_downgrade_is_rejected(self) -> None:
+        self.assert_rejected(
+            "crates/heptabao-recovery-core/src/lib.rs",
+            lambda path: path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "AnchorFenceOutcomeUnknown",
+                    "CheckpointNotAnchored",
                 ),
                 encoding="utf-8",
             ),
