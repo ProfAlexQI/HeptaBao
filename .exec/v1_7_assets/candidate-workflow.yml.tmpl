@@ -31,7 +31,7 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       V170_BASELINE: __V170_BASELINE__
-      CARGO_TARGET_DIR: ${{ runner.temp }}/heptabao-v170-target-${{ matrix.source_kind }}
+      CARGO_TARGET_DIR: /tmp/heptabao-v170-target-${{ matrix.source_kind }}
     steps:
       - name: Checkout immutable source identity
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
