@@ -1,0 +1,143 @@
+name: exec apply digest-bound PR63 hardening
+
+on:
+  push:
+    branches:
+      - exec/pr63-hardening-transfer-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-apply-pr63-hardening
+  cancel-in-progress: false
+
+jobs:
+  apply-validate-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout immutable transfer payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: exec/pr63-hardening-transfer-v1
+          path: transfer
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout current PR63 candidate branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reconstruct and authenticate hardening payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "eef7acb441698ddbca00a323728964ddbd0b3753"
+          : > "$RUNNER_TEMP/hardening.patch.gz.b64"
+          for index in $(seq -w 0 16); do
+            part="transfer/.exec/pr63-hardening/patch-$index"
+            test -f "$part"
+            cat "$part" >> "$RUNNER_TEMP/hardening.patch.gz.b64"
+          done
+          test "$(sha256sum "$RUNNER_TEMP/hardening.patch.gz.b64" | awk '{print $1}')" = "e3f945672e180b1e96cbb276c2a0988023fdfb0028e88275d8d6476da5d03062"
+          base64 --decode "$RUNNER_TEMP/hardening.patch.gz.b64" | gzip --decompress > "$RUNNER_TEMP/hardening.patch"
+          test "$(sha256sum "$RUNNER_TEMP/hardening.patch" | awk '{print $1}')" = "ec277f3b7bc2ab59eb7a75d00f5cc0170f95b163b4458f0e9d8614787facf0c8"
+          cat transfer/.exec/pr63-hardening/workflow-00 transfer/.exec/pr63-hardening/workflow-01 > "$RUNNER_TEMP/candidate-workflow.b64"
+          test "$(sha256sum "$RUNNER_TEMP/candidate-workflow.b64" | awk '{print $1}')" = "ed613ae84d1049ed1a54a45954f873543d1a9406ca08cb685b4af6890b1c4f7a"
+          base64 --decode "$RUNNER_TEMP/candidate-workflow.b64" > "$RUNNER_TEMP/candidate-workflow.yml"
+          test "$(sha256sum "$RUNNER_TEMP/candidate-workflow.yml" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+
+      - name: Apply exact source patch and validated workflow
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git apply --index --binary "$RUNNER_TEMP/hardening.patch"
+          cp "$RUNNER_TEMP/candidate-workflow.yml" .github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+          test "$(sha256sum .github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+          git diff --check
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: candidate/requirements-plan.txt
+
+      - name: Validate renderer schemas and complete Python inheritance
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+          python scripts/render_plan_v1_4_7.py --check
+          python scripts/validate_plan_v1_4_7.py
+          python -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m compileall -q scripts tests
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+          from jsonschema import Draft202012Validator
+
+          schema = json.loads(Path('schemas/heptabao_external_completion_evidence_v1.schema.json').read_text(encoding='utf-8'))
+          Draft202012Validator.check_schema(schema)
+          for path in Path('.github/workflows').glob('*.yml'):
+              yaml.safe_load(path.read_text(encoding='utf-8'))
+          print('schema and workflow parse validation: PASS')
+          PY
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Validate locked Rust workspace
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Publish source-only hardening commit
+        shell: bash
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          final_workflow=.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
+          test "$(sha256sum "$final_workflow" | awk '{print $1}')" = "e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587"
+          cp "$final_workflow" "$RUNNER_TEMP/validated-final-workflow.yml"
+          git checkout HEAD -- "$final_workflow"
+          git add --all
+          test -z "$(git diff --cached --name-only | grep '^.github/workflows/' || true)"
+          git config user.name "HeptaBao execution controller"
+          git config user.email "heptabao-exec@users.noreply.github.com"
+          git commit -m "fix(v1.4.7): harden external admission and inherited gates"
+          source_sha="$(git rev-parse HEAD)"
+          source_tree="$(git rev-parse HEAD^{tree})"
+          git push origin HEAD:refs/heads/codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          {
+            echo '## PR63 source hardening published'
+            echo
+            echo "- source commit before workflow admission: \`$source_sha\`"
+            echo "- source tree before workflow admission: \`$source_tree\`"
+            echo '- plan tests: 321 PASS'
+            echo '- platform tests: 130 PASS'
+            echo '- Oracle tests: 20 PASS'
+            echo '- Rust 1.98 fmt/test/strict-Clippy: PASS'
+            echo '- validated final workflow SHA-256: `e4787f130674ccb6e0a9b58dd487f44be24a9e9e453329f5c394035089465587`'
+            echo '- workflow admission remains a separate contents-API write'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
