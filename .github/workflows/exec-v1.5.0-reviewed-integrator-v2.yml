@@ -1,0 +1,163 @@
+name: exec V1.5.0 reviewed integrator v2
+
+on:
+  push:
+    branches:
+      - exec/v1.5.0-reviewed-integrator-v1
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exec-v1.5.0-reviewed-integrator-v2
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Wait for exact candidate gates and current approvals
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          pr=64
+          candidate_branch='codex/plan-v1.5.0-control-plane-vertical-slice-v1'
+          ready=false
+
+          for attempt in $(seq 1 120); do
+            pr_json="$RUNNER_TEMP/pr.json"
+            reviews_json="$RUNNER_TEMP/reviews.json"
+            runs_json="$RUNNER_TEMP/runs.json"
+            threads_json="$RUNNER_TEMP/threads.json"
+
+            gh api "repos/$repo/pulls/$pr" > "$pr_json"
+            state="$(jq -r .state "$pr_json")"
+            if [[ "$state" != open ]]; then
+              echo "PR state is $state; checking whether it was already merged"
+              test "$(jq -r .merged "$pr_json")" = true
+              echo "already_merged=true" > "$RUNNER_TEMP/integration-result.txt"
+              exit 0
+            fi
+            test "$(jq -r .draft "$pr_json")" = false
+            test "$(jq -r .base.ref "$pr_json")" = 'integration/v1.4.4-technical-candidate'
+            test "$(jq -r .head.ref "$pr_json")" = "$candidate_branch"
+            head="$(jq -r .head.sha "$pr_json")"
+            branch_head="$(gh api "repos/$repo/git/ref/heads/$candidate_branch" --jq .object.sha)"
+            test "$head" = "$branch_head"
+
+            gh api "repos/$repo/pulls/$pr/reviews?per_page=100" > "$reviews_json"
+            gh api "repos/$repo/actions/runs?event=pull_request&head_sha=$head&per_page=100" > "$runs_json"
+            gh api graphql \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+              -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$pr" > "$threads_json"
+
+            set +e
+            HEAD_SHA="$head" REVIEWS_JSON="$reviews_json" RUNS_JSON="$runs_json" THREADS_JSON="$threads_json" python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          required_runs = {
+              'HeptaBao V1.5.0 control-plane vertical slice',
+              'HeptaBao V1.4.7 post-merge truth and external admission',
+              'HeptaBao V1.4.6 authoritative recovery closure',
+              'plan-v1.4.5-security-invariant-closure',
+              'plan-v1.4.4-module-documentation',
+          }
+          required_reviewers = {'ProfHepta', 'Tomasrgbsf'}
+          runs = json.loads(Path(os.environ['RUNS_JSON']).read_text())['workflow_runs']
+          latest_runs = {}
+          for run in sorted(runs, key=lambda value: value['id']):
+              latest_runs[run['name']] = run
+          missing = required_runs - set(latest_runs)
+          if missing:
+              print(f'PENDING missing runs: {sorted(missing)}')
+              sys.exit(10)
+          pending = []
+          for name in sorted(required_runs):
+              run = latest_runs[name]
+              if run['head_sha'] != os.environ['HEAD_SHA']:
+                  print(f'HARD_FAIL {name}: wrong head SHA')
+                  sys.exit(2)
+              if run['status'] != 'completed':
+                  pending.append(f'{name}:{run["status"]}')
+              elif run.get('conclusion') != 'success':
+                  print(f'HARD_FAIL {name}: {run.get("conclusion")}')
+                  sys.exit(2)
+          if pending:
+              print(f'PENDING workflow runs: {pending}')
+              sys.exit(10)
+
+          reviews = json.loads(Path(os.environ['REVIEWS_JSON']).read_text())
+          latest_reviews = {}
+          for review in sorted(reviews, key=lambda value: value.get('submitted_at') or ''):
+              latest_reviews[review['user']['login']] = review
+          blocking = sorted(login for login, review in latest_reviews.items() if review.get('state') == 'CHANGES_REQUESTED')
+          if blocking:
+              print(f'HARD_FAIL blocking latest reviews: {blocking}')
+              sys.exit(2)
+          waiting = []
+          for reviewer in sorted(required_reviewers):
+              review = latest_reviews.get(reviewer)
+              if not review or review.get('state') != 'APPROVED':
+                  waiting.append(reviewer)
+              elif review.get('commit_id') != os.environ['HEAD_SHA']:
+                  waiting.append(f'{reviewer}:stale-head')
+          if waiting:
+              print(f'PENDING approvals: {waiting}')
+              sys.exit(10)
+
+          threads = json.loads(Path(os.environ['THREADS_JSON']).read_text())['data']['repository']['pullRequest']['reviewThreads']
+          if threads['pageInfo']['hasNextPage']:
+              print('HARD_FAIL review-thread pagination exceeds bounded verifier')
+              sys.exit(2)
+          unresolved = [node for node in threads['nodes'] if not node['isResolved']]
+          if unresolved:
+              print(f'PENDING unresolved review threads: {len(unresolved)}')
+              sys.exit(10)
+          print('READY exact head, five workflow families, two exact-head approvals and review-thread closure')
+          PY
+            result=$?
+            set -e
+            if [[ $result -eq 0 ]]; then
+              ready=true
+              printf '%s' "$head" > "$RUNNER_TEMP/approved-head.txt"
+              break
+            fi
+            if [[ $result -eq 2 ]]; then
+              exit 2
+            fi
+            sleep 15
+          done
+
+          test "$ready" = true
+
+      - name: Merge through ordinary pull-request API
+        if: ${{ success() && hashFiles(format('{0}/integration-result.txt', runner.temp)) == '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head="$(cat "$RUNNER_TEMP/approved-head.txt")"
+          result="$(gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/64/merge" \
+            -f sha="$head" \
+            -f merge_method=merge \
+            -f commit_title='feat(v1.5.0): implement mandatory control-plane vertical slice' \
+            -f commit_message='Merge only after five exact-head/prospective-merge workflow families, two exact-head approvals, no blocking latest review and no unresolved review thread. External/control blockers and authority claims remain open.')"
+          test "$(jq -r .merged <<< "$result")" = true
+          merge_sha="$(jq -r .sha <<< "$result")"
+          printf 'merged_head=%s\nmerge_sha=%s\n' "$head" "$merge_sha"
+          {
+            echo '## V1.5.0 integrated through verified PR path'
+            echo
+            echo "- reviewed head: \`$head\`"
+            echo "- merge commit: \`$merge_sha\`"
+            echo '- administrator bypass: not used'
+            echo '- external/control authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
