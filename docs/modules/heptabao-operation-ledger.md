@@ -150,3 +150,22 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+
+### V1.4.5 poisoned write state
+
+The ledger exposes `LedgerWriteState`. Any append failure classified as
+`OutcomeUnknown` transitions the in-memory instance to `ReplayRequired`; every
+subsequent `record` fails without invoking the provider. Recovery requires dropping
+the instance and constructing a new ledger with `OperationLedger::open`, which
+replays the authenticated journal. Durable mutations may not transition directly
+from `IntentCommitted` to `Reconciled`; exact storage evidence is required for the
+`StateCommitted` transition.
+
+## V1.4.6 persisted-then-error evidence
+
+The append-unknown hostile provider now stores the encoded event before
+returning the injected error. The ledger enters `ReplayRequired`, rejects the
+next write before provider access, calls authoritative journal recovery, and
+reconstructs the persisted operation. The recovered duplicate `Accepted` event
+is rejected rather than silently appended again.

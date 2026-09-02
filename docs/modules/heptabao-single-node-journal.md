@@ -134,3 +134,10 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+## V1.4.6 exact-next orphan recovery
+
+A journal append persists an immutable authenticated entry and then publishes
+`TAIL`. Reopen/recovery may reconcile one exact authenticated next entry when a
+crash separated those effects. Any gap, additional orphan, temporary artifact,
+chain mismatch or tag failure is corruption and keeps the writer fenced.

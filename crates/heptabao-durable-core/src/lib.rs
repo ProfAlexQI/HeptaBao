@@ -17,8 +17,8 @@ use heptabao_barrier_api::{
     SealedEnvelope, SecretState,
 };
 use heptabao_storage_api::{
-    CommitReceipt, DurableGenerationStore, Generation, OpaqueState, StateDigest,
-    StorageContractError,
+    CommitIntent, CommitReceipt, CommitRecovery, DurableGenerationStore, Generation, OpaqueState,
+    StateDigest, StorageContractError,
 };
 
 pub struct DurableStateEngine<S, B> {
@@ -35,16 +35,8 @@ impl<S, B> DurableStateEngine<S, B> {
         &self.store
     }
 
-    pub const fn store_mut(&mut self) -> &mut S {
-        &mut self.store
-    }
-
     pub const fn barrier(&self) -> &B {
         &self.barrier
-    }
-
-    pub fn into_parts(self) -> (S, B) {
-        (self.store, self.barrier)
     }
 }
 
@@ -62,17 +54,39 @@ where
     }
 }
 
+pub struct PreparedDurableMutation {
+    intent: CommitIntent,
+    candidate: OpaqueState,
+}
+
+impl PreparedDurableMutation {
+    pub const fn intent(&self) -> CommitIntent {
+        self.intent
+    }
+}
+
+impl fmt::Debug for PreparedDurableMutation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedDurableMutation")
+            .field("intent", &self.intent)
+            .field("candidate_bytes", &self.candidate.len())
+            .field("candidate", &"[SEALED_REDACTED]")
+            .finish()
+    }
+}
+
 impl<S, B> DurableStateEngine<S, B>
 where
     S: DurableGenerationStore,
     B: BarrierProvider,
 {
-    pub fn persist(
-        &mut self,
+    pub fn prepare_persist(
+        &self,
         expected_current: Option<Generation>,
         plaintext: SecretState,
         caller_associated_data: Vec<u8>,
-    ) -> Result<CommitReceipt, DurableCoreError<S::Error, B::Error>> {
+    ) -> Result<PreparedDurableMutation, DurableCoreError<S::Error, B::Error>> {
         let actual = self.store.current_generation();
         if expected_current != actual {
             return Err(DurableCoreError::GenerationConflict {
@@ -112,14 +126,47 @@ where
             .encode()
             .map_err(DurableCoreError::BarrierContract)?;
         let candidate = OpaqueState::new(encoded).map_err(DurableCoreError::StorageContract)?;
+        let intent = self
+            .store
+            .prepare_commit(expected_current, &candidate)
+            .map_err(DurableCoreError::Storage)?;
+        if intent.previous() != expected_current || intent.committed() != generation {
+            return Err(DurableCoreError::CommitIntentMismatch);
+        }
+        Ok(PreparedDurableMutation { intent, candidate })
+    }
+
+    pub fn commit_prepared(
+        &mut self,
+        prepared: PreparedDurableMutation,
+    ) -> Result<CommitReceipt, DurableCoreError<S::Error, B::Error>> {
         let receipt = self
             .store
-            .commit(expected_current, candidate)
+            .commit(prepared.intent.previous(), prepared.candidate)
             .map_err(DurableCoreError::Storage)?;
-        if receipt.previous != expected_current || receipt.committed != generation {
+        if receipt != prepared.intent.receipt() {
             return Err(DurableCoreError::CommitReceiptMismatch);
         }
         Ok(receipt)
+    }
+
+    pub fn recover_commit(
+        &mut self,
+        intent: CommitIntent,
+    ) -> Result<CommitRecovery, DurableCoreError<S::Error, B::Error>> {
+        self.store
+            .recover_commit(intent)
+            .map_err(DurableCoreError::Storage)
+    }
+
+    pub fn persist(
+        &mut self,
+        expected_current: Option<Generation>,
+        plaintext: SecretState,
+        caller_associated_data: Vec<u8>,
+    ) -> Result<CommitReceipt, DurableCoreError<S::Error, B::Error>> {
+        let prepared = self.prepare_persist(expected_current, plaintext, caller_associated_data)?;
+        self.commit_prepared(prepared)
     }
 
     pub fn load_current(
@@ -196,6 +243,7 @@ where
         requested: KeyEpoch,
         returned: KeyEpoch,
     },
+    CommitIntentMismatch,
     CommitReceiptMismatch,
 }
 
@@ -225,6 +273,9 @@ where
                 formatter,
                 "barrier returned key epoch {returned:?} for requested epoch {requested:?}"
             ),
+            Self::CommitIntentMismatch => {
+                formatter.write_str("durable store returned a mismatched commit intent")
+            }
             Self::CommitReceiptMismatch => {
                 formatter.write_str("durable store returned a mismatched commit receipt")
             }
@@ -320,6 +371,40 @@ mod tests {
                 digest,
                 state,
             }))
+        }
+
+        fn prepare_commit(
+            &self,
+            expected_current: Option<Generation>,
+            candidate: &OpaqueState,
+        ) -> Result<CommitIntent, Self::Error> {
+            if expected_current != self.current {
+                return Err(MemoryStoreError::Conflict);
+            }
+            let committed = match self.current {
+                Some(value) => value.checked_next().map_err(MemoryStoreError::Contract)?,
+                None => Generation::INITIAL,
+            };
+            let digest = test_digest(committed, candidate.as_bytes())?;
+            CommitIntent::new(expected_current, committed, digest)
+                .map_err(MemoryStoreError::Contract)
+        }
+
+        fn recover_commit(&mut self, intent: CommitIntent) -> Result<CommitRecovery, Self::Error> {
+            match (self.current, self.digest) {
+                (Some(generation), Some(digest))
+                    if generation == intent.committed() && digest == intent.digest() =>
+                {
+                    Ok(CommitRecovery::Committed(intent.receipt()))
+                }
+                (generation, _) if generation == intent.previous() => {
+                    Ok(CommitRecovery::NotCommitted)
+                }
+                (Some(generation), Some(digest)) => Ok(CommitRecovery::Conflict {
+                    actual: Some((generation, digest)),
+                }),
+                _ => Ok(CommitRecovery::Conflict { actual: None }),
+            }
         }
 
         fn commit(
@@ -469,6 +554,31 @@ mod tests {
 
     fn domain() -> Result<StoreDomain, StorageContractError> {
         StoreDomain::new("heptabao/durable-core-test".to_owned())
+    }
+
+    #[test]
+    fn prepared_mutation_binds_target_before_authoritative_commit() {
+        let domain = domain();
+        if let Ok(domain) = domain {
+            let store = MemoryStore::new(domain);
+            let mut engine = DurableStateEngine::new(store, MockBarrier);
+            let secret = SecretState::new(b"prepared-state".to_vec());
+            assert!(secret.is_ok());
+            if let Ok(secret) = secret {
+                let prepared = engine.prepare_persist(None, secret, Vec::new());
+                assert!(prepared.is_ok());
+                if let Ok(prepared) = prepared {
+                    assert_eq!(prepared.intent().previous(), None);
+                    assert_eq!(prepared.intent().committed(), Generation::INITIAL);
+                    assert_eq!(engine.store().current_generation(), None);
+                    let committed = engine.commit_prepared(prepared);
+                    assert!(committed.is_ok());
+                    if let Ok(receipt) = committed {
+                        assert_eq!(receipt.committed, Generation::INITIAL);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -337,7 +337,23 @@ where
     }
 
     fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error> {
-        let _ = self.inspect_current_layout()?;
+        if self.inspect_current_layout()?.is_some() {
+            return Err(FileJournalError::PendingOrphan);
+        }
+        let records = self.replay_internal()?;
+        if tail_from_records(&records) != self.tail {
+            return Err(FileJournalError::CorruptJournal);
+        }
+        Ok(records)
+    }
+
+    fn recover_authoritative(&mut self) -> Result<Vec<JournalRecord>, Self::Error> {
+        self.root.verify().map_err(map_directory_guard_error)?;
+        self.validate_marker()?;
+        self.tail = self.read_optional_tail()?;
+        if self.validate_layout()?.is_some() {
+            let _ = self.reconcile_next_orphan()?;
+        }
         let records = self.replay_internal()?;
         if tail_from_records(&records) != self.tail {
             return Err(FileJournalError::CorruptJournal);
@@ -1131,11 +1147,47 @@ mod tests {
             assert!(matches!(reopened, Ok(Ok(_))));
             if let Ok(Ok(mut reopened)) = reopened {
                 assert!(reopened.tail().is_none());
-                assert!(reopened.reconcile_next_orphan().is_ok());
+                assert!(matches!(
+                    reopened.replay(),
+                    Err(FileJournalError::PendingOrphan)
+                ));
+                assert!(reopened.recover_authoritative().is_ok());
                 assert_eq!(
                     reopened.tail().map(|tail| tail.sequence),
                     Some(JournalSequence::INITIAL)
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn authoritative_recovery_refreshes_stale_cached_tail() {
+        let temporary = TempDirectory::new();
+        let domain = domain();
+        let authenticator = TestAuthenticator::new();
+        if let (Ok(temporary), Ok(domain), Ok(authenticator)) = (temporary, domain, authenticator) {
+            let journal = FileDurableJournal::create_new(&temporary.path, domain, authenticator);
+            assert!(journal.is_ok());
+            if let Ok(mut journal) = journal {
+                let payload = JournalPayload::new(b"published-before-error".to_vec());
+                assert!(payload.is_ok());
+                if let Ok(payload) = payload {
+                    assert!(journal.append(None, payload).is_ok());
+                    journal.tail = None;
+                    assert!(matches!(
+                        journal.replay(),
+                        Err(FileJournalError::TailConflict { .. })
+                    ));
+                    let recovered = journal.recover_authoritative();
+                    assert!(recovered.is_ok());
+                    if let Ok(recovered) = recovered {
+                        assert_eq!(recovered.len(), 1);
+                    }
+                    assert_eq!(
+                        journal.tail().map(|tail| tail.sequence),
+                        Some(JournalSequence::INITIAL)
+                    );
+                }
             }
         }
     }

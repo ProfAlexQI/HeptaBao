@@ -16,5 +16,9 @@ heptabao-journal-api = { path = "../heptabao-journal-api" }
 heptabao-operation-ledger = { path = "../heptabao-operation-ledger" }
 heptabao-storage-api = { path = "../heptabao-storage-api" }
 
+[dev-dependencies]
+heptabao-single-node-journal = { path = "../heptabao-single-node-journal" }
+heptabao-single-node-store = { path = "../heptabao-single-node-store" }
+
 [lints]
 workspace = true

@@ -196,6 +196,16 @@ pub enum JournalOpenMode {
     ReopenExisting,
 }
 
+/// Provider classification for a failed append call.
+///
+/// Implementations must return [`AppendFailureDisposition::OutcomeUnknown`] unless
+/// they can prove that no durable record or tail publication occurred.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppendFailureDisposition {
+    DefinitelyNotAppended,
+    OutcomeUnknown,
+}
+
 pub trait JournalAuthenticator: fmt::Debug + Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
@@ -219,11 +229,26 @@ pub trait DurableJournal: fmt::Debug + Send {
 
     fn replay(&self) -> Result<Vec<JournalRecord>, Self::Error>;
 
+    /// Re-establishes the provider's authoritative in-memory view after an
+    /// append whose outcome was unknown, then returns the fully authenticated
+    /// committed prefix. Providers with cached tails or exact-next orphan
+    /// records must override this method and reconcile them fail-closed.
+    fn recover_authoritative(&mut self) -> Result<Vec<JournalRecord>, Self::Error> {
+        self.replay()
+    }
+
     fn append(
         &mut self,
         expected_tail: Option<JournalSequence>,
         payload: JournalPayload,
     ) -> Result<AppendReceipt, Self::Error>;
+
+    /// Classifies a failed append. The conservative default permanently fences
+    /// the caller until the journal is reopened and authenticated replay
+    /// reconstructs the authoritative tail.
+    fn classify_append_failure(&self, _error: &Self::Error) -> AppendFailureDisposition {
+        AppendFailureDisposition::OutcomeUnknown
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

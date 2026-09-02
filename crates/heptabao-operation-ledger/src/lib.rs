@@ -12,11 +12,13 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use heptabao_journal_api::{AppendReceipt, DurableJournal, JournalPayload};
+use heptabao_journal_api::{
+    AppendFailureDisposition, AppendReceipt, DurableJournal, JournalPayload,
+};
 use heptabao_storage_api::{Generation, StateDigest};
 
-const EVENT_MAGIC: &[u8] = b"HEPTABAO-OPERATION-EVENT-V1\0";
-const EVENT_VERSION: u16 = 1;
+const EVENT_MAGIC: &[u8] = b"HEPTABAO-OPERATION-EVENT-V2\0";
+const EVENT_VERSION: u16 = 2;
 pub const MAX_OPERATION_ID_BYTES: usize = 128;
 pub const MAX_DETAIL_CODE_BYTES: usize = 128;
 
@@ -138,6 +140,7 @@ pub enum OperationPhase {
     Accepted,
     RejectedBeforeDispatch,
     IntentCommitted,
+    AbortedBeforeStateCommit,
     EffectStarted,
     EffectSucceeded,
     EffectFailed,
@@ -156,6 +159,7 @@ impl OperationPhase {
             Self::Accepted => 1,
             Self::RejectedBeforeDispatch => 2,
             Self::IntentCommitted => 3,
+            Self::AbortedBeforeStateCommit => 14,
             Self::EffectStarted => 4,
             Self::EffectSucceeded => 5,
             Self::EffectFailed => 6,
@@ -184,6 +188,7 @@ impl OperationPhase {
             11 => Ok(Self::Delivered),
             12 => Ok(Self::DeliveryFailedAfterCommit),
             13 => Ok(Self::Reconciled),
+            14 => Ok(Self::AbortedBeforeStateCommit),
             _ => Err(OperationContractError::MalformedEvent),
         }
     }
@@ -412,9 +417,16 @@ pub enum RetryDirective {
     NoAutomaticRetry,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LedgerWriteState {
+    Writable,
+    ReplayRequired,
+}
+
 pub struct OperationLedger<J: DurableJournal> {
     journal: J,
     operations: BTreeMap<OperationId, OperationEvent>,
+    write_state: LedgerWriteState,
 }
 
 impl<J: DurableJournal> fmt::Debug for OperationLedger<J> {
@@ -423,13 +435,16 @@ impl<J: DurableJournal> fmt::Debug for OperationLedger<J> {
             .debug_struct("OperationLedger")
             .field("journal", &self.journal)
             .field("operation_count", &self.operations.len())
+            .field("write_state", &self.write_state)
             .finish()
     }
 }
 
 impl<J: DurableJournal> OperationLedger<J> {
-    pub fn open(journal: J) -> Result<Self, OperationLedgerError<J::Error>> {
-        let records = journal.replay().map_err(OperationLedgerError::Journal)?;
+    pub fn open(mut journal: J) -> Result<Self, OperationLedgerError<J::Error>> {
+        let records = journal
+            .recover_authoritative()
+            .map_err(OperationLedgerError::Journal)?;
         let mut operations = BTreeMap::new();
         for record in records {
             let event = OperationEvent::decode(record.payload.as_bytes())
@@ -439,7 +454,16 @@ impl<J: DurableJournal> OperationLedger<J> {
         Ok(Self {
             journal,
             operations,
+            write_state: LedgerWriteState::Writable,
         })
+    }
+
+    pub const fn write_state(&self) -> LedgerWriteState {
+        self.write_state
+    }
+
+    pub const fn replay_required(&self) -> bool {
+        matches!(self.write_state, LedgerWriteState::ReplayRequired)
     }
 
     pub fn current(&self, operation_id: &OperationId) -> Option<&OperationEvent> {
@@ -465,20 +489,55 @@ impl<J: DurableJournal> OperationLedger<J> {
         &mut self,
         event: OperationEvent,
     ) -> Result<AppendReceipt, OperationLedgerError<J::Error>> {
+        if self.replay_required() {
+            return Err(OperationLedgerError::ReplayRequiredAfterAppendFailure);
+        }
         let previous = self.operations.get(event.operation_id());
         validate_transition(previous, &event).map_err(OperationLedgerError::Contract)?;
         let payload = event.encode().map_err(OperationLedgerError::Contract)?;
         let expected_tail = self.journal.tail().map(|tail| tail.sequence);
-        let receipt = self
-            .journal
-            .append(expected_tail, payload)
-            .map_err(OperationLedgerError::Journal)?;
+        let receipt = match self.journal.append(expected_tail, payload) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                if self.journal.classify_append_failure(&error)
+                    == AppendFailureDisposition::OutcomeUnknown
+                {
+                    self.write_state = LedgerWriteState::ReplayRequired;
+                }
+                return Err(OperationLedgerError::Journal(error));
+            }
+        };
         self.operations.insert(event.operation_id.clone(), event);
         Ok(receipt)
     }
 
-    pub fn into_journal(self) -> J {
-        self.journal
+    pub fn recover_after_append_failure(&mut self) -> Result<(), OperationLedgerError<J::Error>> {
+        if !self.replay_required() {
+            return Err(OperationLedgerError::RecoveryNotRequired);
+        }
+        let records = self
+            .journal
+            .recover_authoritative()
+            .map_err(OperationLedgerError::Journal)?;
+        let mut operations = BTreeMap::new();
+        for record in records {
+            let event = OperationEvent::decode(record.payload.as_bytes())
+                .map_err(OperationLedgerError::Contract)?;
+            apply_replayed_event(&mut operations, event).map_err(OperationLedgerError::Contract)?;
+        }
+        self.operations = operations;
+        self.write_state = LedgerWriteState::Writable;
+        Ok(())
+    }
+
+    pub fn reopen(self) -> Result<Self, OperationLedgerError<J::Error>> {
+        let mut ledger = self;
+        if ledger.replay_required() {
+            ledger.recover_after_append_failure()?;
+            Ok(ledger)
+        } else {
+            Self::open(ledger.journal)
+        }
     }
 }
 
@@ -489,6 +548,8 @@ where
 {
     Contract(OperationContractError),
     Journal(E),
+    ReplayRequiredAfterAppendFailure,
+    RecoveryNotRequired,
 }
 
 impl<E> fmt::Display for OperationLedgerError<E>
@@ -501,6 +562,11 @@ where
                 write!(formatter, "operation ledger contract failure: {error}")
             }
             Self::Journal(error) => write!(formatter, "durable journal failure: {error}"),
+            Self::ReplayRequiredAfterAppendFailure => formatter.write_str(
+                "journal append outcome was unknown; recover authoritative replay before writing",
+            ),
+            Self::RecoveryNotRequired => formatter
+                .write_str("operation ledger recovery was requested while the ledger was writable"),
         }
     }
 }
@@ -622,12 +688,7 @@ const fn allowed_transition(
             | (
                 OperationClass::DurableMutation,
                 OperationPhase::IntentCommitted,
-                OperationPhase::StateCommitted,
-            )
-            | (
-                OperationClass::DurableMutation,
-                OperationPhase::IntentCommitted,
-                OperationPhase::Reconciled,
+                OperationPhase::StateCommitted | OperationPhase::AbortedBeforeStateCommit,
             )
             | (
                 OperationClass::ExternalEffect,
@@ -690,6 +751,11 @@ fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractE
     if event.class == OperationClass::DurableMutation && event.effect_key_digest.is_some() {
         return Err(OperationContractError::InvalidEventShape);
     }
+    if event.phase == OperationPhase::AbortedBeforeStateCommit
+        && event.class != OperationClass::DurableMutation
+    {
+        return Err(OperationContractError::InvalidEventShape);
+    }
     if event.class == OperationClass::ExternalEffect
         && !matches!(event.phase, OperationPhase::RejectedBeforeDispatch)
         && event.effect_key_digest.is_none()
@@ -711,14 +777,19 @@ fn validate_event_shape(event: &OperationEvent) -> Result<(), OperationContractE
         }
         return Ok(());
     }
-    let state_required = matches!(
-        event.phase,
-        OperationPhase::StateCommitted
-            | OperationPhase::ResponseAudited
-            | OperationPhase::ResponseAuditFailedAfterCommit
-            | OperationPhase::Delivered
-            | OperationPhase::DeliveryFailedAfterCommit
-    );
+    let state_required = (event.class == OperationClass::DurableMutation
+        && matches!(
+            event.phase,
+            OperationPhase::IntentCommitted | OperationPhase::AbortedBeforeStateCommit
+        ))
+        || matches!(
+            event.phase,
+            OperationPhase::StateCommitted
+                | OperationPhase::ResponseAudited
+                | OperationPhase::ResponseAuditFailedAfterCommit
+                | OperationPhase::Delivered
+                | OperationPhase::DeliveryFailedAfterCommit
+        );
     if state_required != event.state_generation.is_some() {
         return Err(OperationContractError::InvalidEventShape);
     }
@@ -748,7 +819,9 @@ const fn phase_blocks_new_mutation(phase: OperationPhase) -> bool {
 
 const fn retry_directive_for_event(event: &OperationEvent) -> RetryDirective {
     match event.phase {
-        OperationPhase::RejectedBeforeDispatch => RetryDirective::SafeToRetryNewOperation,
+        OperationPhase::RejectedBeforeDispatch | OperationPhase::AbortedBeforeStateCommit => {
+            RetryDirective::SafeToRetryNewOperation
+        }
         OperationPhase::StateCommitted
         | OperationPhase::ResponseAudited
         | OperationPhase::Delivered => RetryDirective::LookupOnly,
@@ -916,9 +989,7 @@ mod tests {
                 .calls
                 .checked_add(1)
                 .ok_or(MemoryJournalError::Injected)?;
-            if self.fail_on_append == Some(self.calls) {
-                return Err(MemoryJournalError::Injected);
-            }
+            let fail_after_persistence = self.fail_on_append == Some(self.calls);
             let actual = self.tail();
             if expected_tail != actual.map(|tail| tail.sequence) {
                 return Err(MemoryJournalError::Injected);
@@ -932,6 +1003,9 @@ mod tests {
                 tag: tag_for_sequence(sequence)?,
             };
             self.payloads.push(payload.into_bytes());
+            if fail_after_persistence {
+                return Err(MemoryJournalError::Injected);
+            }
             Ok(AppendReceipt {
                 previous_tail,
                 appended,
@@ -958,6 +1032,12 @@ mod tests {
         StableDetailCode::new(value.to_owned())
     }
 
+    fn durable_target() -> Option<(Generation, StateDigest)> {
+        StateDigest::new([3; 32])
+            .ok()
+            .map(|digest| (Generation::INITIAL, digest))
+    }
+
     #[test]
     fn legal_mutation_chain_replays_and_requires_lookup_after_commit() {
         let journal = MemoryJournal::new();
@@ -975,7 +1055,7 @@ mod tests {
                     if let Ok(detail) = detail {
                         let intent = accepted.next(
                             OperationPhase::IntentCommitted,
-                            None,
+                            durable_target(),
                             None,
                             None,
                             detail,
@@ -983,6 +1063,20 @@ mod tests {
                         assert!(intent.is_ok());
                         if let Ok(intent) = intent {
                             assert!(ledger.record(intent.clone()).is_ok());
+                            let reconcile_detail = stable_detail("unsafe-generic-reconcile");
+                            assert!(reconcile_detail.is_ok());
+                            if let Ok(reconcile_detail) = reconcile_detail {
+                                assert!(matches!(
+                                    intent.next(
+                                        OperationPhase::Reconciled,
+                                        intent.state(),
+                                        None,
+                                        None,
+                                        reconcile_detail,
+                                    ),
+                                    Err(OperationContractError::InvalidTransition)
+                                ));
+                            }
                             let state_digest = StateDigest::new([3; 32]);
                             let detail = stable_detail("state-committed");
                             assert!(state_digest.is_ok());
@@ -1011,11 +1105,71 @@ mod tests {
                         Some(RetryDirective::LookupOnly)
                     );
                 }
-                let journal = ledger.into_journal();
-                let reopened = OperationLedger::open(journal);
+                let reopened = ledger.reopen();
                 assert!(reopened.is_ok());
                 if let Ok(reopened) = reopened {
                     assert_eq!(reopened.operation_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn proven_not_committed_intent_is_terminal_and_unblocks_new_mutations() {
+        let journal = MemoryJournal::new();
+        assert!(journal.is_ok());
+        if let Ok(journal) = journal {
+            let ledger = OperationLedger::open(journal);
+            assert!(ledger.is_ok());
+            if let Ok(mut ledger) = ledger {
+                let accepted = accepted(OperationClass::DurableMutation);
+                assert!(accepted.is_ok());
+                if let Ok(accepted) = accepted {
+                    assert!(ledger.record(accepted.clone()).is_ok());
+                    let intent_detail = stable_detail("intent-bound-to-target");
+                    assert!(intent_detail.is_ok());
+                    if let Ok(intent_detail) = intent_detail {
+                        let intent = accepted.next(
+                            OperationPhase::IntentCommitted,
+                            durable_target(),
+                            None,
+                            None,
+                            intent_detail,
+                        );
+                        assert!(intent.is_ok());
+                        if let Ok(intent) = intent {
+                            assert!(ledger.record(intent.clone()).is_ok());
+                            assert_eq!(
+                                ledger.blocking_phase(),
+                                Some(OperationPhase::IntentCommitted)
+                            );
+                            let abort_detail = stable_detail("state-commit-not-observed");
+                            assert!(abort_detail.is_ok());
+                            if let Ok(abort_detail) = abort_detail {
+                                let aborted = intent.next(
+                                    OperationPhase::AbortedBeforeStateCommit,
+                                    intent.state(),
+                                    None,
+                                    None,
+                                    abort_detail,
+                                );
+                                assert!(aborted.is_ok());
+                                if let Ok(aborted) = aborted {
+                                    assert!(ledger.record(aborted).is_ok());
+                                    assert_eq!(ledger.blocking_phase(), None);
+                                    let operation_id =
+                                        OperationId::new("operation-0001".to_owned());
+                                    assert!(operation_id.is_ok());
+                                    if let Ok(operation_id) = operation_id {
+                                        assert_eq!(
+                                            ledger.retry_directive(&operation_id),
+                                            Some(RetryDirective::SafeToRetryNewOperation)
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1117,6 +1271,40 @@ mod tests {
                     OperationEvent::decode(&bytes),
                     Err(OperationContractError::TrailingEventBytes)
                 );
+            }
+        }
+    }
+    #[test]
+    fn append_outcome_unknown_after_persistence_requires_authoritative_replay() {
+        let journal = MemoryJournal::new();
+        assert!(journal.is_ok());
+        if let Ok(mut journal) = journal {
+            journal.fail_on_append = Some(1);
+            let ledger = OperationLedger::open(journal);
+            assert!(ledger.is_ok());
+            if let Ok(mut ledger) = ledger {
+                let event = accepted(OperationClass::DurableMutation);
+                assert!(event.is_ok());
+                if let Ok(event) = event {
+                    assert!(matches!(
+                        ledger.record(event.clone()),
+                        Err(OperationLedgerError::Journal(MemoryJournalError::Injected))
+                    ));
+                    assert_eq!(ledger.write_state(), LedgerWriteState::ReplayRequired);
+                    assert!(matches!(
+                        ledger.record(event.clone()),
+                        Err(OperationLedgerError::ReplayRequiredAfterAppendFailure)
+                    ));
+                    assert!(ledger.recover_after_append_failure().is_ok());
+                    assert_eq!(ledger.write_state(), LedgerWriteState::Writable);
+                    assert_eq!(ledger.operation_count(), 1);
+                    assert!(matches!(
+                        ledger.record(event),
+                        Err(OperationLedgerError::Contract(
+                            OperationContractError::DuplicateAcceptedOperation
+                        ))
+                    ));
+                }
             }
         }
     }

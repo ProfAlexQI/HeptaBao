@@ -134,3 +134,16 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+## V1.4.6 exact orphan and permission closure
+
+The file provider writes an immutable generation bundle before publishing
+`CURRENT`. Recovery recognizes at most one exact next-generation orphan and
+completes publication only when its authenticated generation and digest equal
+the ledger-derived commit descriptor. Multiple, stale, malformed or divergent
+artifacts fail closed.
+
+On Unix every newly created marker, temporary control file, `CURRENT` image and
+generation bundle uses mode `0600`; `durable_store_files_are_owner_only_on_unix`
+checks the durable artifacts. Root-directory ownership and controller
+power-loss behavior remain deployment/qualification responsibilities.

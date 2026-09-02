@@ -149,3 +149,16 @@ Diagnostics use stable typed error classes and opaque correlation identities. Op
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+## V1.4.6 authoritative commit recovery
+
+`CommitIntent` binds the previous generation, exact successor generation and
+state digest used by `prepare_commit` and `recover_commit`. It is a
+provider-recovery descriptor, not proof that a matching operation-ledger record
+was persisted and not independent publication authority. Product composition
+must derive its descriptor from replayed `IntentCommitted` state.
+
+`recover_commit` must reread authoritative provider state. It may report exact
+commit, exact non-commit, or conflict. It may complete one already durable
+candidate only when provider authentication and every descriptor field match.
+It must not accept caller-supplied opaque state during recovery.

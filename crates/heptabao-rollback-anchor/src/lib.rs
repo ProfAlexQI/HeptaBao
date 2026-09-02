@@ -243,18 +243,22 @@ impl RecoveryCheckpoint {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct VerifiedRecoveryCheckpoint {
     checkpoint: RecoveryCheckpoint,
 }
 
 impl VerifiedRecoveryCheckpoint {
-    pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
-        &self.checkpoint
+    pub const fn revision(&self) -> AnchorRevision {
+        self.checkpoint.revision()
     }
 
-    pub fn into_checkpoint(self) -> RecoveryCheckpoint {
-        self.checkpoint
+    pub const fn digest(&self) -> CheckpointDigest {
+        self.checkpoint.digest()
+    }
+
+    pub const fn observation(&self) -> &CheckpointObservation {
+        self.checkpoint.observation()
     }
 }
 
@@ -266,10 +270,77 @@ pub trait CheckpointAuthenticator: fmt::Debug + Send + Sync {
     fn authenticate(&self, preimage: &[u8]) -> Result<CheckpointDigest, Self::Error>;
 }
 
+#[derive(Debug)]
+pub enum AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    /// The exact checkpoint comparison failed before `operation` was invoked.
+    CheckpointNotCurrent,
+    /// The provider failed before `operation` was invoked.
+    ProviderBeforeEntry(E),
+    /// `operation` was invoked, but the provider cannot prove that the fence
+    /// remained valid and completed cleanly after entry. The operation result
+    /// is deliberately discarded and callers must reconcile before retry.
+    OutcomeUnknownAfterEntry(E),
+}
+
+impl<E> fmt::Display for AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CheckpointNotCurrent => {
+                formatter.write_str("rollback checkpoint is no longer current")
+            }
+            Self::ProviderBeforeEntry(error) => {
+                write!(
+                    formatter,
+                    "rollback anchor fence failed before operation entry: {error}"
+                )
+            }
+            Self::OutcomeUnknownAfterEntry(error) => write!(
+                formatter,
+                "rollback anchor fence outcome is unknown after operation entry: {error}"
+            ),
+        }
+    }
+}
+
+impl<E> Error for AnchorFenceError<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CheckpointNotCurrent => None,
+            Self::ProviderBeforeEntry(error) | Self::OutcomeUnknownAfterEntry(error) => Some(error),
+        }
+    }
+}
+
 pub trait RollbackAnchor: fmt::Debug + Send {
     type Error: Error + Send + Sync + 'static;
 
     fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error>;
+
+    /// Executes `operation` only while `expected` is the exact current
+    /// checkpoint and while the provider's anchor-advance serialization
+    /// primitive remains held. `compare_and_swap` must use the same primitive.
+    ///
+    /// `CheckpointNotCurrent` and `ProviderBeforeEntry` guarantee that
+    /// `operation` was not invoked. Once `operation` has been invoked, any
+    /// provider inability to prove fence validity or clean completion must be
+    /// returned as `OutcomeUnknownAfterEntry`; it must never be relabelled as a
+    /// safe pre-entry failure.
+    fn with_current_fence<T, F>(
+        &mut self,
+        expected: &RecoveryCheckpoint,
+        operation: F,
+    ) -> Result<T, AnchorFenceError<Self::Error>>
+    where
+        F: FnOnce() -> T;
 
     fn compare_and_swap(
         &mut self,
@@ -302,18 +373,6 @@ impl<A, P> AnchorCoordinator<A, P> {
             anchor,
             authenticator,
         }
-    }
-
-    pub const fn anchor(&self) -> &A {
-        &self.anchor
-    }
-
-    pub const fn authenticator(&self) -> &P {
-        &self.authenticator
-    }
-
-    pub fn into_parts(self) -> (A, P) {
-        (self.anchor, self.authenticator)
     }
 }
 
@@ -409,13 +468,12 @@ where
         };
         let receipt = self
             .anchor
-            .compare_and_swap(previous.as_ref().map(RecoveryCheckpoint::revision), next)
+            .compare_and_swap(
+                previous.as_ref().map(RecoveryCheckpoint::revision),
+                next.clone(),
+            )
             .map_err(AnchorCoordinatorError::Anchor)?;
-        if receipt.previous != previous
-            || receipt.current.revision != revision
-            || receipt.current.previous_digest != previous_digest
-            || receipt.current.authenticator_id != *self.authenticator.authenticator_id()
-        {
+        if receipt.previous != previous || receipt.current != next {
             return Err(AnchorCoordinatorError::Contract(
                 AnchorContractError::ReceiptMismatch,
             ));
@@ -433,9 +491,40 @@ where
         Ok(receipt)
     }
 
+    pub fn with_current_fence<T, F>(
+        &mut self,
+        checkpoint: &RecoveryCheckpoint,
+        operation: F,
+    ) -> AnchorResult<T, A::Error, P::Error>
+    where
+        F: FnOnce() -> T,
+    {
+        self.verify_checkpoint(checkpoint)?;
+        self.anchor
+            .with_current_fence(checkpoint, operation)
+            .map_err(|error| match error {
+                AnchorFenceError::CheckpointNotCurrent => {
+                    AnchorCoordinatorError::Contract(AnchorContractError::CheckpointNotCurrent)
+                }
+                AnchorFenceError::ProviderBeforeEntry(error) => {
+                    AnchorCoordinatorError::Anchor(error)
+                }
+                AnchorFenceError::OutcomeUnknownAfterEntry(error) => {
+                    AnchorCoordinatorError::FenceOutcomeUnknown(error)
+                }
+            })
+    }
+
     pub fn verify_owned(
         &self,
         checkpoint: RecoveryCheckpoint,
+    ) -> AnchorResult<VerifiedRecoveryCheckpoint, A::Error, P::Error> {
+        self.verify_current(&checkpoint)
+    }
+
+    pub fn verify_current(
+        &self,
+        checkpoint: &RecoveryCheckpoint,
     ) -> AnchorResult<VerifiedRecoveryCheckpoint, A::Error, P::Error> {
         let current = self
             .anchor
@@ -444,7 +533,7 @@ where
             .ok_or(AnchorCoordinatorError::Contract(
                 AnchorContractError::CheckpointNotCurrent,
             ))?;
-        if current != checkpoint {
+        if &current != checkpoint {
             return Err(AnchorCoordinatorError::Contract(
                 AnchorContractError::CheckpointNotCurrent,
             ));
@@ -502,6 +591,7 @@ where
 {
     Contract(AnchorContractError),
     Anchor(A),
+    FenceOutcomeUnknown(A),
     Authenticator(P),
 }
 
@@ -514,6 +604,10 @@ where
         match self {
             Self::Contract(error) => write!(formatter, "rollback anchor contract failure: {error}"),
             Self::Anchor(error) => write!(formatter, "rollback anchor provider failure: {error}"),
+            Self::FenceOutcomeUnknown(error) => write!(
+                formatter,
+                "rollback anchor fence may have failed after operation entry; reconcile before retry: {error}"
+            ),
             Self::Authenticator(error) => {
                 write!(formatter, "checkpoint authenticator failure: {error}")
             }
@@ -643,6 +737,20 @@ mod tests {
             Ok(self.current.clone())
         }
 
+        fn with_current_fence<T, F>(
+            &mut self,
+            expected: &RecoveryCheckpoint,
+            operation: F,
+        ) -> Result<T, AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            if self.current.as_ref() != Some(expected) {
+                return Err(AnchorFenceError::CheckpointNotCurrent);
+            }
+            Ok(operation())
+        }
+
         fn compare_and_swap(
             &mut self,
             expected_revision: Option<AnchorRevision>,
@@ -737,6 +845,25 @@ mod tests {
     }
 
     #[test]
+    fn current_checkpoint_fence_rejects_stale_checkpoint() -> Result<(), Box<dyn Error>> {
+        let anchor = MemoryAnchor::default();
+        let authenticator = TestAuthenticator::new()?;
+        let mut coordinator = AnchorCoordinator::new(anchor, authenticator);
+        let current = coordinator.advance(observation(1, 3, 1, 1)?)?.current;
+        let observed = coordinator.with_current_fence(&current, || 7_u8)?;
+        assert_eq!(observed, 7);
+        let stale = current;
+        let _ = coordinator.advance(observation(2, 4, 2, 2)?)?;
+        assert!(matches!(
+            coordinator.with_current_fence(&stale, || 9_u8),
+            Err(AnchorCoordinatorError::Contract(
+                AnchorContractError::CheckpointNotCurrent
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn rollback_divergence_and_epoch_regression_fail_closed() -> Result<(), Box<dyn Error>> {
         let anchor = MemoryAnchor::default();
         let authenticator = TestAuthenticator::new()?;
@@ -803,6 +930,72 @@ mod tests {
             &second,
         )?;
         assert_ne!(first_bytes, second_bytes);
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct AlternateReceiptAnchor {
+        alternate: RecoveryCheckpoint,
+    }
+
+    impl RollbackAnchor for AlternateReceiptAnchor {
+        type Error = TestError;
+
+        fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error> {
+            Ok(None)
+        }
+
+        fn with_current_fence<T, F>(
+            &mut self,
+            _expected: &RecoveryCheckpoint,
+            _operation: F,
+        ) -> Result<T, AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            Err(AnchorFenceError::CheckpointNotCurrent)
+        }
+
+        fn compare_and_swap(
+            &mut self,
+            expected_revision: Option<AnchorRevision>,
+            _next: RecoveryCheckpoint,
+        ) -> Result<AnchorAdvanceReceipt, Self::Error> {
+            if expected_revision.is_some() {
+                return Err(TestError::StaleRevision);
+            }
+            Ok(AnchorAdvanceReceipt {
+                previous: None,
+                current: self.alternate.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn alternate_authenticated_cas_receipt_is_rejected() -> Result<(), Box<dyn Error>> {
+        let authenticator = TestAuthenticator::new()?;
+        let alternate_observation = observation(1, 1, 1, 9)?;
+        let preimage = RecoveryCheckpoint::canonical_preimage(
+            AnchorRevision::INITIAL,
+            None,
+            authenticator.authenticator_id(),
+            &alternate_observation,
+        )?;
+        let alternate = RecoveryCheckpoint::from_parts(
+            AnchorRevision::INITIAL,
+            None,
+            authenticator.authenticator_id().clone(),
+            alternate_observation,
+            authenticator.authenticate(&preimage)?,
+        )?;
+        let mut coordinator =
+            AnchorCoordinator::new(AlternateReceiptAnchor { alternate }, authenticator);
+        assert!(matches!(
+            coordinator.advance(observation(1, 1, 1, 3)?),
+            Err(AnchorCoordinatorError::Contract(
+                AnchorContractError::ReceiptMismatch
+            ))
+        ));
         Ok(())
     }
 }

@@ -7,6 +7,7 @@
 //! journal records. They never decrypt state. Publication is delegated to a
 //! target-specific staging implementation and an unknown publish outcome is
 //! never relabelled as a safe failure.
+//! The irreversible target boundary executes through `anchor.with_current_fence(&publish_checkpoint, ...)`; the provider therefore serializes checkpoint currentness with stage, publish, and receipt verification.
 
 use std::error::Error;
 use std::fmt;
@@ -17,8 +18,9 @@ use heptabao_journal_api::{
     JournalTail,
 };
 use heptabao_rollback_anchor::{
-    AnchorAuthenticatorId, AnchorRevision, CheckpointDigest, CheckpointObservation,
-    RecoveryCheckpoint, VerifiedRecoveryCheckpoint,
+    AnchorAuthenticatorId, AnchorContractError, AnchorCoordinator, AnchorCoordinatorError,
+    AnchorRevision, CheckpointAuthenticator, CheckpointDigest, CheckpointObservation,
+    RecoveryCheckpoint, RollbackAnchor,
 };
 use heptabao_storage_api::{DurableGenerationStore, Generation, StateDigest, StoreDomain};
 
@@ -241,7 +243,7 @@ impl RecoveryImage {
         &self.records
     }
 
-    pub fn into_parts(mut self) -> RecoveryImageParts {
+    fn into_parts(mut self) -> RecoveryImageParts {
         let state = std::mem::take(&mut self.sealed_state);
         let records = std::mem::take(&mut self.records);
         (
@@ -504,18 +506,6 @@ impl VerifiedRecoveryImage {
     pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
         self.image.checkpoint()
     }
-
-    pub fn sealed_state(&self) -> &[u8] {
-        self.image.sealed_state()
-    }
-
-    pub fn records(&self) -> &[RecoveryRecord] {
-        self.image.records()
-    }
-
-    pub fn into_image(self) -> RecoveryImage {
-        self.image
-    }
 }
 
 impl fmt::Debug for VerifiedRecoveryImage {
@@ -523,6 +513,48 @@ impl fmt::Debug for VerifiedRecoveryImage {
         formatter
             .debug_tuple("VerifiedRecoveryImage")
             .field(&self.image)
+            .finish()
+    }
+}
+
+/// A recovery image authorized against the current external rollback anchor.
+///
+/// The constructor is private. Only [`RecoveryRestorer`] can produce this
+/// single-use capability after re-reading and authenticating the current anchor.
+pub struct AuthorizedRecoveryImage {
+    image: VerifiedRecoveryImage,
+    anchor_revision: AnchorRevision,
+}
+
+impl AuthorizedRecoveryImage {
+    pub fn archive_id(&self) -> &RecoveryArchiveId {
+        self.image.archive_id()
+    }
+
+    pub const fn observation(&self) -> &CheckpointObservation {
+        self.image.observation()
+    }
+
+    pub const fn checkpoint(&self) -> &RecoveryCheckpoint {
+        self.image.checkpoint()
+    }
+
+    pub const fn anchor_revision(&self) -> AnchorRevision {
+        self.anchor_revision
+    }
+
+    pub fn into_authorized_parts(self) -> (RecoveryImageParts, AnchorRevision) {
+        (self.image.image.into_parts(), self.anchor_revision)
+    }
+}
+
+impl fmt::Debug for AuthorizedRecoveryImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorizedRecoveryImage")
+            .field("archive_id", self.archive_id())
+            .field("checkpoint_digest", &self.checkpoint().digest())
+            .field("anchor_revision", &self.anchor_revision)
             .finish()
     }
 }
@@ -540,6 +572,7 @@ pub struct RestoreReceipt {
     pub archive_id: RecoveryArchiveId,
     pub observation: CheckpointObservation,
     pub checkpoint_digest: CheckpointDigest,
+    pub anchor_revision: AnchorRevision,
 }
 
 #[derive(Debug)]
@@ -570,13 +603,40 @@ where
 
 impl<E> Error for PublishFailure<E> where E: Error + Send + Sync + 'static {}
 
+#[derive(Debug)]
+pub enum StageFailure<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    TargetNotEmpty,
+    Provider(E),
+}
+
+impl<E> fmt::Display for StageFailure<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TargetNotEmpty => formatter.write_str("recovery target is not empty"),
+            Self::Provider(error) => write!(formatter, "recovery target staging failure: {error}"),
+        }
+    }
+}
+
+impl<E> Error for StageFailure<E> where E: Error + Send + Sync + 'static {}
+
 pub trait RecoveryTarget: fmt::Debug {
     type Error: Error + Send + Sync + 'static;
     type Staged: fmt::Debug;
 
-    fn is_empty(&self) -> Result<bool, Self::Error>;
-
-    fn stage(&mut self, image: VerifiedRecoveryImage) -> Result<Self::Staged, Self::Error>;
+    /// Atomically verifies and claims an empty target under the provider's
+    /// writer fence. The staged token must retain target-side exclusivity
+    /// needed through `publish`.
+    fn stage_if_empty(
+        &mut self,
+        image: AuthorizedRecoveryImage,
+    ) -> Result<Self::Staged, StageFailure<Self::Error>>;
 
     fn publish(
         &mut self,
@@ -588,15 +648,17 @@ pub trait RecoveryTarget: fmt::Debug {
 pub struct RecoveryRestorer;
 
 impl RecoveryRestorer {
-    pub fn restore<T, A>(
+    pub fn restore<T, A, R, P>(
         target: &mut T,
         archive: RecoveryArchive,
         authenticator: &A,
-        anchored_checkpoint: &VerifiedRecoveryCheckpoint,
-    ) -> RecoveryRestoreResult<RestoreReceipt, A::Error, T::Error>
+        anchor: &mut AnchorCoordinator<R, P>,
+    ) -> RecoveryRestoreResult<RestoreReceipt, A::Error, T::Error, R::Error, P::Error>
     where
         T: RecoveryTarget,
         A: RecoveryAuthenticator,
+        R: RollbackAnchor,
+        P: CheckpointAuthenticator,
     {
         let verified = archive.verify(authenticator).map_err(|error| match error {
             RecoveryVerificationError::Contract(error) => RecoveryRestoreError::Contract(error),
@@ -604,42 +666,76 @@ impl RecoveryRestorer {
                 RecoveryRestoreError::Authenticator(error)
             }
         })?;
-        if verified.checkpoint() != anchored_checkpoint.checkpoint() {
-            return Err(RecoveryRestoreError::Contract(
-                RecoveryContractError::CheckpointNotAnchored,
-            ));
-        }
-        if !target.is_empty().map_err(RecoveryRestoreError::Target)? {
-            return Err(RecoveryRestoreError::Contract(
-                RecoveryContractError::TargetNotEmpty,
-            ));
-        }
+        anchor
+            .verify_current(verified.checkpoint())
+            .map_err(map_anchor_restore_error)?;
+        let publish_checkpoint = verified.checkpoint().clone();
+        let anchor_revision = publish_checkpoint.revision();
         let expected = RestoreReceipt {
             archive_id: verified.archive_id().clone(),
             observation: verified.observation().clone(),
             checkpoint_digest: verified.checkpoint().digest(),
+            anchor_revision,
         };
-        let staged = target
-            .stage(verified)
-            .map_err(RecoveryRestoreError::Target)?;
-        let receipt = target.publish(staged).map_err(|error| match error {
-            PublishFailure::NotPublished(error) => RecoveryRestoreError::Target(error),
-            PublishFailure::OutcomeUnknown(error) => {
-                RecoveryRestoreError::PublishOutcomeUnknown(error)
-            }
-        })?;
-        if receipt != expected {
-            return Err(RecoveryRestoreError::Contract(
-                RecoveryContractError::RestoreReceiptMismatch,
-            ));
+        let authorized = AuthorizedRecoveryImage {
+            image: verified,
+            anchor_revision,
+        };
+        anchor
+            .with_current_fence(&publish_checkpoint, || {
+                let staged = target
+                    .stage_if_empty(authorized)
+                    .map_err(|error| match error {
+                        StageFailure::TargetNotEmpty => {
+                            RecoveryRestoreError::Contract(RecoveryContractError::TargetNotEmpty)
+                        }
+                        StageFailure::Provider(error) => RecoveryRestoreError::Target(error),
+                    })?;
+                let receipt = target.publish(staged).map_err(|error| match error {
+                    PublishFailure::NotPublished(error) => RecoveryRestoreError::Target(error),
+                    PublishFailure::OutcomeUnknown(error) => {
+                        RecoveryRestoreError::PublishOutcomeUnknown(error)
+                    }
+                })?;
+                if receipt != expected {
+                    return Err(RecoveryRestoreError::PublishReceiptMismatchOutcomeUnknown {
+                        expected: Box::new(expected),
+                        observed: Box::new(receipt),
+                    });
+                }
+                Ok(receipt)
+            })
+            .map_err(map_anchor_restore_error)?
+    }
+}
+
+fn map_anchor_restore_error<A, E, R, P>(
+    error: AnchorCoordinatorError<R, P>,
+) -> RecoveryRestoreError<A, E, R, P>
+where
+    A: Error + Send + Sync + 'static,
+    E: Error + Send + Sync + 'static,
+    R: Error + Send + Sync + 'static,
+    P: Error + Send + Sync + 'static,
+{
+    match error {
+        AnchorCoordinatorError::Contract(AnchorContractError::CheckpointNotCurrent) => {
+            RecoveryRestoreError::Contract(RecoveryContractError::CheckpointNotAnchored)
         }
-        Ok(receipt)
+        AnchorCoordinatorError::Contract(error) => RecoveryRestoreError::AnchorContract(error),
+        AnchorCoordinatorError::Anchor(error) => RecoveryRestoreError::Anchor(error),
+        AnchorCoordinatorError::FenceOutcomeUnknown(error) => {
+            RecoveryRestoreError::AnchorFenceOutcomeUnknown(error)
+        }
+        AnchorCoordinatorError::Authenticator(error) => {
+            RecoveryRestoreError::CheckpointAuthenticator(error)
+        }
     }
 }
 
 pub type RecoveryCaptureResult<T, S, J, A> = Result<T, RecoveryCaptureError<S, J, A>>;
 pub type RecoveryVerifyResult<T, A> = Result<T, RecoveryVerificationError<A>>;
-pub type RecoveryRestoreResult<T, A, E> = Result<T, RecoveryRestoreError<A, E>>;
+pub type RecoveryRestoreResult<T, A, E, R, P> = Result<T, RecoveryRestoreError<A, E, R, P>>;
 
 #[derive(Debug)]
 pub enum RecoveryCaptureError<S, J, A>
@@ -710,44 +806,93 @@ where
 impl<A> Error for RecoveryVerificationError<A> where A: Error + Send + Sync + 'static {}
 
 #[derive(Debug)]
-pub enum RecoveryRestoreError<A, E>
+pub enum RecoveryRestoreError<A, E, R, P>
 where
     A: Error + Send + Sync + 'static,
     E: Error + Send + Sync + 'static,
+    R: Error + Send + Sync + 'static,
+    P: Error + Send + Sync + 'static,
 {
     Contract(RecoveryContractError),
+    AnchorContract(AnchorContractError),
     Authenticator(A),
+    CheckpointAuthenticator(P),
+    Anchor(R),
+    AnchorFenceOutcomeUnknown(R),
     Target(E),
     PublishOutcomeUnknown(E),
+    PublishReceiptMismatchOutcomeUnknown {
+        expected: Box<RestoreReceipt>,
+        observed: Box<RestoreReceipt>,
+    },
 }
 
-impl<A, E> fmt::Display for RecoveryRestoreError<A, E>
+impl<A, E, R, P> fmt::Display for RecoveryRestoreError<A, E, R, P>
 where
     A: Error + Send + Sync + 'static,
     E: Error + Send + Sync + 'static,
+    R: Error + Send + Sync + 'static,
+    P: Error + Send + Sync + 'static,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Contract(error) => {
                 write!(formatter, "recovery restore contract failure: {error}")
             }
+            Self::AnchorContract(error) => {
+                write!(
+                    formatter,
+                    "rollback anchor contract failure during restore: {error}"
+                )
+            }
             Self::Authenticator(error) => {
                 write!(formatter, "recovery archive authenticator failure: {error}")
             }
+            Self::CheckpointAuthenticator(error) => {
+                write!(
+                    formatter,
+                    "checkpoint authenticator failure during restore: {error}"
+                )
+            }
+            Self::Anchor(error) => write!(
+                formatter,
+                "rollback anchor provider failed before recovery publication began: {error}"
+            ),
+            Self::AnchorFenceOutcomeUnknown(error) => write!(
+                formatter,
+                "rollback anchor fence failed after recovery publication may have begun; reconcile anchor and target before retry: {error}"
+            ),
             Self::Target(error) => write!(formatter, "recovery target failure: {error}"),
             Self::PublishOutcomeUnknown(error) => write!(
                 formatter,
                 "recovery target may have been published; reconcile before retry: {error}"
             ),
+            Self::PublishReceiptMismatchOutcomeUnknown { expected, observed } => write!(
+                formatter,
+                "recovery target returned a mismatched receipt after publication; outcome is unknown and requires readback: expected {expected:?}, observed {observed:?}"
+            ),
         }
     }
 }
 
-impl<A, E> Error for RecoveryRestoreError<A, E>
+impl<A, E, R, P> Error for RecoveryRestoreError<A, E, R, P>
 where
     A: Error + Send + Sync + 'static,
     E: Error + Send + Sync + 'static,
+    R: Error + Send + Sync + 'static,
+    P: Error + Send + Sync + 'static,
 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Contract(error) => Some(error),
+            Self::AnchorContract(error) => Some(error),
+            Self::Authenticator(error) => Some(error),
+            Self::CheckpointAuthenticator(error) => Some(error),
+            Self::Anchor(error) | Self::AnchorFenceOutcomeUnknown(error) => Some(error),
+            Self::Target(error) | Self::PublishOutcomeUnknown(error) => Some(error),
+            Self::PublishReceiptMismatchOutcomeUnknown { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1054,12 +1199,16 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
     use heptabao_journal_api::{AppendReceipt, JournalContractError, JournalOpenMode};
     use heptabao_rollback_anchor::{
         AnchorAdvanceReceipt, AnchorContractError, AnchorCoordinator, CheckpointAuthenticator,
         RollbackAnchor,
     };
-    use heptabao_storage_api::{CommitReceipt, GenerationSnapshot, OpaqueState, StoreOpenMode};
+    use heptabao_storage_api::{
+        CommitIntent, CommitReceipt, CommitRecovery, GenerationSnapshot, OpaqueState, StoreOpenMode,
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TestError {
@@ -1160,6 +1309,18 @@ mod tests {
                 digest: self.digest,
                 state,
             }))
+        }
+
+        fn prepare_commit(
+            &self,
+            _expected_current: Option<Generation>,
+            _candidate: &OpaqueState,
+        ) -> Result<CommitIntent, Self::Error> {
+            Err(TestError::Contract)
+        }
+
+        fn recover_commit(&mut self, _intent: CommitIntent) -> Result<CommitRecovery, Self::Error> {
+            Err(TestError::Contract)
         }
 
         fn commit(
@@ -1276,6 +1437,20 @@ mod tests {
             Ok(Some(self.current.clone()))
         }
 
+        fn with_current_fence<T, F>(
+            &mut self,
+            expected: &RecoveryCheckpoint,
+            operation: F,
+        ) -> Result<T, heptabao_rollback_anchor::AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            if &self.current != expected {
+                return Err(heptabao_rollback_anchor::AnchorFenceError::CheckpointNotCurrent);
+            }
+            Ok(operation())
+        }
+
         fn compare_and_swap(
             &mut self,
             _expected_revision: Option<AnchorRevision>,
@@ -1310,22 +1485,62 @@ mod tests {
         }
     }
 
-    fn verified_checkpoint(
+    fn checkpoint_coordinator(
         checkpoint: RecoveryCheckpoint,
-    ) -> Result<VerifiedRecoveryCheckpoint, Box<dyn Error>> {
-        let coordinator = AnchorCoordinator::new(
+    ) -> Result<AnchorCoordinator<TestAnchor, TestCheckpointAuthenticator>, Box<dyn Error>> {
+        Ok(AnchorCoordinator::new(
             TestAnchor {
-                current: checkpoint.clone(),
+                current: checkpoint,
             },
             TestCheckpointAuthenticator::new()?,
-        );
-        Ok(coordinator.verify_owned(checkpoint)?)
+        ))
+    }
+
+    #[derive(Debug)]
+    struct PostEntryFenceFailureAnchor {
+        current: RecoveryCheckpoint,
+    }
+
+    impl RollbackAnchor for PostEntryFenceFailureAnchor {
+        type Error = TestError;
+
+        fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error> {
+            Ok(Some(self.current.clone()))
+        }
+
+        fn with_current_fence<T, F>(
+            &mut self,
+            expected: &RecoveryCheckpoint,
+            operation: F,
+        ) -> Result<T, heptabao_rollback_anchor::AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            if &self.current != expected {
+                return Err(heptabao_rollback_anchor::AnchorFenceError::CheckpointNotCurrent);
+            }
+            let _operation_result = operation();
+            Err(
+                heptabao_rollback_anchor::AnchorFenceError::OutcomeUnknownAfterEntry(
+                    TestError::Target,
+                ),
+            )
+        }
+
+        fn compare_and_swap(
+            &mut self,
+            _expected_revision: Option<AnchorRevision>,
+            _next: RecoveryCheckpoint,
+        ) -> Result<AnchorAdvanceReceipt, Self::Error> {
+            Err(TestError::Contract)
+        }
     }
 
     #[derive(Debug, Default)]
     struct MemoryTarget {
         occupied: bool,
         outcome_unknown: bool,
+        wrong_receipt: bool,
         restored_state: Vec<u8>,
     }
 
@@ -1337,13 +1552,15 @@ mod tests {
 
     impl RecoveryTarget for MemoryTarget {
         type Error = TestError;
-        type Staged = VerifiedRecoveryImage;
+        type Staged = AuthorizedRecoveryImage;
 
-        fn is_empty(&self) -> Result<bool, Self::Error> {
-            Ok(!self.occupied)
-        }
-
-        fn stage(&mut self, image: VerifiedRecoveryImage) -> Result<Self::Staged, Self::Error> {
+        fn stage_if_empty(
+            &mut self,
+            image: AuthorizedRecoveryImage,
+        ) -> Result<Self::Staged, StageFailure<Self::Error>> {
+            if self.occupied {
+                return Err(StageFailure::TargetNotEmpty);
+            }
             Ok(image)
         }
 
@@ -1357,15 +1574,150 @@ mod tests {
             let archive_id = staged.archive_id().clone();
             let observation = staged.observation().clone();
             let checkpoint_digest = staged.checkpoint().digest();
-            let (_, _, _, _, state, _) = staged.into_image().into_parts();
+            let anchor_revision = staged.anchor_revision();
+            let ((_, _, _, _, state, _), authorized_revision) = staged.into_authorized_parts();
+            if authorized_revision != anchor_revision {
+                return Err(PublishFailure::NotPublished(TestError::Contract));
+            }
             self.restored_state = state;
             self.occupied = true;
+            let returned_checkpoint_digest = if self.wrong_receipt {
+                CheckpointDigest::new([0x55; 32])
+                    .map_err(|_| PublishFailure::OutcomeUnknown(TestError::Contract))?
+            } else {
+                checkpoint_digest
+            };
             Ok(RestoreReceipt {
                 archive_id,
                 observation,
-                checkpoint_digest,
+                checkpoint_digest: returned_checkpoint_digest,
+                anchor_revision,
             })
         }
+    }
+
+    #[derive(Debug)]
+    struct SharedAnchor {
+        current: Arc<Mutex<RecoveryCheckpoint>>,
+    }
+
+    impl RollbackAnchor for SharedAnchor {
+        type Error = TestError;
+
+        fn current(&self) -> Result<Option<RecoveryCheckpoint>, Self::Error> {
+            self.current
+                .lock()
+                .map(|current| Some(current.clone()))
+                .map_err(|_| TestError::Target)
+        }
+
+        fn with_current_fence<T, F>(
+            &mut self,
+            expected: &RecoveryCheckpoint,
+            operation: F,
+        ) -> Result<T, heptabao_rollback_anchor::AnchorFenceError<Self::Error>>
+        where
+            F: FnOnce() -> T,
+        {
+            let current = self.current.lock().map_err(|_| {
+                heptabao_rollback_anchor::AnchorFenceError::ProviderBeforeEntry(TestError::Target)
+            })?;
+            if &*current != expected {
+                return Err(heptabao_rollback_anchor::AnchorFenceError::CheckpointNotCurrent);
+            }
+            let result = operation();
+            drop(current);
+            Ok(result)
+        }
+
+        fn compare_and_swap(
+            &mut self,
+            expected_revision: Option<AnchorRevision>,
+            next: RecoveryCheckpoint,
+        ) -> Result<AnchorAdvanceReceipt, Self::Error> {
+            let mut current = self.current.lock().map_err(|_| TestError::Target)?;
+            if Some(current.revision()) != expected_revision {
+                return Err(TestError::Contract);
+            }
+            let previous = current.clone();
+            *current = next.clone();
+            Ok(AnchorAdvanceReceipt {
+                previous: Some(previous),
+                current: next,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FenceProbeTarget {
+        current: Arc<Mutex<RecoveryCheckpoint>>,
+        publish_observed_fence: bool,
+        occupied: bool,
+    }
+
+    impl RecoveryTarget for FenceProbeTarget {
+        type Error = TestError;
+        type Staged = AuthorizedRecoveryImage;
+
+        fn stage_if_empty(
+            &mut self,
+            image: AuthorizedRecoveryImage,
+        ) -> Result<Self::Staged, StageFailure<Self::Error>> {
+            if self.occupied {
+                return Err(StageFailure::TargetNotEmpty);
+            }
+            Ok(image)
+        }
+
+        fn publish(
+            &mut self,
+            staged: Self::Staged,
+        ) -> Result<RestoreReceipt, PublishFailure<Self::Error>> {
+            self.publish_observed_fence = self.current.try_lock().is_err();
+            if !self.publish_observed_fence {
+                return Err(PublishFailure::NotPublished(TestError::Target));
+            }
+            self.occupied = true;
+            Ok(RestoreReceipt {
+                archive_id: staged.archive_id().clone(),
+                observation: staged.observation().clone(),
+                checkpoint_digest: staged.checkpoint().digest(),
+                anchor_revision: staged.anchor_revision(),
+            })
+        }
+    }
+
+    #[test]
+    fn anchor_fence_is_held_across_target_publication() -> Result<(), Box<dyn Error>> {
+        let store = MemoryStore::new()?;
+        let journal = MemoryJournal::new()?;
+        let checkpoint = checkpoint(&store, &journal)?;
+        let shared = Arc::new(Mutex::new(checkpoint.clone()));
+        let mut anchor = AnchorCoordinator::new(
+            SharedAnchor {
+                current: Arc::clone(&shared),
+            },
+            TestCheckpointAuthenticator::new()?,
+        );
+        let authenticator = TestAuthenticator::new()?;
+        let archive = RecoveryArchive::capture(
+            RecoveryArchiveId::new("recovery-anchor-fence".to_owned())?,
+            &store,
+            &journal,
+            KeyEpoch::INITIAL,
+            checkpoint,
+            &authenticator,
+        )?;
+        let mut target = FenceProbeTarget {
+            current: shared,
+            publish_observed_fence: false,
+            occupied: false,
+        };
+        let receipt = RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor)?;
+        assert_eq!(receipt.anchor_revision, AnchorRevision::INITIAL);
+        assert!(target.publish_observed_fence);
+        assert!(target.occupied);
+        Ok(())
     }
 
     #[test]
@@ -1373,7 +1725,7 @@ mod tests {
         let store = MemoryStore::new()?;
         let journal = MemoryJournal::new()?;
         let checkpoint = checkpoint(&store, &journal)?;
-        let anchored_checkpoint = verified_checkpoint(checkpoint.clone())?;
+        let mut anchor = checkpoint_coordinator(checkpoint.clone())?;
         let authenticator = TestAuthenticator::new()?;
         let archive = RecoveryArchive::capture(
             RecoveryArchiveId::new("recovery-0001".to_owned())?,
@@ -1386,8 +1738,7 @@ mod tests {
         let encoded = archive.encode()?;
         let decoded = RecoveryArchive::decode(&encoded)?;
         let mut target = MemoryTarget::default();
-        let receipt =
-            RecoveryRestorer::restore(&mut target, decoded, &authenticator, &anchored_checkpoint)?;
+        let receipt = RecoveryRestorer::restore(&mut target, decoded, &authenticator, &mut anchor)?;
         assert_eq!(receipt.observation.generation(), Generation::INITIAL);
         assert_eq!(target.restored_state, b"sealed-state");
         Ok(())
@@ -1414,7 +1765,7 @@ mod tests {
         );
 
         let checkpoint = checkpoint(&store, &journal)?;
-        let anchored_checkpoint = verified_checkpoint(checkpoint.clone())?;
+        let mut anchor = checkpoint_coordinator(checkpoint.clone())?;
         let archive = RecoveryArchive::capture(
             RecoveryArchiveId::new("recovery-0003".to_owned())?,
             &store,
@@ -1426,7 +1777,7 @@ mod tests {
         let mut target = MemoryTarget::default();
         target.occupied = true;
         assert!(matches!(
-            RecoveryRestorer::restore(&mut target, archive, &authenticator, &anchored_checkpoint,),
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor,),
             Err(RecoveryRestoreError::Contract(
                 RecoveryContractError::TargetNotEmpty
             ))
@@ -1463,10 +1814,10 @@ mod tests {
             other_observation,
             CheckpointDigest::new([7; 32])?,
         )?;
-        let anchored_checkpoint = verified_checkpoint(other_checkpoint)?;
+        let mut anchor = checkpoint_coordinator(other_checkpoint)?;
         let mut target = MemoryTarget::default();
         assert!(matches!(
-            RecoveryRestorer::restore(&mut target, archive, &authenticator, &anchored_checkpoint,),
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor,),
             Err(RecoveryRestoreError::Contract(
                 RecoveryContractError::CheckpointNotAnchored
             ))
@@ -1506,7 +1857,7 @@ mod tests {
         let journal = MemoryJournal::new()?;
         let authenticator = TestAuthenticator::new()?;
         let checkpoint = checkpoint(&store, &journal)?;
-        let anchored_checkpoint = verified_checkpoint(checkpoint.clone())?;
+        let mut anchor = checkpoint_coordinator(checkpoint.clone())?;
         let archive = RecoveryArchive::capture(
             RecoveryArchiveId::new("recovery-0004".to_owned())?,
             &store,
@@ -1518,11 +1869,108 @@ mod tests {
         let mut target = MemoryTarget::default();
         target.outcome_unknown = true;
         assert!(matches!(
-            RecoveryRestorer::restore(&mut target, archive, &authenticator, &anchored_checkpoint,),
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor,),
             Err(RecoveryRestoreError::PublishOutcomeUnknown(
                 TestError::Target
             ))
         ));
+        Ok(())
+    }
+    #[test]
+    fn post_entry_anchor_fence_failure_is_outcome_unknown() -> Result<(), Box<dyn Error>> {
+        let store = MemoryStore::new()?;
+        let journal = MemoryJournal::new()?;
+        let authenticator = TestAuthenticator::new()?;
+        let checkpoint = checkpoint(&store, &journal)?;
+        let archive = RecoveryArchive::capture(
+            RecoveryArchiveId::new("recovery-post-entry-anchor-failure-0001".to_owned())?,
+            &store,
+            &journal,
+            KeyEpoch::INITIAL,
+            checkpoint.clone(),
+            &authenticator,
+        )?;
+        let mut anchor = AnchorCoordinator::new(
+            PostEntryFenceFailureAnchor {
+                current: checkpoint,
+            },
+            TestCheckpointAuthenticator::new()?,
+        );
+        let mut target = MemoryTarget::default();
+        assert!(matches!(
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor),
+            Err(RecoveryRestoreError::AnchorFenceOutcomeUnknown(
+                TestError::Target
+            ))
+        ));
+        assert!(target.occupied);
+        assert_eq!(target.restored_state, b"sealed-state");
+        Ok(())
+    }
+
+    #[test]
+    fn stale_checkpoint_cannot_authorize_restore() -> Result<(), Box<dyn Error>> {
+        let store = MemoryStore::new()?;
+        let journal = MemoryJournal::new()?;
+        let authenticator = TestAuthenticator::new()?;
+        let stale = checkpoint(&store, &journal)?;
+        let archive = RecoveryArchive::capture(
+            RecoveryArchiveId::new("recovery-stale-anchor-0001".to_owned())?,
+            &store,
+            &journal,
+            KeyEpoch::INITIAL,
+            stale.clone(),
+            &authenticator,
+        )?;
+        let current_observation = CheckpointObservation::new(
+            store.domain.clone(),
+            Generation::new(2)?,
+            StateDigest::new([4; 32])?,
+            journal.domain.clone(),
+            journal.tail(),
+            KeyEpoch::new(2)?,
+        );
+        let current = RecoveryCheckpoint::from_parts(
+            AnchorRevision::new(2)?,
+            Some(stale.digest()),
+            AnchorAuthenticatorId::new("heptabao/test-anchor".to_owned())?,
+            current_observation,
+            CheckpointDigest::new([7; 32])?,
+        )?;
+        let mut anchor = checkpoint_coordinator(current)?;
+        let mut target = MemoryTarget::default();
+        assert!(matches!(
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor),
+            Err(RecoveryRestoreError::Contract(
+                RecoveryContractError::CheckpointNotAnchored
+            ))
+        ));
+        assert!(!target.occupied);
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_receipt_after_publication_is_outcome_unknown() -> Result<(), Box<dyn Error>> {
+        let store = MemoryStore::new()?;
+        let journal = MemoryJournal::new()?;
+        let authenticator = TestAuthenticator::new()?;
+        let checkpoint = checkpoint(&store, &journal)?;
+        let mut anchor = checkpoint_coordinator(checkpoint.clone())?;
+        let archive = RecoveryArchive::capture(
+            RecoveryArchiveId::new("recovery-wrong-receipt-0001".to_owned())?,
+            &store,
+            &journal,
+            KeyEpoch::INITIAL,
+            checkpoint,
+            &authenticator,
+        )?;
+        let mut target = MemoryTarget::default();
+        target.wrong_receipt = true;
+        assert!(matches!(
+            RecoveryRestorer::restore(&mut target, archive, &authenticator, &mut anchor),
+            Err(RecoveryRestoreError::PublishReceiptMismatchOutcomeUnknown { .. })
+        ));
+        assert!(target.occupied);
         Ok(())
     }
 }

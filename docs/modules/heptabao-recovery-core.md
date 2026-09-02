@@ -49,6 +49,7 @@ The allowed direction follows the system crate graph: provider-neutral types and
 - `enum RecoveryContractError` (crates/heptabao-recovery-core/src/lib.rs)
 - `enum RecoveryRestoreError` (crates/heptabao-recovery-core/src/lib.rs)
 - `enum RecoveryVerificationError` (crates/heptabao-recovery-core/src/lib.rs)
+- `enum StageFailure` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn archive_id` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn as_str` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn capture` (crates/heptabao-recovery-core/src/lib.rs)
@@ -64,7 +65,9 @@ The allowed direction follows the system crate graph: provider-neutral types and
 - `fn restore` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn seal` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn sealed_state` (crates/heptabao-recovery-core/src/lib.rs)
+- `fn stage_if_empty` (crates/heptabao-recovery-core/src/lib.rs)
 - `fn verify` (crates/heptabao-recovery-core/src/lib.rs)
+- `struct AuthorizedRecoveryImage` (crates/heptabao-recovery-core/src/lib.rs)
 - `struct RecoveryArchiveId` (crates/heptabao-recovery-core/src/lib.rs)
 - `struct RecoveryArchive` (crates/heptabao-recovery-core/src/lib.rs)
 - `struct RecoveryAuthenticatorId` (crates/heptabao-recovery-core/src/lib.rs)
@@ -88,14 +91,28 @@ This index is generated from explicit `pub` declarations and is not a replacemen
 - Archive binds state generation/digest, journal tail, key epoch, checkpoint and authenticator identities.
 - Decoder rejects malformed, excessive, discontinuous, divergent, truncated and trailing input.
 - Restore requires the exact externally verified current checkpoint.
-- Target must be empty before staging.
+- Target admission and staging are one atomic provider operation.
 - Unknown publication outcome remains explicit.
+- An outer anchor-fence error after closure entry is an outcome-unknown result even when the target returned an exact receipt.
+- Anchor contract, anchor provider, checkpoint-authenticator and target errors remain distinct.
 
 A code change that weakens one of these invariants requires a new plan revision rather than a silent compatibility interpretation.
 
 ## Failure and retry semantics
 
 After unknown publication, inspect the target and exact receipt before any retry. Never overwrite a non-empty target blindly.
+
+The restore error classes have different retry authority:
+
+| Error class | Publication by this call | Retry rule |
+|---|---|---|
+| `CheckpointNotAnchored` | definitely not entered through the current fence | obtain a new authorized archive/checkpoint; do not reinterpret stale authority |
+| `Anchor(error)` | fence failed before closure entry | diagnose provider; no publication is attributed to this invocation |
+| `CheckpointAuthenticator(error)` | current checkpoint could not be authenticated | security hold; no publication |
+| `Target(error)` from staging or proven-not-published path | provider-specific, bounded by the variant | follow target contract; never switch targets automatically |
+| `PublishOutcomeUnknown(error)` | may have published | target readback required |
+| `PublishReceiptMismatchOutcomeUnknown` | published effect may exist | exact target readback required |
+| `AnchorFenceOutcomeUnknown(error)` | closure ran; target and fence completion may have occurred | reconcile both external anchor and target before retry |
 
 Errors are part of the public contract. Unknown, blocked, stale, corrupt, unauthenticated and unauthorized outcomes remain distinct. Callers must not collapse them into a generic retryable transport failure.
 
@@ -109,6 +126,8 @@ Format changes require an explicit version transition, backward/forward compatib
 
 The caller must preserve single-writer or immutable-reader ownership declared by the domain. Cancellation after an irreversible provider call or durable publication changes only the waiter; it does not revoke the completed authority or commit. Shared mutable state requires a documented fence, generation or epoch.
 
+Cancellation or provider lease loss after entry into `with_current_fence` is classified as `AnchorFenceOutcomeUnknown`; cancellation must not turn an already-published restore into a pre-entry failure.
+
 ## Security and secret handling
 
 - Secret-bearing bytes are not logged, formatted, cloned or serialized unless an explicit audited exposure method permits it.
@@ -118,12 +137,17 @@ The caller must preserve single-writer or immutable-reader ownership declared by
 
 ## Testing and evidence
 
-Detected crate-local tests:
+Detected crate-local tests include:
 - `archive_authenticator_identity_is_bound` (crates/heptabao-recovery-core/src/lib.rs)
 - `capture_encode_decode_verify_and_restore_round_trip` (crates/heptabao-recovery-core/src/lib.rs)
 - `restore_requires_the_exact_externally_verified_checkpoint` (crates/heptabao-recovery-core/src/lib.rs)
 - `tamper_trailing_bytes_and_non_empty_target_fail_closed` (crates/heptabao-recovery-core/src/lib.rs)
 - `unknown_target_publication_remains_explicit` (crates/heptabao-recovery-core/src/lib.rs)
+- `anchor_fence_is_held_across_target_publication` (crates/heptabao-recovery-core/src/lib.rs)
+- `wrong_receipt_after_publication_is_outcome_unknown` (crates/heptabao-recovery-core/src/lib.rs)
+- `post_entry_anchor_fence_failure_is_outcome_unknown` (crates/heptabao-recovery-core/src/lib.rs)
+
+The post-entry test uses a deterministic anchor that invokes the restore closure, leaves the target occupied with restored state and then returns `OutcomeUnknownAfterEntry`. The required API result is `AnchorFenceOutcomeUnknown`, proving the call cannot be safely retried from its return value alone.
 
 Required local gate:
 
@@ -145,25 +169,47 @@ Domain changes also run plan mutation tests, current platform/Oracle regressions
 6. Run exact-head read-only CI; preserve failed evidence.
 7. Obtain independent review for storage, cryptography, security or distributed-systems critical changes.
 
+Any recovery target or anchor provider must document its linearization point, no-effect proof, outcome-unknown boundary, readback method and operator hold state before it may be composed into a higher profile.
+
 ## Operations and diagnostics
 
 Recovery requires a two-person, source-bound procedure with archive digest, external anchor observation and post-restore verification.
 
-Diagnostics use stable typed error classes and opaque correlation identities. Operators must preserve suspect state for investigation instead of deleting files or rewriting evidence to obtain a pass.
+Diagnostics must preserve stable distinctions among stale anchor, anchor contract failure, pre-entry provider failure, checkpoint authentication failure, target failure, publication uncertainty, receipt mismatch and post-entry fence uncertainty. After `AnchorFenceOutcomeUnknown`, freeze automation and retain the archive ID, checkpoint digest, anchor revision and safe target/anchor observations without logging sealed payload bytes or authentication tags.
 
 ## Known gaps
 
 - No production archive authenticator or backup custody.
+- No production remote anchor or target readback provider.
 - No online upgrade/migration integration.
 - No HA/replicated recovery.
-
+- Destructive controller/filesystem qualification remains external.
 
 ## Traceability and maintenance
 
 - Crate path: `crates/heptabao-recovery-core`
 - Module guide: `docs/modules/heptabao-recovery-core.md`
-- Source baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`
-- Validation: `scripts/validate_module_documentation_v1_4_4.py`
+- Historical module baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`
+- V1.4.6 phase-aware fence source preflight: `8893cdaad4eec3c11f7b367c7bf0e57c20b6631a` / `5c551fa2665bc002113b39cec1b65afe02fe2b99`
+- Validation: `scripts/validate_module_documentation_v1_4_4.py`, `scripts/validate_plan_v1_4_6.py`
 - Coverage object: `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`
 
 The owner updates this document whenever public API, dependency edges, persistent formats, security invariants, retry behavior, tests or known gaps change.
+
+### V1.4.5 linear restore admission
+
+Restore receives an `AnchorCoordinator`, not a detached verified token. It verifies the archive checkpoint against the live external anchor before target inspection and again immediately before creating the private `AuthorizedRecoveryImage` capability. Targets can stage only that capability, cannot receive a public verified image, and the receipt binds the current anchor revision. The verified image cannot be downgraded to a raw recovery image.
+
+### V1.4.5 publication receipt uncertainty
+
+A mismatched receipt returned after `publish` is classified as `PublishReceiptMismatchOutcomeUnknown`, because publication may already have occurred. It is never a safe retryable contract failure. Operators and target providers must perform authoritative readback and reconciliation before another restore attempt. Only `AuthorizedRecoveryImage` exposes consumable sealed state and journal records; archive-authenticated images do not.
+
+## V1.4.6 atomic admission and fenced publish
+
+`RecoveryTarget::stage_if_empty` replaces separate advisory emptiness and stage calls. The provider atomically verifies/claims an empty target and returns a staged token consumed by `publish`. `RecoveryRestorer` creates the `AuthorizedRecoveryImage`, stages and publishes it, and compares the complete receipt while the rollback provider's exact-current fence is held.
+
+A provider-declared publication-unknown or mismatched post-publication receipt requires target readback. It is never a safe automatic retry.
+
+## V1.4.6 outer-fence outcome preservation
+
+`RecoveryRestorer` now maps only a real `AnchorContractError::CheckpointNotCurrent` to `CheckpointNotAnchored`. Other anchor contract errors, pre-entry anchor provider failures and checkpoint-authenticator failures retain separate typed variants. When the anchor reports `FenceOutcomeUnknown` after closure entry, restore returns `AnchorFenceOutcomeUnknown` regardless of an inner exact receipt. This prevents release, lease or post-operation failures from being relabelled as a safe stale-checkpoint result.
