@@ -122,6 +122,42 @@ added_blockers:
   - scripts/validate_plan_v1_4_6.py
   - tests/plan/test_plan_v1_4_6.py
   closure_receipt_required: true
+- id: HB-BLK-REPO-057
+  class: REPOSITORY_CONTROLLED
+  severity: CRITICAL
+  title: outer anchor-fence failure could relabel a completed recovery publication as a safe pre-entry failure
+  state: IMPLEMENTED_SOURCE_REVIEW_REQUIRED
+  closure_criteria:
+  - AnchorFenceError distinguishes checkpoint rejection provider failure before entry and uncertainty after operation entry
+  - CheckpointNotCurrent and ProviderBeforeEntry guarantee the publication closure was not invoked
+  - OutcomeUnknownAfterEntry is mandatory whenever fence validity or completion is uncertain after closure entry
+  - RecoveryRestorer preserves anchor contract provider and checkpoint-authenticator failure classes
+  - deterministic hostile provider publishes the target and then fails fence completion
+  - post-entry fence failure returns AnchorFenceOutcomeUnknown and requires anchor plus target reconciliation before retry
+  evidence:
+  - crates/heptabao-rollback-anchor/src/lib.rs
+  - crates/heptabao-recovery-core/src/lib.rs
+  - docs/recovery/HEPTABAO_AUTHORITATIVE_RECOVERY_PROTOCOL_V1.md
+  - docs/modules/heptabao-rollback-anchor.md
+  - docs/modules/heptabao-recovery-core.md
+  closure_receipt_required: true
+- id: HB-BLK-REPO-058
+  class: REPOSITORY_CONTROLLED
+  severity: HIGH
+  title: inherited Rust semantic validation was sensitive to rustfmt whitespace
+  state: IMPLEMENTED_SOURCE_REVIEW_REQUIRED
+  closure_criteria:
+  - Rust required-token checks ignore only insignificant whitespace introduced by formatting
+  - non-Rust semantic tokens remain exact
+  - hostile tests still reject removal or renaming of required symbols
+  - positive regression proves a rustfmt line break cannot create a false blocker
+  - exact candidate passes inherited validation after cargo fmt
+  evidence:
+  - scripts/validate_plan_v1_4_5.py
+  - tests/plan/test_plan_v1_4_5.py
+  - scripts/validate_plan_v1_4_6.py
+  - tests/plan/test_plan_v1_4_6.py
+  closure_receipt_required: true
 external_and_control_blockers_carried_forward:
 - HB-BLK-CTRL-001
 - HB-BLK-EXT-001
