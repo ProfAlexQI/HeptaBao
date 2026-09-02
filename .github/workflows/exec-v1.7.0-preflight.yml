@@ -55,10 +55,12 @@ jobs:
           cp -R .exec/v1_7_assets /tmp/v1_7_assets
           python3 .exec/patch_v1_7_assets.py /tmp/v1_7_assets
           python3 .exec/patch_v1_7_assets_v2.py /tmp/v1_7_assets
+          python3 .exec/patch_v1_7_assets_v3.py /tmp/v1_7_assets
           python3 -m py_compile \
             /tmp/materialize_v1_7_0.py \
             .exec/patch_v1_7_assets.py \
             .exec/patch_v1_7_assets_v2.py \
+            .exec/patch_v1_7_assets_v3.py \
             .exec/admit_reviewed_predecessor.py
 
       - name: Build isolated compile harness
@@ -316,6 +318,7 @@ jobs:
             --profile minimal --component rustfmt --component clippy
           cd /tmp/v170-preflight
           cargo +1.98.0 generate-lockfile --offline
+          cargo +1.98.0 fmt --all
           cargo +1.98.0 fmt --all -- --check
           cargo +1.98.0 test --locked --workspace --all-targets
           cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
