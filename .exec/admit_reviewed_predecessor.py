@@ -5,80 +5,147 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
-
-def gh(repository: str, endpoint: str) -> Any:
-    output = subprocess.check_output(
-        ["gh", "api", f"repos/{repository}/{endpoint}"],
-        text=True,
-    )
-    return json.loads(output)
+DECISIVE_REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 
 
-def require_text(value: Any, name: str) -> str:
+def command(*args: str) -> Any:
+    return json.loads(subprocess.check_output(args, text=True))
+
+
+def rest(repository: str, endpoint: str, **params: Any) -> Any:
+    args = ["gh", "api", "--method", "GET", f"repos/{repository}/{endpoint}"]
+    for name, value in params.items():
+        args.extend(["-f", f"{name}={value}"])
+    return command(*args)
+
+
+def paged(
+    repository: str,
+    endpoint: str,
+    *,
+    key: str | None = None,
+    **params: Any,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        payload = rest(
+            repository,
+            endpoint,
+            **params,
+            per_page=100,
+            page=page,
+        )
+        values = payload.get(key) if key is not None and isinstance(payload, dict) else payload
+        if not isinstance(values, list):
+            raise SystemExit(f"paged response is not an array: {endpoint}")
+        if any(not isinstance(item, dict) for item in values):
+            raise SystemExit(f"paged response contains non-object item: {endpoint}")
+        output.extend(values)
+        if len(values) < 100:
+            return output
+    raise SystemExit(f"pagination exceeded bounded limit: {endpoint}")
+
+
+def require_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value or value == "null":
-        raise SystemExit(f"missing {name}")
+        raise SystemExit(f"missing {label}")
     return value
 
 
-def discover_pull_request(
-    repository: str,
-    expected_head_branch: str,
-    integration_branch: str,
-) -> int:
-    matches: list[int] = []
-    for page in range(1, 101):
-        query = urllib.parse.urlencode(
-            {
-                "state": "closed",
-                "per_page": 100,
-                "page": page,
-                "sort": "updated",
-                "direction": "desc",
-            }
-        )
-        pulls = gh(repository, f"pulls?{query}")
-        if not isinstance(pulls, list):
-            raise SystemExit("pull-request discovery response is not an array")
-        for pull in pulls:
-            head = pull.get("head") or {}
-            base = pull.get("base") or {}
-            head_repo = head.get("repo") or {}
-            if (
-                pull.get("merged_at")
-                and head.get("ref") == expected_head_branch
-                and base.get("ref") == integration_branch
-                and head_repo.get("full_name") == repository
-            ):
-                number = pull.get("number")
-                if isinstance(number, int):
-                    matches.append(number)
-        if len(pulls) < 100:
-            break
-    else:
-        raise SystemExit("pull-request discovery exceeded bounded pagination")
-
-    unique = sorted(set(matches))
-    if len(unique) != 1:
+def discover(repository: str, head_branch: str, base_branch: str) -> int:
+    pulls = paged(
+        repository,
+        "pulls",
+        state="closed",
+        sort="updated",
+        direction="desc",
+    )
+    found = sorted(
+        {
+            pull["number"]
+            for pull in pulls
+            if pull.get("merged_at")
+            and ((pull.get("head") or {}).get("ref")) == head_branch
+            and ((pull.get("base") or {}).get("ref")) == base_branch
+            and ((((pull.get("head") or {}).get("repo") or {}).get("full_name")))
+            == repository
+            and isinstance(pull.get("number"), int)
+        }
+    )
+    if len(found) != 1:
         raise SystemExit(
-            "expected exactly one merged predecessor PR for "
-            f"{expected_head_branch}->{integration_branch}, observed={unique}"
+            f"expected one merged PR for {head_branch}->{base_branch}; observed={found}"
         )
-    return unique[0]
+    return found[0]
+
+
+def latest_decisive_reviews(reviews: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for review in sorted(reviews, key=lambda item: item.get("submitted_at") or ""):
+        login = (review.get("user") or {}).get("login")
+        state = review.get("state")
+        if (
+            isinstance(login, str)
+            and login
+            and state in DECISIVE_REVIEW_STATES
+        ):
+            latest[login] = review
+    return latest
+
+
+def review_threads(repository: str, number: int) -> dict[str, Any]:
+    owner, name = repository.split("/", 1)
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "reviewThreads(first:100){nodes{isResolved}pageInfo{hasNextPage}}}}}"
+    )
+    value = command(
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={query}",
+        "-F",
+        f"owner={owner}",
+        "-F",
+        f"name={name}",
+        "-F",
+        f"number={number}",
+    )
+    try:
+        result = value["data"]["repository"]["pullRequest"]["reviewThreads"]
+    except (KeyError, TypeError) as error:
+        raise SystemExit("review-thread response malformed") from error
+    if not isinstance(result, dict):
+        raise SystemExit("review-thread response is not an object")
+    return result
+
+
+def commit_identity(repository: str, sha: str) -> tuple[str, list[str], bool]:
+    value = rest(repository, f"commits/{sha}")
+    tree = require_text(
+        ((((value.get("commit") or {}).get("tree") or {}).get("sha"))),
+        "commit tree",
+    )
+    parents = [
+        require_text(item.get("sha"), "commit parent")
+        for item in value.get("parents") or []
+    ]
+    verified = (
+        (((value.get("commit") or {}).get("verification") or {}).get("verified"))
+        is True
+    )
+    return tree, parents, verified
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
-    parser.add_argument(
-        "--pr",
-        type=int,
-        help="legacy non-authoritative hint; exact branch/base discovery is authoritative",
-    )
     parser.add_argument("--expected-head-branch", required=True)
     parser.add_argument("--integration-branch", required=True)
     parser.add_argument("--required-reviewer", action="append", default=[])
@@ -87,44 +154,42 @@ def main() -> int:
     args = parser.parse_args()
     if not args.repository:
         raise SystemExit("repository is required")
+    required_reviewers = sorted(set(args.required_reviewer))
+    required_workflows = sorted(set(args.required_workflow))
+    if not required_reviewers:
+        raise SystemExit("at least one required reviewer is required")
+    if "current-head review admission" not in required_workflows:
+        raise SystemExit("post-review current-head admission workflow is required")
 
-    pr_number = discover_pull_request(
+    number = discover(
         args.repository,
         args.expected_head_branch,
         args.integration_branch,
     )
-    if args.pr is not None and args.pr != pr_number:
-        print(
-            f"legacy PR hint #{args.pr} superseded by exact discovered PR #{pr_number}",
-            file=sys.stderr,
-        )
-
-    pull = gh(args.repository, f"pulls/{pr_number}")
+    pull = rest(args.repository, f"pulls/{number}")
     if pull.get("state") != "closed" or pull.get("merged") is not True:
-        raise SystemExit(f"PR #{pr_number} is not merged")
-    if (pull.get("base") or {}).get("ref") != args.integration_branch:
-        raise SystemExit("predecessor base branch mismatch")
-    if (pull.get("head") or {}).get("ref") != args.expected_head_branch:
-        raise SystemExit("predecessor head branch mismatch")
-    if ((pull.get("head") or {}).get("repo") or {}).get("full_name") != args.repository:
-        raise SystemExit("predecessor head repository mismatch")
+        raise SystemExit(f"PR #{number} is not merged")
+    head = pull.get("head") or {}
+    base = pull.get("base") or {}
+    if head.get("ref") != args.expected_head_branch:
+        raise SystemExit("head branch mismatch")
+    if base.get("ref") != args.integration_branch:
+        raise SystemExit("base branch mismatch")
+    if ((head.get("repo") or {}).get("full_name")) != args.repository:
+        raise SystemExit("head repository mismatch")
 
-    reviewed_head = require_text((pull.get("head") or {}).get("sha"), "reviewed head")
-    merge_sha = require_text(pull.get("merge_commit_sha"), "merge commit")
-    base_sha = require_text((pull.get("base") or {}).get("sha"), "base commit")
+    reviewed_head = require_text(head.get("sha"), "reviewed head")
+    merge_commit = require_text(pull.get("merge_commit_sha"), "merge commit")
+    base_commit = require_text(base.get("sha"), "base commit")
     author = require_text((pull.get("user") or {}).get("login"), "PR author")
+    marker = f"<!-- current-head-review-admission:{reviewed_head} -->"
+    if marker not in (pull.get("body") or ""):
+        raise SystemExit("merged predecessor lacks exact-head admission marker")
 
-    reviews = gh(args.repository, f"pulls/{pr_number}/reviews?per_page=100")
-    if not isinstance(reviews, list):
-        raise SystemExit("review response is not an array")
-    latest: dict[str, dict[str, Any]] = {}
-    for review in sorted(reviews, key=lambda item: item.get("submitted_at") or ""):
-        login = (review.get("user") or {}).get("login")
-        if login:
-            latest[login] = review
-
+    reviews = paged(args.repository, f"pulls/{number}/reviews")
+    latest = latest_decisive_reviews(reviews)
     waiting = []
-    for login in sorted(set(args.required_reviewer)):
+    for login in required_reviewers:
         review = latest.get(login)
         if (
             not review
@@ -135,10 +200,7 @@ def main() -> int:
         ):
             waiting.append(login)
     if waiting:
-        raise SystemExit(
-            "predecessor lacks eligible exact-head approvals: " + ", ".join(waiting)
-        )
-
+        raise SystemExit("missing eligible exact-head approvals: " + ", ".join(waiting))
     blocking = sorted(
         login
         for login, review in latest.items()
@@ -146,34 +208,34 @@ def main() -> int:
         and review.get("state") == "CHANGES_REQUESTED"
     )
     if blocking:
-        raise SystemExit(
-            "predecessor has current-head change requests: " + ", ".join(blocking)
-        )
+        raise SystemExit("current-head changes requested by: " + ", ".join(blocking))
 
-    run_payload = gh(
+    threads = review_threads(args.repository, number)
+    if ((threads.get("pageInfo") or {}).get("hasNextPage")) is not False:
+        raise SystemExit("review threads exceed bounded verifier")
+    nodes = threads.get("nodes") or []
+    if not isinstance(nodes, list):
+        raise SystemExit("review-thread nodes are not an array")
+    if any(not item.get("isResolved") for item in nodes):
+        raise SystemExit("merged predecessor retained unresolved review threads")
+
+    runs = paged(
         args.repository,
-        "actions/runs?"
-        + urllib.parse.urlencode(
-            {
-                "event": "pull_request",
-                "head_sha": reviewed_head,
-                "per_page": 100,
-            }
-        ),
+        "actions/runs",
+        key="workflow_runs",
+        event="pull_request",
+        head_sha=reviewed_head,
     )
-    runs = run_payload.get("workflow_runs")
-    if not isinstance(runs, list):
-        raise SystemExit("workflow-run response is not an array")
     latest_runs: dict[str, dict[str, Any]] = {}
     for run in sorted(runs, key=lambda item: item.get("id") or 0):
         name = run.get("name")
         if isinstance(name, str):
             latest_runs[name] = run
-    missing = sorted(set(args.required_workflow) - set(latest_runs))
+    missing = sorted(set(required_workflows) - set(latest_runs))
     if missing:
-        raise SystemExit("predecessor lacks workflow families: " + ", ".join(missing))
+        raise SystemExit("missing workflow families: " + ", ".join(missing))
     bad = []
-    for name in sorted(set(args.required_workflow)):
+    for name in required_workflows:
         run = latest_runs[name]
         if (
             run.get("head_sha") != reviewed_head
@@ -184,58 +246,54 @@ def main() -> int:
                 f"{name}:{run.get('head_sha')}:{run.get('status')}:{run.get('conclusion')}"
             )
     if bad:
-        raise SystemExit("predecessor workflow admission failed: " + "; ".join(bad))
+        raise SystemExit("workflow admission failed: " + "; ".join(bad))
 
-    encoded_branch = urllib.parse.quote(args.integration_branch, safe="")
-    branch = gh(args.repository, f"branches/{encoded_branch}")
-    integration_sha = require_text(
-        ((branch.get("commit") or {}).get("sha")),
+    encoded = urllib.parse.quote(args.integration_branch, safe="")
+    integration = rest(args.repository, f"branches/{encoded}")
+    integration_head = require_text(
+        ((integration.get("commit") or {}).get("sha")),
         "integration head",
     )
-    if integration_sha != merge_sha:
+    if integration_head != merge_commit:
         raise SystemExit(
-            f"integration head {integration_sha} does not equal merge {merge_sha}"
+            f"integration head {integration_head} != merge commit {merge_commit}"
         )
 
-    commit = gh(args.repository, f"commits/{merge_sha}")
-    verification = ((commit.get("commit") or {}).get("verification") or {})
-    if verification.get("verified") is not True:
-        raise SystemExit("predecessor merge is not GitHub verified")
-    parents = [
-        require_text(parent.get("sha"), "merge parent")
-        for parent in commit.get("parents") or []
-    ]
-    if parents != [base_sha, reviewed_head]:
+    head_tree, _, _ = commit_identity(args.repository, reviewed_head)
+    merge_tree, parents, verified = commit_identity(args.repository, merge_commit)
+    if not verified:
+        raise SystemExit("merge commit is not GitHub verified")
+    if parents != [base_commit, reviewed_head]:
         raise SystemExit(
             f"ordered merge parents mismatch: observed={parents} "
-            f"expected={[base_sha, reviewed_head]}"
+            f"expected={[base_commit, reviewed_head]}"
         )
-    merge_tree = require_text(
-        (((commit.get("commit") or {}).get("tree") or {}).get("sha")),
-        "merge tree",
-    )
+    if merge_tree != head_tree:
+        raise SystemExit(
+            f"merge tree {merge_tree} != reviewed head tree {head_tree}"
+        )
 
-    value = {
+    result = {
         "repository": args.repository,
-        "pull_request": pr_number,
-        "legacy_pr_hint": args.pr,
+        "pull_request": number,
         "base_branch": args.integration_branch,
-        "base_commit": base_sha,
+        "base_commit": base_commit,
         "reviewed_head": reviewed_head,
-        "merge_commit": merge_sha,
+        "reviewed_tree": head_tree,
+        "merge_commit": merge_commit,
         "merge_tree": merge_tree,
         "ordered_merge_parents": parents,
-        "required_reviewers": sorted(set(args.required_reviewer)),
-        "required_workflows": sorted(set(args.required_workflow)),
+        "required_reviewers": required_reviewers,
+        "required_workflows": required_workflows,
         "administrator_bypass": False,
         "authority_effect": "NONE",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps(value, sort_keys=True))
+    print(json.dumps(result, sort_keys=True))
     return 0
 
 
