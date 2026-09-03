@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Install exact Python parser dependency
+      - name: Install exact Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -44,54 +44,48 @@ jobs:
           import re
           import urllib.parse
           import urllib.request
-          from pathlib import Path
           from typing import Any
 
           import yaml
 
-          repository = os.environ["REPOSITORY"]
-          token = os.environ["GH_TOKEN"]
-          root = Path("/tmp/heptabao-review-chain-v2")
-          root.mkdir(parents=True, exist_ok=True)
+          REPOSITORY = os.environ["REPOSITORY"]
+          TOKEN = os.environ["GH_TOKEN"]
+          PREDECESSOR_SHA = "eb9f56b47dd47799e49ab0e8d360fc2f5ba66f28"
+          INTEGRATOR_SHA = "0aaa91197b6f1f0486d2cd15c97124bdd7b88ecb"
 
-          materializers = [
+          MATERIALIZERS = [
               (
                   "v1.5.0",
                   "exec/v1.5.0-control-plane-materializer-v2",
                   ".github/workflows/exec-v1.5.0-control-plane-materialize-v2.yml",
                   ".exec/trigger/v1.5.0",
-                  "52b7dd08160e979f72b18d76bf395017762439aa",
               ),
               (
                   "v1.6.0",
                   "exec/v1.6.0-runtime-operations-materializer-v2",
                   ".github/workflows/exec-v1.6.0-runtime-operations-materialize-v2.yml",
                   ".exec/trigger/v1.6.0",
-                  "52b7dd08160e979f72b18d76bf395017762439aa",
               ),
               (
                   "v1.7.0",
                   "exec/v1.7.0-service-materializer-v2",
                   ".github/workflows/exec-v1.7.0-service-materialize.yml",
                   ".exec/trigger/v1.7.0",
-                  "96409bcc6d8ef7ab7408147c92f13f4095eb5b58",
               ),
               (
                   "v1.8.0",
                   "exec/v1.8.0-operational-service-materializer-v2",
                   ".github/workflows/exec-v1.8.0-operational-service-materialize-v2.yml",
                   ".exec/trigger/v1.8.0",
-                  "52b7dd08160e979f72b18d76bf395017762439aa",
               ),
               (
                   "v1.8.1",
                   "exec/v1.8.1-repository-closure-materializer-v2",
                   ".github/workflows/exec-v1.8.1-repository-closure-materialize-v2.yml",
                   ".exec/trigger/v1.8.1",
-                  "52b7dd08160e979f72b18d76bf395017762439aa",
               ),
           ]
-          integrators = [
+          INTEGRATORS = [
               (
                   "v1.5.0",
                   "exec/v1.5.0-reviewed-integrator-v2",
@@ -125,32 +119,31 @@ jobs:
           ]
 
           def get(ref: str, path: str) -> tuple[str, bytes]:
-              encoded_path = urllib.parse.quote(path, safe="/")
-              query = urllib.parse.urlencode({"ref": ref})
               url = (
-                  f"https://api.github.com/repos/{repository}/contents/"
-                  f"{encoded_path}?{query}"
+                  f"https://api.github.com/repos/{REPOSITORY}/contents/"
+                  f"{urllib.parse.quote(path, safe='/')}?"
+                  f"{urllib.parse.urlencode({'ref': ref})}"
               )
               request = urllib.request.Request(
                   url,
                   headers={
-                      "Authorization": f"Bearer {token}",
+                      "Authorization": f"Bearer {TOKEN}",
                       "Accept": "application/vnd.github+json",
                       "X-GitHub-Api-Version": "2022-11-28",
                       "User-Agent": "heptabao-review-chain-v2-preflight",
                   },
               )
               with urllib.request.urlopen(request, timeout=30) as response:
-                  payload: Any = json.load(response)
-              if not isinstance(payload, dict):
+                  value: Any = json.load(response)
+              if not isinstance(value, dict):
                   raise SystemExit(f"contents response is not an object: {ref}:{path}")
-              sha = payload.get("sha")
-              encoded = payload.get("content")
+              sha = value.get("sha")
+              encoded = value.get("content")
               if not isinstance(sha, str) or not isinstance(encoded, str):
                   raise SystemExit(f"contents response incomplete: {ref}:{path}")
               return sha, base64.b64decode(encoded)
 
-          def parse_workflow(ref: str, path: str, trigger: str) -> str:
+          def workflow(ref: str, path: str, trigger: str) -> str:
               _, raw = get(ref, path)
               text = raw.decode("utf-8")
               value = yaml.load(text, Loader=yaml.BaseLoader)
@@ -159,103 +152,75 @@ jobs:
               if not {"name", "on", "permissions", "jobs"}.issubset(value):
                   raise SystemExit(f"workflow top-level contract missing: {ref}:{path}")
               events = value["on"]
-              if not isinstance(events, dict) or "push" not in events:
-                  raise SystemExit(f"workflow push trigger missing: {ref}:{path}")
-              push = events["push"]
+              push = events.get("push") if isinstance(events, dict) else None
               if not isinstance(push, dict):
                   raise SystemExit(f"workflow push contract malformed: {ref}:{path}")
-              branches = push.get("branches")
-              paths = push.get("paths")
-              if branches != [ref]:
-                  raise SystemExit(
-                      f"workflow branch trigger mismatch: {ref}:{path}:{branches}"
-                  )
-              if paths != [trigger]:
-                  raise SystemExit(
-                      f"workflow path trigger mismatch: {ref}:{path}:{paths}"
-                  )
+              if push.get("branches") != [ref] or push.get("paths") != [trigger]:
+                  raise SystemExit(f"workflow trigger mismatch: {ref}:{path}:{push}")
               if "git push --force" in text or "git push -f" in text:
                   raise SystemExit(f"force push admitted: {ref}:{path}")
               if re.search(r"pulls/[0-9]+", text) or re.search(r"\bpr=[0-9]+\b", text):
-                  raise SystemExit(f"fixed pull-request number admitted: {ref}:{path}")
+                  raise SystemExit(f"fixed PR number admitted: {ref}:{path}")
               if "current-head review admission" not in text:
                   raise SystemExit(f"post-review admission missing: {ref}:{path}")
               return text
 
           predecessor_sources: dict[str, bytes] = {}
-          for version, ref, workflow, trigger, expected_helper_sha in materializers:
-              helper_sha, helper = get(ref, ".exec/admit_reviewed_predecessor.py")
-              if helper_sha != expected_helper_sha:
-                  raise SystemExit(
-                      f"{version} predecessor helper drift: {helper_sha} != {expected_helper_sha}"
-                  )
-              compile(helper, f"{ref}:admit_reviewed_predecessor.py", "exec")
-              helper_text = helper.decode("utf-8")
-              for token_value in (
-                  "discover",
-                  "APPROVED",
-                  "CHANGES_REQUESTED",
-                  "verification",
+          for version, ref, path, trigger in MATERIALIZERS:
+              sha, source = get(ref, ".exec/admit_reviewed_predecessor.py")
+              if sha != PREDECESSOR_SHA:
+                  raise SystemExit(f"{version} predecessor helper drift: {sha}")
+              compile(source, f"{ref}:admit_reviewed_predecessor.py", "exec")
+              text = source.decode("utf-8")
+              for token in (
+                  "latest_decisive_reviews",
+                  "paged",
+                  "current-head review admission",
+                  "reviewThreads",
+                  "merge tree",
                   "ordered merge parents",
-                  "integration head",
                   "authority_effect",
               ):
-                  if token_value not in helper_text:
-                      raise SystemExit(
-                          f"{version} predecessor helper missing {token_value!r}"
-                      )
-              workflow_text = parse_workflow(ref, workflow, trigger)
-              if "git merge-base --is-ancestor" not in workflow_text:
+                  if token not in text:
+                      raise SystemExit(f"{version} predecessor helper missing {token!r}")
+              flow = workflow(ref, path, trigger)
+              if "git merge-base --is-ancestor" not in flow:
                   raise SystemExit(f"{version} fast-forward publication guard missing")
-              if version == "v1.7.0" and "--pr " in workflow_text:
-                  raise SystemExit("V1.7 legacy PR-number hint survived")
-              predecessor_sources[version] = helper
+              if "--pr " in flow:
+                  raise SystemExit(f"{version} retained a PR-number hint")
+              predecessor_sources[version] = source
 
           integrator_sources: dict[str, bytes] = {}
-          for version, ref, workflow, trigger in integrators:
-              helper_sha, helper = get(ref, ".exec/merge_reviewed_candidate.py")
-              if helper_sha != "0aaa91197b6f1f0486d2cd15c97124bdd7b88ecb":
-                  raise SystemExit(
-                      f"{version} integrator helper drift: {helper_sha}"
-                  )
-              compile(helper, f"{ref}:merge_reviewed_candidate.py", "exec")
-              helper_text = helper.decode("utf-8")
-              for token_value in (
+          for version, ref, path, trigger in INTEGRATORS:
+              sha, source = get(ref, ".exec/merge_reviewed_candidate.py")
+              if sha != INTEGRATOR_SHA:
+                  raise SystemExit(f"{version} integrator helper drift: {sha}")
+              compile(source, f"{ref}:merge_reviewed_candidate.py", "exec")
+              text = source.decode("utf-8")
+              for token in (
                   "latest_decisive_reviews",
-                  "COMMENTED",
                   "--dry-run",
                   "current-head review admission",
                   "prospective merge is not GitHub verified",
                   "integration readback",
                   "ORDINARY_REVIEWED_MERGE_COMPLETE",
               ):
-                  if token_value not in helper_text:
-                      raise SystemExit(
-                          f"{version} integrator helper missing {token_value!r}"
-                      )
-              parse_workflow(ref, workflow, trigger)
-              integrator_sources[version] = helper
+                  if token not in text:
+                      raise SystemExit(f"{version} integrator helper missing {token!r}")
+              workflow(ref, path, trigger)
+              integrator_sources[version] = source
 
+          if len(set(predecessor_sources.values())) != 1:
+              raise SystemExit("predecessor helper bytes differ across versions")
           if len(set(integrator_sources.values())) != 1:
               raise SystemExit("integrator helper bytes differ across versions")
-          common_predecessors = {
-              predecessor_sources[version]
-              for version in ("v1.5.0", "v1.6.0", "v1.8.0", "v1.8.1")
-          }
-          if len(common_predecessors) != 1:
-              raise SystemExit("common predecessor helper bytes differ")
 
-          namespace: dict[str, Any] = {"__name__": "preflight_module"}
-          exec(
-              compile(
-                  next(iter(integrator_sources.values())),
-                  "merge_reviewed_candidate.py",
-                  "exec",
-              ),
-              namespace,
-          )
-          reducer = namespace["latest_decisive_reviews"]
-          reviews = [
+          def reducer(source: bytes):
+              namespace: dict[str, Any] = {"__name__": "preflight_module"}
+              exec(compile(source, "review-helper.py", "exec"), namespace)
+              return namespace["latest_decisive_reviews"]
+
+          cases = [
               {
                   "submitted_at": "2026-09-03T00:00:00Z",
                   "state": "APPROVED",
@@ -269,23 +234,26 @@ jobs:
                   "user": {"login": "reviewer"},
               },
           ]
-          reduced = reducer(reviews)
-          if reduced["reviewer"]["state"] != "APPROVED":
-              raise SystemExit("COMMENTED incorrectly superseded APPROVED")
-          reviews.append(
-              {
-                  "submitted_at": "2026-09-03T00:02:00Z",
-                  "state": "CHANGES_REQUESTED",
-                  "commit_id": "head",
-                  "user": {"login": "reviewer"},
-              }
-          )
-          reduced = reducer(reviews)
-          if reduced["reviewer"]["state"] != "CHANGES_REQUESTED":
-              raise SystemExit("latest decisive review was not retained")
+          for source in (
+              next(iter(predecessor_sources.values())),
+              next(iter(integrator_sources.values())),
+          ):
+              reduce_reviews = reducer(source)
+              if reduce_reviews(cases)["reviewer"]["state"] != "APPROVED":
+                  raise SystemExit("COMMENTED incorrectly superseded APPROVED")
+              changed = cases + [
+                  {
+                      "submitted_at": "2026-09-03T00:02:00Z",
+                      "state": "CHANGES_REQUESTED",
+                      "commit_id": "head",
+                      "user": {"login": "reviewer"},
+                  }
+              ]
+              if reduce_reviews(changed)["reviewer"]["state"] != "CHANGES_REQUESTED":
+                  raise SystemExit("latest decisive review was not retained")
 
-          print("PASS five dynamic materializers")
+          print("PASS five byte-identical dynamic materializers")
           print("PASS five byte-identical dynamic integrators")
-          print("PASS path gates, no fixed PR numbers, no force push")
-          print("PASS review-state reduction and fail-closed merge contracts")
+          print("PASS Python YAML path gates pagination and review reduction")
+          print("PASS no fixed PR numbers no force push and fail-closed merge contracts")
           PY
