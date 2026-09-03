@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import re
 import sys
 
 root = Path(sys.argv[1]).resolve()
@@ -35,4 +36,28 @@ if ha.count("snapshot.applied_index == self.applied_index") != 1:
 if "SnapshotConflict" not in ha:
     raise SystemExit("V1.7 snapshot conflict outcome missing")
 
-print("PASS V1.7 terminal asset hardening verification")
+generator = root.parent / "materialize_v1_7_0.py"
+if not generator.is_file():
+    raise SystemExit(f"V1.7 materializer missing beside asset root: {generator}")
+source = generator.read_text(encoding="utf-8")
+dynamic_pr = (
+    'int(__import__("json").loads('
+    '(__import__("pathlib").Path(__import__("os").environ["RUNNER_TEMP"]) '
+    '/ "v1.6.0-admission.json").read_text(encoding="utf-8"))'
+    '["pull_request"])'
+)
+if dynamic_pr not in source:
+    source, count = re.subn(
+        r'("pull_request"\s*:\s*)65\b',
+        lambda match: match.group(1) + dynamic_pr,
+        source,
+    )
+    if count != 1:
+        raise SystemExit(
+            f"V1.7 predecessor receipt patch target mismatch: expected 1, found {count}"
+        )
+    generator.write_text(source, encoding="utf-8")
+elif source.count(dynamic_pr) != 1:
+    raise SystemExit("V1.7 dynamic predecessor receipt binding is duplicated")
+
+print("PASS V1.7 terminal asset and predecessor receipt hardening")
