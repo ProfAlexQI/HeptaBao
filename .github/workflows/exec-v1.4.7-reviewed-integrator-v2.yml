@@ -1,0 +1,44 @@
+name: exec V1.4.7 V2 reviewed integrator
+
+on:
+  push:
+    branches:
+      - exec/v1.4.7-reviewed-integrator-v2
+    paths:
+      - .exec/trigger/integrate-v1.4.7
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: exec-v1.4.7-reviewed-integrator-v2
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable merge controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Merge only the live V2-admitted exact candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile .exec/merge_reviewed_candidate_v2.py
+          python3 .exec/merge_reviewed_candidate_v2.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-branch codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1 \
+            --base-branch integration/v1.4.4-technical-candidate \
+            --commit-title "docs(v1.4.7): bind post-merge module truth and external admission" \
+            --commit-message "Merged through the ordinary GitHub PR API only after the live V2 packet, exact marker, post-technical approvals, successful current-head admission, resolved review threads, signed prospective merge and immutable tuple readback were all revalidated. External/control blockers and every qualification or deployment authority claim remain open." \
+            --output "$RUNNER_TEMP/v1.4.7-reviewed-merge-receipt.json"
+          cat "$RUNNER_TEMP/v1.4.7-reviewed-merge-receipt.json" >> "$GITHUB_STEP_SUMMARY"
