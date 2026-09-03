@@ -1,0 +1,68 @@
+name: exec V1.7.0 dynamic receipt preflight
+
+on:
+  push:
+    branches: [exec/v1.7.0-service-materializer-v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-v1.7.0-dynamic-receipt-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable V1.7 execution source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Reconstruct patch and evaluate dynamic receipt identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          encoded="$RUNNER_TEMP/materialize-v1.7.0.py.gz.b64"
+          : > "$encoded"
+          for index in 00 01 02; do
+            cat ".exec/v1_7_payload/materializer-$index" >> "$encoded"
+          done
+          test "$(sha256sum "$encoded" | awk '{print $1}')" = \
+            "a141af7f877da1ddfbb75ea02f12b805193d4a03099a8d1760baba3fd2680511"
+          base64 --decode "$encoded" | gzip --decompress \
+            > "$RUNNER_TEMP/materialize_v1_7_0.py"
+          test "$(sha256sum "$RUNNER_TEMP/materialize_v1_7_0.py" | awk '{print $1}')" = \
+            "ce077dad259474dc6f978a2f7a2d8e6f664244eef40ca331058c6a363df9ddae"
+          cp -R .exec/v1_7_assets "$RUNNER_TEMP/v1_7_assets"
+          python .exec/patch_v1_7_assets.py "$RUNNER_TEMP/v1_7_assets"
+          python .exec/patch_v1_7_assets_v2.py "$RUNNER_TEMP/v1_7_assets"
+          python .exec/patch_v1_7_assets_v3.py "$RUNNER_TEMP/v1_7_assets"
+          python .exec/patch_v1_7_assets_v3.py "$RUNNER_TEMP/v1_7_assets"
+          python -m py_compile \
+            "$RUNNER_TEMP/materialize_v1_7_0.py" \
+            .exec/patch_v1_7_assets.py \
+            .exec/patch_v1_7_assets_v2.py \
+            .exec/patch_v1_7_assets_v3.py
+          printf '{"pull_request":765}\n' > "$RUNNER_TEMP/v1.6.0-admission.json"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          source = (Path(os.environ["RUNNER_TEMP"]) / "materialize_v1_7_0.py").read_text()
+          if re.search(r'"pull_request"\s*:\s*65\b', source):
+              raise SystemExit("legacy V1.7 predecessor PR survived")
+          match = re.search(r'"pull_request"\s*:\s*(int\(.+?\)),\n', source)
+          if not match:
+              raise SystemExit("dynamic V1.7 predecessor expression not found")
+          value = eval(match.group(1), {"__builtins__": __builtins__})
+          if value != 765:
+              raise SystemExit(f"dynamic predecessor value mismatch: {value}")
+          if source.count('"v1.6.0-admission.json"') != 1:
+              raise SystemExit("dynamic admission reference missing or duplicated")
+          print("PASS V1.7 dynamic predecessor receipt = 765")
+          PY
