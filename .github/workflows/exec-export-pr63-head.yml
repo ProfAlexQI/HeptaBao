@@ -16,7 +16,7 @@ jobs:
       - name: Checkout immutable PR63 live head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 69ba5605a76458c84fa98ad39a39432837181c5b
+          ref: d23614c05b43869c2cb8ecdd1c5148d9036886c4
           fetch-depth: 0
           persist-credentials: false
 
@@ -24,18 +24,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "69ba5605a76458c84fa98ad39a39432837181c5b"
-          test "$(git rev-parse HEAD^{tree})" = "309d658c5ad2586e4670f30ac1fc6324b907c969"
-          git archive --format=tar.gz --output="$RUNNER_TEMP/heptabao-pr63-69ba5605.tar.gz" HEAD
-          git bundle create "$RUNNER_TEMP/heptabao-pr63-69ba5605.bundle" HEAD
-          sha256sum "$RUNNER_TEMP/heptabao-pr63-69ba5605.tar.gz" "$RUNNER_TEMP/heptabao-pr63-69ba5605.bundle"
+          test "$(git rev-parse HEAD)" = "d23614c05b43869c2cb8ecdd1c5148d9036886c4"
+          test "$(git rev-parse HEAD^{tree})" = "a0704cdcb3c655f8af3079e85851c822692a5351"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/heptabao-pr63-d23614c.tar.gz" HEAD
+          git bundle create "$RUNNER_TEMP/heptabao-pr63-d23614c.bundle" HEAD
+          sha256sum "$RUNNER_TEMP/heptabao-pr63-d23614c.tar.gz" "$RUNNER_TEMP/heptabao-pr63-d23614c.bundle"
 
       - name: Upload immutable source archive
         uses: actions/upload-artifact@v4
         with:
-          name: heptabao-pr63-69ba5605-source
+          name: heptabao-pr63-d23614c-source
           path: |
-            ${{ runner.temp }}/heptabao-pr63-69ba5605.tar.gz
-            ${{ runner.temp }}/heptabao-pr63-69ba5605.bundle
+            ${{ runner.temp }}/heptabao-pr63-d23614c.tar.gz
+            ${{ runner.temp }}/heptabao-pr63-d23614c.bundle
           if-no-files-found: error
           retention-days: 1
