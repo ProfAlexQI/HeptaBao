@@ -1,0 +1,101 @@
+name: exec PR63 V2 exact-binding synchronizer
+
+on:
+  push:
+    branches:
+      - exec/pr63-v2-body-sync-v1
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: exec-pr63-v2-body-sync
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable synchronizer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read and verify live tuple then update metadata only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: d3ecdd580802b68f690c36188e5b8aa15acb74e3
+          EXPECTED_BASE: 54d524214df443752a2ecaeff6d4a05625bf52c7
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          pr=63
+          gh api "repos/$repo/pulls/$pr" > "$RUNNER_TEMP/pr.json"
+          test "$(jq -r .state "$RUNNER_TEMP/pr.json")" = open
+          test "$(jq -r .draft "$RUNNER_TEMP/pr.json")" = false
+          test "$(jq -r .head.ref "$RUNNER_TEMP/pr.json")" = codex/plan-v1.4.7-post-merge-truth-and-external-admission-v1
+          test "$(jq -r .base.ref "$RUNNER_TEMP/pr.json")" = integration/v1.4.4-technical-candidate
+          test "$(jq -r .head.sha "$RUNNER_TEMP/pr.json")" = "$EXPECTED_HEAD"
+          test "$(jq -r .base.sha "$RUNNER_TEMP/pr.json")" = "$EXPECTED_BASE"
+          merge_sha="$(jq -r .merge_commit_sha "$RUNNER_TEMP/pr.json")"
+          test "$merge_sha" != null
+          gh api "repos/$repo/commits/$EXPECTED_HEAD" > "$RUNNER_TEMP/head.json"
+          gh api "repos/$repo/commits/$merge_sha" > "$RUNNER_TEMP/merge.json"
+          test "$(jq -r .commit.verification.verified "$RUNNER_TEMP/merge.json")" = true
+          test "$(jq -r '.parents | length' "$RUNNER_TEMP/merge.json")" = 2
+          test "$(jq -r .parents[0].sha "$RUNNER_TEMP/merge.json")" = "$EXPECTED_BASE"
+          test "$(jq -r .parents[1].sha "$RUNNER_TEMP/merge.json")" = "$EXPECTED_HEAD"
+          head_tree="$(jq -r .commit.tree.sha "$RUNNER_TEMP/head.json")"
+          merge_tree="$(jq -r .commit.tree.sha "$RUNNER_TEMP/merge.json")"
+          test "$merge_tree" = "$head_tree"
+          HEAD_SHA="$EXPECTED_HEAD" BASE_SHA="$EXPECTED_BASE" HEAD_TREE="$head_tree" MERGE_SHA="$merge_sha" MERGE_TREE="$merge_tree" python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          source = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('pr.json').read_text())
+          body = source.get('body') or ''
+          replacement = f'''## Exact source binding
+
+```text
+repository: TrillionniumFoundation/HeptaBao
+repository ID: 1349115072
+base: integration/v1.4.4-technical-candidate@{os.environ["BASE_SHA"]}
+head: {os.environ["HEAD_SHA"]}
+head tree: {os.environ["HEAD_TREE"]}
+prospective merge: {os.environ["MERGE_SHA"]}
+prospective merge tree: {os.environ["MERGE_TREE"]}
+ordered merge parents: {os.environ["BASE_SHA"]} {os.environ["HEAD_SHA"]}
+inherited V1.4.6 merge tree: c22288f561fdd711e908ce8a70c0116601d519e5
+```
+
+The prospective merge is a GitHub-created, validly signed two-parent merge object. Any source-head or base movement invalidates this tuple, all technical evidence, all approvals and any admission marker.
+
+'''
+          pattern = re.compile(r'\A## Exact source binding\n.*?(?=## Scope\n)', re.S)
+          updated, count = pattern.subn(replacement, body, count=1)
+          if count != 1:
+              raise SystemExit(f'exact-binding section replacement count mismatch: {count}')
+          Path(os.environ['RUNNER_TEMP']).joinpath('patch.json').write_text(
+              json.dumps({'body': updated}), encoding='utf-8'
+          )
+          PY
+          gh api -X PATCH "repos/$repo/pulls/$pr" --input "$RUNNER_TEMP/patch.json" > "$RUNNER_TEMP/updated.json"
+          test "$(jq -r .head.sha "$RUNNER_TEMP/updated.json")" = "$EXPECTED_HEAD"
+          grep -F "head: $EXPECTED_HEAD" "$RUNNER_TEMP/updated.json"
+          grep -F "prospective merge: $merge_sha" "$RUNNER_TEMP/updated.json"
+          {
+            echo '## PR63 exact binding synchronized'
+            echo
+            echo "- head: \`$EXPECTED_HEAD\`"
+            echo "- head tree: \`$head_tree\`"
+            echo "- prospective merge: \`$merge_sha\`"
+            echo "- prospective merge tree: \`$merge_tree\`"
+            echo '- source movement: NONE'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
