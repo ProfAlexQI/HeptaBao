@@ -1,0 +1,53 @@
+name: exec PR63 final source export
+
+on:
+  push:
+    branches:
+      - exec/pr63-final-source-export-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-pr63-final-source-export-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact frozen PR63 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 8752e2797d3939b3d0f824ac4728f7b498707612
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind source tree and create deterministic archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 8752e2797d3939b3d0f824ac4728f7b498707612
+          test "$(git rev-parse HEAD^{tree})" = 1b08423e40fdcab96256312e4ad1092de207d53d
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git archive \
+            --format=tar \
+            --prefix=heptabao-8752e279/ \
+            8752e2797d3939b3d0f824ac4728f7b498707612 \
+            > "$RUNNER_TEMP/heptabao-pr63-final-8752e279.tar"
+          gzip --no-name --best \
+            < "$RUNNER_TEMP/heptabao-pr63-final-8752e279.tar" \
+            > "$RUNNER_TEMP/heptabao-pr63-final-8752e279.tar.gz"
+          sha256sum "$RUNNER_TEMP/heptabao-pr63-final-8752e279.tar.gz"
+          git archive --format=tar 8752e2797d3939b3d0f824ac4728f7b498707612 \
+            | git get-tar-commit-id \
+            | grep -Fx 8752e2797d3939b3d0f824ac4728f7b498707612
+
+      - name: Upload immutable exact-source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: heptabao-pr63-final-8752e279-source
+          path: ${{ runner.temp }}/heptabao-pr63-final-8752e279.tar.gz
+          if-no-files-found: error
+          retention-days: 7
