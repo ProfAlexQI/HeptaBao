@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: macos-14
     timeout-minutes: 30
     steps:
       - name: Checkout immutable lint controller
@@ -39,7 +39,15 @@ jobs:
             gh api --method GET \
               "repos/$GITHUB_REPOSITORY/contents/$path" \
               -f ref="$ref" --jq .content \
-              | tr -d '\n' | base64 --decode > "$root/$name.yml"
+              > "$root/$name.b64"
+            python3 - "$root/$name.b64" "$root/$name.yml" <<'PY'
+          import base64
+          import sys
+          from pathlib import Path
+
+          source = ''.join(Path(sys.argv[1]).read_text().splitlines())
+          Path(sys.argv[2]).write_bytes(base64.b64decode(source))
+          PY
           }
           fetch_workflow \
             exec/v1.5.0-control-plane-materializer-v2 \
