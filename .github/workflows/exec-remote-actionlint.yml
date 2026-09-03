@@ -1,0 +1,88 @@
+name: exec remote workflow actionlint
+
+on:
+  push:
+    branches: [exec/review-chain-v2-preflight-v1]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-remote-actionlint-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable lint controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install actionlint and fetch remote workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go version
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          root="$RUNNER_TEMP/actionlint-workflows"
+          mkdir -p "$root"
+          fetch_workflow() {
+            ref="$1"
+            path="$2"
+            name="$3"
+            gh api --method GET \
+              "repos/$GITHUB_REPOSITORY/contents/$path" \
+              -f ref="$ref" --jq .content \
+              | tr -d '\n' | base64 --decode > "$root/$name.yml"
+          }
+          fetch_workflow \
+            exec/v1.5.0-control-plane-materializer-v2 \
+            .github/workflows/exec-v1.5.0-control-plane-materialize-v2.yml \
+            materializer-v150
+          fetch_workflow \
+            exec/v1.6.0-runtime-operations-materializer-v2 \
+            .github/workflows/exec-v1.6.0-runtime-operations-materialize-v2.yml \
+            materializer-v160
+          fetch_workflow \
+            exec/v1.7.0-service-materializer-v2 \
+            .github/workflows/exec-v1.7.0-service-materialize.yml \
+            materializer-v170
+          fetch_workflow \
+            exec/v1.8.0-operational-service-materializer-v2 \
+            .github/workflows/exec-v1.8.0-operational-service-materialize-v2.yml \
+            materializer-v180
+          fetch_workflow \
+            exec/v1.8.1-repository-closure-materializer-v2 \
+            .github/workflows/exec-v1.8.1-repository-closure-materialize-v2.yml \
+            materializer-v181
+          fetch_workflow \
+            exec/v1.5.0-reviewed-integrator-v2 \
+            .github/workflows/exec-v1.5.0-reviewed-integrator-v2.yml \
+            integrator-v150
+          fetch_workflow \
+            exec/v1.6.0-reviewed-integrator-v2 \
+            .github/workflows/exec-v1.6.0-reviewed-integrator-v2.yml \
+            integrator-v160
+          fetch_workflow \
+            exec/v1.7.0-reviewed-integrator-v2 \
+            .github/workflows/exec-v1.7.0-reviewed-integrator-v2.yml \
+            integrator-v170
+          fetch_workflow \
+            exec/v1.8.0-reviewed-integrator-v2 \
+            .github/workflows/exec-v1.8.0-reviewed-integrator-v2.yml \
+            integrator-v180
+          fetch_workflow \
+            exec/v1.8.1-reviewed-integrator-v2 \
+            .github/workflows/exec-v1.8.1-reviewed-integrator-v2.yml \
+            integrator-v181
+          fetch_workflow \
+            exec/v1.5.0-source-preflight-v1 \
+            .github/workflows/exec-v1.5.0-source-preflight.yml \
+            source-preflight-v150
+          "$HOME/go/bin/actionlint" -verbose "$root"/*.yml
