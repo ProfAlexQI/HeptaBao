@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 240
     steps:
       - name: Checkout immutable preflight controller
@@ -30,6 +30,17 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements-plan.txt
+
+      - name: Ensure Rustup on slim image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              https://sh.rustup.rs -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Execute versioned source-preflight controller
         env:
