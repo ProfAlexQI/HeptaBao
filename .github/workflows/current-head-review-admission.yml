@@ -1,88 +1,76 @@
 name: current-head review admission
 
-# This gate is intentionally post-review. Head synchronization runs the technical
-# exact-head and prospective-merge workflows; after an eligible reviewer approves
-# that unchanged head, a pull-request metadata edit adds the exact-head admission
-# marker and triggers this gate without moving the reviewed source SHA.
+# This is a repository-change admission receipt, not a qualification or release
+# authority. Technical workflows complete first; two eligible reviewers then
+# approve that unchanged head; a metadata-only edit installs the exact V2 digest
+# marker. Missing or stale markers fail rather than skip. Native protected-branch
+# review rules and the final merge controller remain mandatory for later review
+# dismissal or change-request invalidation.
 on:
   pull_request:
     branches:
       - integration/v1.4.4-technical-candidate
       - main
-    types: [edited]
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+      - edited
+      - review_requested
+      - review_request_removed
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 
 jobs:
   current-head-review-admission:
-    if: >-
-      github.event.pull_request.draft == false &&
-      contains(
-        github.event.pull_request.body,
-        format('<!-- current-head-review-admission:{0} -->', github.event.pull_request.head.sha)
-      )
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
-      - name: Bind the post-review trigger to the unchanged pull-request head
+      - name: Checkout the exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind checkout to the live event tuple
         env:
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
-          EVENT_BODY: ${{ github.event.pull_request.body }}
-          REPOSITORY: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          live_head="$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .head.sha)"
-          test "$live_head" = "$EVENT_HEAD_SHA"
-          test "$(gh api "repos/$REPOSITORY/pulls/$EVENT_PR_NUMBER" --jq .draft)" = false
-          marker="<!-- current-head-review-admission:$EVENT_HEAD_SHA -->"
-          case "$EVENT_BODY" in
-            *"$marker"*) ;;
-            *) echo "missing exact-head admission marker" >&2; exit 1 ;;
-          esac
-          printf 'pr=%s\nunchanged_head=%s\nmarker=%s\n' "$EVENT_PR_NUMBER" "$EVENT_HEAD_SHA" "$marker"
+          test "$(git rev-parse HEAD)" = "$EVENT_HEAD_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
-      - name: Require a fresh independent approval and no current-head change request
+      - name: Evaluate the complete repository-change review packet
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$PR_NUMBER"
-          test -n "$HEAD_SHA"
-          reviews="$RUNNER_TEMP/reviews.json"
-          gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > "$reviews"
-          python3 - "$reviews" "$HEAD_SHA" "$AUTHOR" <<'PY'
-          import json, sys
-          path, head, author = sys.argv[1:]
-          reviews = json.load(open(path, encoding='utf-8'))
-          latest = {}
-          for review in reviews:
-              user = (review.get('user') or {}).get('login')
-              if not user:
-                  continue
-              latest[user] = review
-          current_changes = []
-          current_approvals = []
-          for user, review in latest.items():
-              if review.get('commit_id') != head:
-                  continue
-              state = review.get('state')
-              if state == 'CHANGES_REQUESTED':
-                  current_changes.append(user)
-              if state == 'APPROVED' and user != author and not user.endswith('[bot]'):
-                  current_approvals.append(user)
-          if current_changes:
-              raise SystemExit('current-head changes requested by: ' + ', '.join(sorted(current_changes)))
-          if not current_approvals:
-              raise SystemExit('no fresh non-author approval is bound to current head ' + head)
-          print('fresh current-head approvals: ' + ', '.join(sorted(current_approvals)))
-          PY
+          python3 -m py_compile scripts/current_head_review_admission_v2.py
+          python3 scripts/current_head_review_admission_v2.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" \
+            --event-head-sha "$EVENT_HEAD_SHA" \
+            --event-base-sha "$EVENT_BASE_SHA" \
+            --output "$RUNNER_TEMP/current-head-review-admission-v2.json"
+          cat "$RUNNER_TEMP/current-head-review-admission-v2.json"
+          {
+            echo '## Current-head repository-change review admission V2'
+            echo
+            echo '- exact marker: present and current'
+            echo '- two exact-head reviewer decisions: admitted'
+            echo '- approvals submitted after all four technical workflow families'
+            echo '- live collaborator permissions and CODEOWNERS policy: admitted'
+            echo '- prospective merge signature, ordered parents and tree: admitted'
+            echo '- qualification/release/production authority: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
