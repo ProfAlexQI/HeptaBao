@@ -10,9 +10,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: exec-v1.9.0-full-repository-convergence
+  cancel-in-progress: true
+
 jobs:
   converge:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 350
     steps:
       - name: Checkout convergence controller
@@ -66,7 +70,11 @@ jobs:
 
       - name: Execute full convergence controller
         shell: bash
-        run: bash .exec/run_v1_9.sh
+        run: |
+          set -euo pipefail
+          python .exec/prepare_v1_9_controller.py \
+            .exec/run_v1_9.sh "$RUNNER_TEMP/run_v1_9.sh"
+          bash "$RUNNER_TEMP/run_v1_9.sh"
 
       - name: Export exact workflow admission inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
