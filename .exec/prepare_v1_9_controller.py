@@ -204,7 +204,7 @@ def main() -> int:
     require_count(prepared, "test_plan_v1_7_0.py", 2, "prepared V1.7 successor tests")
     require_count(prepared, "test_plan_v1_8_0.py", 2, "prepared V1.8 stage tests")
     require_count(prepared, "test_release_bundle_v1_8.py", 2, "prepared release bundle tests")
-    require_count(prepared, "-p 'test_*.py' -v", 1, "prepared all-plan historical replay")
+    require_count(prepared, "-p 'test_*.py' -v", 5, "prepared all-plan/platform/oracle replay patterns")
     if V170_OLD in prepared or CANDIDATE_LINE in prepared or FINAL_INHERITED_BLOCK in prepared:
         raise SystemExit("controller preparation was incomplete")
 
