@@ -99,6 +99,39 @@ jobs:
             .exec/run_v1_9.sh "$RUNNER_TEMP/run_v1_9.sh"
           bash "$RUNNER_TEMP/run_v1_9.sh"
 
+      - name: Capture fail-closed convergence diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          diagnostics="$RUNNER_TEMP/v190-diagnostics"
+          mkdir -p "$diagnostics"
+          {
+            printf 'run_id=%s\nrun_attempt=%s\nworkflow_sha=%s\n' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA"
+            git rev-parse HEAD HEAD^{tree} 2>&1
+          } > "$diagnostics/source-identity.txt"
+          git status --porcelain=v1 --untracked-files=all \
+            > "$diagnostics/git-status.txt" 2>&1 || true
+          git diff --binary > "$diagnostics/worktree.diff" 2>&1 || true
+          git diff --check > "$diagnostics/diff-check.txt" 2>&1 || true
+          find "$RUNNER_TEMP/v190" -maxdepth 4 -type f -printf '%P %s bytes\n' \
+            | sort > "$diagnostics/materializer-files.txt" 2>&1 || true
+          tar --exclude=.git --exclude=target --exclude='*/target' \
+            --exclude='*.pyc' --exclude='__pycache__' \
+            -czf "$diagnostics/worktree.tar.gz" . || true
+
+      - name: Upload fail-closed convergence diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v190-diagnostics
+            ${{ runner.temp }}/v190
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Export exact workflow admission inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
