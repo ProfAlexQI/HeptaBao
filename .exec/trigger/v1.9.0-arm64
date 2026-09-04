@@ -1,0 +1,14 @@
+trigger: 2026-09-04T10:22:00Z
+plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
+source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
+mode: isolated-arm64-full-repository-convergence
+attempt: 1
+runner_pool: ubuntu-24.04-arm
+candidate_branch: codex/plan-v1.9.0-full-repository-convergence-arm64-v1
+external_admission: v2-ed25519
+failure_diagnostics: worktree-materializers-diff
+canonical_payload: verified-idempotent
+generator_patch: exact-source-digest-bound
+v1_7_materializer_path: contract-aligned
+v1_8_service_patch: unique-control-plane-context
+lock_graph: regenerate-after-42-crate-materialization-then-locked
