@@ -1,8 +1,8 @@
-trigger: 2026-09-04T19:31:00+08:00
+trigger: 2026-09-04T19:48:00+08:00
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 14
+attempt: 15
 runner_pool: ubuntu-latest
 external_admission: v2-ed25519
 forensic_input_archive: enabled
@@ -10,6 +10,7 @@ failure_diagnostics: worktree-materializers-diff
 canonical_payload: verified-idempotent
 generator_patch: exact-source-digest-bound
 historical_validation: exact-v1.4.7-source-before-successors
+v1_4_7_renderer_repair: immutable-source-exact-count-and-regenerate-manifest
 successor_validation: stage-scoped-plus-cumulative-lineage
 v1_7_materializer_path: contract-aligned
 v1_7_predecessor_truth: superseded-unmerged-stage
