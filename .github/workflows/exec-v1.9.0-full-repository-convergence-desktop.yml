@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: exec-v1.9.0-full-repository-convergence
+  group: exec-v1.9.0-full-repository-convergence-desktop
   cancel-in-progress: true
 
 jobs:
@@ -21,6 +21,8 @@ jobs:
       - linux
       - x64
     timeout-minutes: 350
+    env:
+      HEPTABAO_CANDIDATE_BRANCH: codex/plan-v1.9.0-full-repository-convergence-desktop-v1
     steps:
       - name: Checkout exact convergence controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,35 +62,19 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-plan.txt
 
-      - name: Verify or restore canonical external V2 payload
+      - name: Verify canonical external V2 payload
         shell: bash
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/augment_external_v2.py.gz"
           source="$RUNNER_TEMP/augment_external_v2.py"
           tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode > "$archive"
-          if python .exec/extract_verified_gzip.py \
-              --input "$archive" \
-              --output "$source" \
-              --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b; then
-            python -m py_compile "$source"
-            test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          else
-            python .exec/repair_external_v2_payload.py --write
-            tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode > "$archive"
-            python .exec/extract_verified_gzip.py \
-              --input "$archive" \
-              --output "$source" \
-              --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b
-            python -m py_compile "$source"
-            test "$(git diff --name-only)" = ".exec/augment_external_v2.py.gz.b64"
-            git diff --check
-            git config user.name "HeptaBao convergence controller"
-            git config user.email "heptabao-convergence@users.noreply.github.com"
-            git add .exec/augment_external_v2.py.gz.b64
-            git commit -m "fix(exec): restore exact external V2 materializer payload"
-            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
-          fi
+          python .exec/extract_verified_gzip.py \
+            --input "$archive" \
+            --output "$source" \
+            --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b
+          python -m py_compile "$source"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Install exact Rust 1.98
         shell: bash
@@ -105,6 +91,34 @@ jobs:
           python .exec/prepare_v1_9_controller.py \
             .exec/run_v1_9.sh "$RUNNER_TEMP/run_v1_9.sh"
           bash "$RUNNER_TEMP/run_v1_9.sh"
+
+      - name: Capture fail-closed convergence diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          diagnostics="$RUNNER_TEMP/v190-desktop-diagnostics"
+          mkdir -p "$diagnostics"
+          git rev-parse HEAD HEAD^{tree} > "$diagnostics/source-identity.txt" 2>&1 || true
+          git status --porcelain=v1 --untracked-files=all > "$diagnostics/git-status.txt" 2>&1 || true
+          git diff --binary > "$diagnostics/worktree.diff" 2>&1 || true
+          git diff --check > "$diagnostics/diff-check.txt" 2>&1 || true
+          find "$RUNNER_TEMP/v190" -maxdepth 4 -type f -printf '%P %s bytes\n' \
+            | sort > "$diagnostics/materializer-files.txt" 2>&1 || true
+          tar --exclude=.git --exclude=target --exclude='*/target' \
+            --exclude='*.pyc' --exclude='__pycache__' \
+            -czf "$diagnostics/worktree.tar.gz" . || true
+
+      - name: Upload fail-closed convergence diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-desktop-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v190-desktop-diagnostics
+            ${{ runner.temp }}/v190
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Export exact workflow admission inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
