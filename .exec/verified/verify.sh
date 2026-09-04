@@ -6,7 +6,6 @@ WORK="$RUNNER_TEMP/heptabao-verified-publication"
 EVIDENCE="$RUNNER_TEMP/heptabao-publication-evidence"
 BASE=0ce5f152684345b4f553c0519e381e55fa91cbec
 EXPECTED=1ad5cee8a2c08a8f2c4091787be3c6530bea5901
-BRANCH=exec/v1.9.0-verified-source-transport-v2
 mkdir -p "$WORK" "$EVIDENCE"
 cp "$ROOT"/.exec/verified/overlay-part-* "$EVIDENCE/"
 python "$ROOT/.exec/verified/prepare.py" "$ROOT" "$WORK/prep" 2>&1 | tee "$EVIDENCE/preparation.log"
@@ -53,24 +52,4 @@ python -m pip install --disable-pip-version-check --requirement requirements-pla
  cargo +1.98.0 clippy --locked --offline --workspace --all-targets -- -D warnings
  test -z "$(git status --porcelain=v1 --untracked-files=all)"
 } 2>&1 | tee "$EVIDENCE/full-validation.log"
-FULL_COMMIT=$(git rev-parse HEAD)
-# This intermediate ref transports non-workflow Git objects only. It is not a
-# candidate and deliberately cannot satisfy the source manifest. The connector
-# restores the verified workflow tree and verifies EXPECTED before opening a PR.
-existing=$(git ls-remote --heads origin "refs/heads/$BRANCH")
-test -z "$existing"
-git rm -r --quiet .github/workflows
-git checkout "$BASE" -- .github/workflows
-git add --all
-TRANSPORT_TREE=$(git write-tree)
-TRANSPORT=$(printf 'chore(transport): transfer verified V1.9 source objects only\n\nNot a product candidate; workflow tree restored to base for transport.\nVerified full tree: %s\nNo qualification or authority.\n' "$EXPECTED" | git commit-tree "$TRANSPORT_TREE" -p "$BASE")
-git update-ref refs/heads/verified-source-transport "$TRANSPORT"
-git push origin "refs/heads/verified-source-transport:refs/heads/$BRANCH"
-export FULL_COMMIT TRANSPORT TRANSPORT_TREE EXPECTED BASE
-python - <<'PY'
-import json,os,pathlib
-value={k.lower():os.environ[k]for k in ('BASE','FULL_COMMIT','EXPECTED','TRANSPORT','TRANSPORT_TREE')}
-value.update(schema='heptabao.verified-source-transfer.v1',candidate_published=False,qualification=False,authority_effect='NONE')
-pathlib.Path(os.environ['RUNNER_TEMP'],'heptabao-publication-evidence','transfer.json').write_text(json.dumps(value,indent=2)+'\n')
-print(json.dumps(value,sort_keys=True))
-PY
+printf 'PASS read-only exact source verification; no repository publication\n'
