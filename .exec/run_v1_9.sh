@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+PS4='+ ${BASH_SOURCE}:${LINENO}: '
+trap 'rc=$?; echo "V1.9 convergence failed at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND} (exit ${rc})" >&2; exit "${rc}"' ERR
+set -x
 
 BASE_SOURCE_SHA="ca0dd294ca8fa78b61ce4cfb6da0c10011175b83"
 CANDIDATE_BRANCH="codex/plan-v1.9.0-full-repository-convergence-v1"
