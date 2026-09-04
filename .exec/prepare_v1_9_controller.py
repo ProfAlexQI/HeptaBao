@@ -7,6 +7,7 @@ applies only exact-count substitutions to its execution copy:
 * permit an explicitly supplied staging branch while retaining the canonical default;
 * make the V1.7 materializer filename match the V3 asset patch contract;
 * narrow the pinned V1.8 patch script to the unique service test module;
+* repair the pinned V1.8 materializer's nested renderer string delimiters;
 * regenerate Cargo.lock after all 42 workspace members have been materialized;
 * patch the two source-bound defects in the generated V1.9 workflow.
 """
@@ -33,6 +34,7 @@ V180_PATCH_COMMAND = 'python "$WORK/v180/patch.py" "$WORK/v180/materialize.py"'
 V180_PATCH_INSERT = (
     'python .exec/patch_v1_8_patch_script.py "$WORK/v180/patch.py"\n'
     + V180_PATCH_COMMAND
+    + '\npython .exec/patch_v1_8_materializer.py "$WORK/v180/materialize.py"'
 )
 V180_MATERIALIZE_COMMAND = 'python "$WORK/v180/materialize.py" .'
 V180_MATERIALIZE_INSERT = (
@@ -68,6 +70,7 @@ def main() -> int:
     for unexpected in (
         "patch_v1_9_generator.py",
         "patch_v1_8_patch_script.py",
+        "patch_v1_8_materializer.py",
         "cargo +1.98.0 generate-lockfile",
         "HEPTABAO_CANDIDATE_BRANCH",
     ):
@@ -85,6 +88,7 @@ def main() -> int:
     require_count(prepared, "HEPTABAO_CANDIDATE_BRANCH", 1, "prepared candidate override")
     require_count(prepared, V170_NEW, V170_REFERENCE_COUNT, "prepared V1.7 path")
     require_count(prepared, "patch_v1_8_patch_script.py", 1, "prepared V1.8 patch repair")
+    require_count(prepared, "patch_v1_8_materializer.py", 1, "prepared V1.8 materializer repair")
     require_count(prepared, "cargo +1.98.0 generate-lockfile", 1, "prepared lockfile refresh")
     require_count(prepared, "patch_v1_9_generator.py", 1, "prepared V1.9 generator repair")
     if V170_OLD in prepared or CANDIDATE_LINE in prepared:
@@ -97,7 +101,8 @@ def main() -> int:
         f"source_sha256={sha256(source)} "
         f"prepared_sha256={sha256(prepared)} "
         f"v170_path_repairs={V170_REFERENCE_COUNT} "
-        "v180_patch_repairs=1 lockfile_refresh=1 v190_generator_repairs=1"
+        "v180_patch_repairs=1 v180_materializer_repairs=1 "
+        "lockfile_refresh=1 v190_generator_repairs=1"
     )
     return 0
 
