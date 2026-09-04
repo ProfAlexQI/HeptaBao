@@ -22,18 +22,16 @@ COPY_ANCHOR = (
     'cp .exec/validate_inherited_stages_for_v1_9.py '
     '"$WORK/validate_inherited_stages_for_v1_9.py"'
 )
-COPY_INSERT = (
-    COPY_ANCHOR
-    + '\ncp .exec/repair_v1_4_7_source_for_convergence.py '
-    + '"$WORK/repair_v1_4_7_source_for_convergence.py"'
+COPY_COMMAND = (
+    'cp .exec/repair_v1_4_7_source_for_convergence.py '
+    '"$WORK/repair_v1_4_7_source_for_convergence.py"'
 )
+COPY_INSERT = COPY_ANCHOR + "\n" + COPY_COMMAND
 VALIDATION_ANCHOR = (
     "# Execute the complete inherited plan suite while the exact V1.4.7 source is"
 )
-VALIDATION_INSERT = (
-    'python "$WORK/repair_v1_4_7_source_for_convergence.py"\n\n'
-    + VALIDATION_ANCHOR
-)
+VALIDATION_COMMAND = 'python "$WORK/repair_v1_4_7_source_for_convergence.py"'
+VALIDATION_INSERT = VALIDATION_COMMAND + "\n\n" + VALIDATION_ANCHOR
 
 
 def git_blob_sha(data: bytes) -> str:
@@ -88,8 +86,12 @@ def main() -> int:
         VALIDATION_INSERT,
         "V1.4.7 pre-validation repair anchor",
     )
-    if prepared.count("repair_v1_4_7_source_for_convergence.py") != 2:
-        raise SystemExit("prepared controller V1.4.7 repair references are incomplete")
+    if prepared.count(COPY_COMMAND) != 1:
+        raise SystemExit("prepared controller V1.4.7 helper archive command is incomplete")
+    if prepared.count(VALIDATION_COMMAND) != 1:
+        raise SystemExit("prepared controller V1.4.7 repair execution command is incomplete")
+    if prepared.count("repair_v1_4_7_source_for_convergence.py") != 3:
+        raise SystemExit("prepared controller V1.4.7 repair path references are incomplete")
 
     args.output.write_text(prepared, encoding="utf-8")
     args.output.chmod(0o700)
