@@ -1,8 +1,8 @@
-trigger: 2026-09-04T19:48:00+08:00
+trigger: 2026-09-05T00:39:00+08:00
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 15
+attempt: 16
 runner_pool: ubuntu-latest
 external_admission: v2-ed25519
 forensic_input_archive: enabled
@@ -16,6 +16,6 @@ v1_7_materializer_path: contract-aligned
 v1_7_predecessor_truth: superseded-unmerged-stage
 v1_8_service_patch: unique-control-plane-context
 v1_8_materializer_delimiters: exact-count-repaired
-helper_occurrence_assertions: locally-replayed-pass
+helper_occurrence_assertions: structural-command-bound
 python_replay_pattern_assertion: five-retained-patterns
 lock_graph: regenerate-after-42-crate-materialization-then-locked
