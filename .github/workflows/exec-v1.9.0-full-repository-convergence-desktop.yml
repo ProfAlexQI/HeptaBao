@@ -53,30 +53,42 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Restore canonical external V2 payload
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 .exec/repair_external_v2_payload.py --write
-          python3 .exec/extract_verified_gzip.py \
-            --input <(tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode) \
-            --output "$RUNNER_TEMP/augment_external_v2.py" \
-            --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b
-          python3 -m py_compile "$RUNNER_TEMP/augment_external_v2.py"
-          test "$(git diff --name-only)" = ".exec/augment_external_v2.py.gz.b64"
-          git diff --check
-          git config user.name "HeptaBao convergence controller"
-          git config user.email "heptabao-convergence@users.noreply.github.com"
-          git add .exec/augment_external_v2.py.gz.b64
-          git commit -m "fix(exec): restore exact external V2 materializer payload"
-          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
-
       - name: Install exact Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements-plan.txt
+
+      - name: Verify or restore canonical external V2 payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/augment_external_v2.py.gz"
+          source="$RUNNER_TEMP/augment_external_v2.py"
+          tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode > "$archive"
+          if python .exec/extract_verified_gzip.py \
+              --input "$archive" \
+              --output "$source" \
+              --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b; then
+            python -m py_compile "$source"
+            test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          else
+            python .exec/repair_external_v2_payload.py --write
+            tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode > "$archive"
+            python .exec/extract_verified_gzip.py \
+              --input "$archive" \
+              --output "$source" \
+              --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b
+            python -m py_compile "$source"
+            test "$(git diff --name-only)" = ".exec/augment_external_v2.py.gz.b64"
+            git diff --check
+            git config user.name "HeptaBao convergence controller"
+            git config user.email "heptabao-convergence@users.noreply.github.com"
+            git add .exec/augment_external_v2.py.gz.b64
+            git commit -m "fix(exec): restore exact external V2 materializer payload"
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          fi
 
       - name: Install exact Rust 1.98
         shell: bash
