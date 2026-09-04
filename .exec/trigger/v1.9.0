@@ -1,10 +1,11 @@
-trigger: 2026-09-04T09:40:00Z
+trigger: 2026-09-04T09:52:00Z
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 7
-runner_pool: ubuntu-24.04-arm
+attempt: 8
+runner_pool: ubuntu-latest
 external_admission: v2-ed25519
 forensic_input_archive: enabled
-canonical_payload_repair: exact-sha-crc-size-bound
+canonical_payload: verified-idempotent
 generator_patch: exact-source-digest-bound
+v1_7_materializer_path: contract-aligned
