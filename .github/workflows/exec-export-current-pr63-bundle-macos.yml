@@ -26,14 +26,17 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "0ce5f152684345b4f553c0519e381e55fa91cbec"
           test "$(git rev-parse HEAD^{tree})" = "e330ac4f68fc8bf23fd0c2c63eb9e6a7c7afa95f"
-          git bundle create "$RUNNER_TEMP/heptabao-pr63-0ce5f15.bundle" HEAD
-          git bundle verify "$RUNNER_TEMP/heptabao-pr63-0ce5f15.bundle"
-          shasum -a 256 "$RUNNER_TEMP/heptabao-pr63-0ce5f15.bundle"
+          git for-each-ref --sort=refname --format='%(objectname) %(refname)' > "$RUNNER_TEMP/heptabao-source-refs.txt"
+          git bundle create "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle" --all HEAD
+          git bundle verify "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle"
+          shasum -a 256 "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle"
 
       - name: Upload immutable git bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: heptabao-pr63-0ce5f15-git-bundle
-          path: ${{ runner.temp }}/heptabao-pr63-0ce5f15.bundle
+          name: heptabao-repository-0ce5f15-git-bundle
+          path: |
+            ${{ runner.temp }}/heptabao-repository-0ce5f15.bundle
+            ${{ runner.temp }}/heptabao-source-refs.txt
           if-no-files-found: error
           retention-days: 7
