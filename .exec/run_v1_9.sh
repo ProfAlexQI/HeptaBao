@@ -9,7 +9,7 @@ CANDIDATE_BRANCH="codex/plan-v1.9.0-full-repository-convergence-v1"
 V150_CONTROLLER_SHA="f6c8512d368998a9b0f9998ceede9ff6e3ccd682"
 V160_CONTROLLER_SHA="f3165b3d1c4d4c4e8fd923162efd8535dfa09548"
 V170_CONTROLLER_SHA="56aea04b4a081c89dd6f5b5ea74da25a2a0d6a8a"
-V180_CONTROLLER_SHA="cb2ac86a6cf54d0e8a52f50c817dd7e5accca017"
+V180_CONTROLLER_SHA="cb2ac86a6cf54f50c817dd7e5accca017"
 WORK="${RUNNER_TEMP:?RUNNER_TEMP is required}/v190"
 WORKFLOWS="$WORK/workflows"
 mkdir -p "$WORK/v150" "$WORK/v160" "$WORK/v170/archive" "$WORK/v180" "$WORKFLOWS"
@@ -17,9 +17,11 @@ mkdir -p "$WORK/v150" "$WORK/v160" "$WORK/v170/archive" "$WORK/v180" "$WORKFLOWS
 cat .exec/v1_9_payload/part-* | tr -d '\r\n' | base64 --decode > "$WORK/converge_v1_9.py"
 test "$(sha256sum "$WORK/converge_v1_9.py" | awk '{print $1}')" = \
   "ab838212f426b8f526e27a1e0e6981a97bfacbf7c9b48772594d4aee66faa838"
-cat .exec/augment_external_v2.py.gz.b64 | tr -d '\r\n' | base64 --decode | gzip --decompress > "$WORK/augment_external_v2.py"
-test "$(sha256sum "$WORK/augment_external_v2.py" | awk '{print $1}')" = \
-  "c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b"
+cat .exec/augment_external_v2.py.gz.b64 | tr -d '\r\n' | base64 --decode > "$WORK/augment_external_v2.py.gz"
+python .exec/extract_verified_gzip.py \
+  --input "$WORK/augment_external_v2.py.gz" \
+  --output "$WORK/augment_external_v2.py" \
+  --sha256 "c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b"
 python -m py_compile "$WORK/converge_v1_9.py" "$WORK/augment_external_v2.py"
 
 git fetch --no-tags origin \
