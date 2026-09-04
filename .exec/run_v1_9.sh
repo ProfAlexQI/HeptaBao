@@ -14,7 +14,10 @@ mkdir -p "$WORK/v150" "$WORK/v160" "$WORK/v170/archive" "$WORK/v180" "$WORKFLOWS
 cat .exec/v1_9_payload/part-* | tr -d '\r\n' | base64 --decode > "$WORK/converge_v1_9.py"
 test "$(sha256sum "$WORK/converge_v1_9.py" | awk '{print $1}')" = \
   "7f2cd574e3f31c5363c633074a6db9caf3d1ed5d16e33bac625674d362b79a03"
-python -m py_compile "$WORK/converge_v1_9.py"
+cat .exec/augment_external_v2.py.gz.b64 | tr -d '\r\n' | base64 --decode | gzip --decompress > "$WORK/augment_external_v2.py"
+test "$(sha256sum "$WORK/augment_external_v2.py" | awk '{print $1}')" = \
+  "c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b"
+python -m py_compile "$WORK/converge_v1_9.py" "$WORK/augment_external_v2.py"
 
 git fetch --no-tags origin \
   "+refs/heads/exec/v1.5.0-control-plane-materializer-v2:refs/remotes/materializer/v150" \
@@ -112,11 +115,13 @@ cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 mkdir -p planning/generated-workflows
 cp "$WORKFLOWS"/*.yml planning/generated-workflows/
 V190_SOURCE_PARENT="$BASE_SOURCE_SHA" python "$WORK/converge_v1_9.py"
+python "$WORK/augment_external_v2.py"
 test -f .github/workflows/plan-v1.9.0-full-repository-convergence.yml
 cp .github/workflows/plan-v1.9.0-full-repository-convergence.yml "$WORKFLOWS/"
 cp .github/workflows/plan-v1.9.0-full-repository-convergence.yml planning/generated-workflows/
 python scripts/validate_plan_v1_9_0.py
 python -m unittest discover -s tests/plan -p 'test_plan_v1_9_0.py' -v
+python -m unittest discover -s tests/plan -p 'test_external_completion_evidence_v2.py' -v
 python -m unittest discover -s tests/platform -p 'test_*.py' -v
 python -m unittest discover -s tests/oracle -p 'test_*.py' -v
 python -m compileall -q scripts tests
