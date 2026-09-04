@@ -1,0 +1,123 @@
+name: exec V1.9.0 full repository convergence arm64
+
+on:
+  push:
+    branches:
+      - exec/v1.9.0-full-repository-convergence-v1
+    paths:
+      - .exec/trigger/v1.9.0-arm64
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1.9.0-full-repository-convergence-arm64
+  cancel-in-progress: true
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    env:
+      HEPTABAO_CANDIDATE_BRANCH: codex/plan-v1.9.0-full-repository-convergence-arm64-v1
+    steps:
+      - name: Checkout exact convergence controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind exact repository push and architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REPOSITORY" = TrillionniumFoundation/HeptaBao
+          test "$GITHUB_REF" = refs/heads/exec/v1.9.0-full-repository-convergence-v1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -m)" = aarch64
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Archive exact convergence inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-arm64-controller-inputs-${{ github.run_id }}
+          path: |
+            .exec/augment_external_v2.py.gz.b64
+            .exec/v1_9_payload/part-*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Verify canonical external V2 payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/augment_external_v2.py.gz"
+          source="$RUNNER_TEMP/augment_external_v2.py"
+          tr -d '\r\n' < .exec/augment_external_v2.py.gz.b64 | base64 --decode > "$archive"
+          python .exec/extract_verified_gzip.py \
+            --input "$archive" \
+            --output "$source" \
+            --sha256 c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b
+          python -m py_compile "$source"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+
+      - name: Execute full convergence controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .exec/prepare_v1_9_controller.py \
+            .exec/run_v1_9.sh "$RUNNER_TEMP/run_v1_9.sh"
+          bash "$RUNNER_TEMP/run_v1_9.sh"
+
+      - name: Capture fail-closed convergence diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          diagnostics="$RUNNER_TEMP/v190-arm64-diagnostics"
+          mkdir -p "$diagnostics"
+          git rev-parse HEAD HEAD^{tree} > "$diagnostics/source-identity.txt" 2>&1 || true
+          git status --porcelain=v1 --untracked-files=all > "$diagnostics/git-status.txt" 2>&1 || true
+          git diff --binary > "$diagnostics/worktree.diff" 2>&1 || true
+          git diff --check > "$diagnostics/diff-check.txt" 2>&1 || true
+          find "$RUNNER_TEMP/v190" -maxdepth 4 -type f -printf '%P %s bytes\n' \
+            | sort > "$diagnostics/materializer-files.txt" 2>&1 || true
+          tar --exclude=.git --exclude=target --exclude='*/target' \
+            --exclude='*.pyc' --exclude='__pycache__' \
+            -czf "$diagnostics/worktree.tar.gz" . || true
+
+      - name: Upload fail-closed convergence diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-arm64-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v190-arm64-diagnostics
+            ${{ runner.temp }}/v190
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Export exact workflow admission inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-arm64-generated-workflows-${{ github.run_id }}
+          path: planning/generated-workflows/*.yml
+          if-no-files-found: error
+          retention-days: 14
