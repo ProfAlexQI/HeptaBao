@@ -16,7 +16,7 @@ mkdir -p "$WORK/v150" "$WORK/v160" "$WORK/v170/archive" "$WORK/v180" "$WORKFLOWS
 
 cat .exec/v1_9_payload/part-* | tr -d '\r\n' | base64 --decode > "$WORK/converge_v1_9.py"
 test "$(sha256sum "$WORK/converge_v1_9.py" | awk '{print $1}')" = \
-  "7f2cd574e3f31c5363c633074a6db9caf3d1ed5d16e33bac625674d362b79a03"
+  "ab838212f426b8f526e27a1e0e6981a97bfacbf7c9b48772594d4aee66faa838"
 cat .exec/augment_external_v2.py.gz.b64 | tr -d '\r\n' | base64 --decode | gzip --decompress > "$WORK/augment_external_v2.py"
 test "$(sha256sum "$WORK/augment_external_v2.py" | awk '{print $1}')" = \
   "c97528017a6b4cb22acd32cd191fb88f26f5697015fb75035176ccb5ec98716b"
