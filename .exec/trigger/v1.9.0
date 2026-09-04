@@ -1,8 +1,9 @@
-trigger: 2026-09-04T09:25:00Z
+trigger: 2026-09-04T09:34:00Z
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 5
+attempt: 6
 runner_pool: ubuntu-latest
 external_admission: v2-ed25519
 forensic_input_archive: enabled
+canonical_payload_repair: exact-sha-crc-size-bound
