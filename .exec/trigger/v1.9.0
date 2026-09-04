@@ -1,8 +1,8 @@
-trigger: 2026-09-04T10:08:00Z
+trigger: 2026-09-04T10:16:00Z
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 10
+attempt: 11
 runner_pool: ubuntu-latest
 external_admission: v2-ed25519
 forensic_input_archive: enabled
@@ -11,3 +11,4 @@ canonical_payload: verified-idempotent
 generator_patch: exact-source-digest-bound
 v1_7_materializer_path: contract-aligned
 v1_8_service_patch: unique-control-plane-context
+lock_graph: regenerate-after-42-crate-materialization-then-locked
