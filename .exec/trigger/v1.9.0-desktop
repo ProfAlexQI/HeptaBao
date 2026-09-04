@@ -1,0 +1,10 @@
+trigger: 2026-09-04T09:45:00Z
+plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
+source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
+mode: trusted-self-hosted-full-repository-convergence
+attempt: 1
+runner_labels: self-hosted,linux,x64
+required_runner_name: desktop
+external_admission: v2-ed25519
+canonical_payload_repair: exact-sha-crc-size-bound
+generator_patch: exact-source-digest-bound
