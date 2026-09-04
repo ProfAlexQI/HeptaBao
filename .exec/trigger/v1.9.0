@@ -1,5 +1,6 @@
-trigger: 2026-09-04T06:12:00Z
+trigger: 2026-09-04T06:20:00Z
 plan: HEPTABAO-PLAN-2026-09-04-V1.9.0
 source_parent: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
 mode: one-shot-full-repository-convergence
-attempt: 2
+attempt: 3
+runner_pool: ubuntu-latest
