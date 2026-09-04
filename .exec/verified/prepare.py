@@ -19,10 +19,10 @@ for version in ('150','160','180'):
  if version=='180':run(patch/'patch_v1_8_materializer.py',d/'materialize.py')
 d=out/'v170';d.mkdir();src=out/'input170/.exec'
 payload=''.join(p.read_text() for p in sorted((src/'v1_7_payload').glob('materializer-*')))
-(d/'materialize.py').write_bytes(gzip.decompress(base64.b64decode(payload)))
+(d/'materialize_v1_7_0.py').write_bytes(gzip.decompress(base64.b64decode(payload)))
 shutil.copytree(src/'v1_7_assets',d/'assets')
 for name in ('patch_v1_7_assets.py','patch_v1_7_assets_v2.py','patch_v1_7_assets_v3.py'):run(src/name,d/'assets')
-run(patch/'patch_v1_7_materializer_for_convergence.py',d/'materialize.py')
+run(patch/'patch_v1_7_materializer_for_convergence.py',d/'materialize_v1_7_0.py')
 for path in sorted((d/'assets').glob('*.rs')):sp.run(['rustfmt','+1.98.0','--edition','2024',str(path)],check=True)
 raw=b''.join(base64.b64decode(p.read_bytes()) for p in sorted((patch/'v1_9_payload').glob('part-*')))
 if hashlib.sha256(raw).hexdigest()!='ab838212f426b8f526e27a1e0e6981a97bfacbf7c9b48772594d4aee66faa838':raise SystemExit('V1.9 source digest mismatch')
