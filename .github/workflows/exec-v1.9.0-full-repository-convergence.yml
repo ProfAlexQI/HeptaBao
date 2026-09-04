@@ -1,0 +1,241 @@
+name: exec V1.9.0 full repository convergence
+
+on:
+  push:
+    branches: [exec/v1.9.0-full-repository-convergence-v1]
+    paths: [.exec/trigger/v1.9.0]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exec-v1.9.0-full-repository-convergence-v1
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      BASE_SOURCE_SHA: ca0dd294ca8fa78b61ce4cfb6da0c10011175b83
+      CANDIDATE_BRANCH: codex/plan-v1.9.0-full-repository-convergence-v1
+      CARGO_TARGET_DIR: ${{ runner.temp }}/heptabao-v190-target
+      V150_CONTROLLER_SHA: f6c8512d368998a9b0f9998ceede9ff6e3ccd682
+      V160_CONTROLLER_SHA: f3165b3d1c4d4c4e8fd923162efd8535dfa09548
+      V170_CONTROLLER_SHA: 56aea04b4a081c89dd6f5b5ea74da25a2a0d6a8a
+      V180_CONTROLLER_SHA: cb2ac86a6cf54d0e8a52f50c817dd7e5accca017
+    steps:
+      - name: Checkout convergence controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Freeze exact staged generators and reconstruct convergence controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v150" "$RUNNER_TEMP/v160" "$RUNNER_TEMP/v170/archive" "$RUNNER_TEMP/v180" "$RUNNER_TEMP/workflows"
+
+          cat .exec/v1_9_payload/part-* | tr -d '\r\n' | base64 --decode > "$RUNNER_TEMP/converge_v1_9.py"
+          test "$(sha256sum "$RUNNER_TEMP/converge_v1_9.py" | awk '{print $1}')" = \
+            7f2cd574e3f31c5363c633074a6db9caf3d1ed5d16e33bac625674d362b79a03
+          python -m py_compile "$RUNNER_TEMP/converge_v1_9.py"
+
+          git fetch --no-tags origin \
+            "+refs/heads/exec/v1.5.0-control-plane-materializer-v2:refs/remotes/materializer/v150" \
+            "+refs/heads/exec/v1.6.0-runtime-operations-materializer-v2:refs/remotes/materializer/v160" \
+            "+refs/heads/exec/v1.7.0-service-materializer-v2:refs/remotes/materializer/v170" \
+            "+refs/heads/exec/v1.8.0-operational-service-materializer-v2:refs/remotes/materializer/v180"
+          test "$(git rev-parse refs/remotes/materializer/v150)" = "$V150_CONTROLLER_SHA"
+          test "$(git rev-parse refs/remotes/materializer/v160)" = "$V160_CONTROLLER_SHA"
+          test "$(git rev-parse refs/remotes/materializer/v170)" = "$V170_CONTROLLER_SHA"
+          test "$(git rev-parse refs/remotes/materializer/v180)" = "$V180_CONTROLLER_SHA"
+
+          git show "$V150_CONTROLLER_SHA:.exec/materialize_v1_5_0.py" > "$RUNNER_TEMP/v150/materialize.py"
+          git show "$V150_CONTROLLER_SHA:.exec/patch_v1_5_0.py" > "$RUNNER_TEMP/v150/patch.py"
+          python "$RUNNER_TEMP/v150/patch.py" "$RUNNER_TEMP/v150/materialize.py"
+
+          git show "$V160_CONTROLLER_SHA:.exec/materialize_v1_6_0.py" > "$RUNNER_TEMP/v160/materialize.py"
+          git show "$V160_CONTROLLER_SHA:.exec/patch_v1_6_0.py" > "$RUNNER_TEMP/v160/patch.py"
+          python "$RUNNER_TEMP/v160/patch.py" "$RUNNER_TEMP/v160/materialize.py"
+
+          git archive "$V170_CONTROLLER_SHA" \
+            .exec/v1_7_payload .exec/v1_7_assets \
+            .exec/patch_v1_7_assets.py .exec/patch_v1_7_assets_v2.py .exec/patch_v1_7_assets_v3.py \
+            | tar -xf - -C "$RUNNER_TEMP/v170/archive"
+          cat "$RUNNER_TEMP/v170/archive"/.exec/v1_7_payload/materializer-* \
+            | base64 --decode | gzip --decompress > "$RUNNER_TEMP/v170/materialize.py"
+          cp -R "$RUNNER_TEMP/v170/archive/.exec/v1_7_assets" "$RUNNER_TEMP/v170/assets"
+          python "$RUNNER_TEMP/v170/archive/.exec/patch_v1_7_assets.py" "$RUNNER_TEMP/v170/assets"
+          python "$RUNNER_TEMP/v170/archive/.exec/patch_v1_7_assets_v2.py" "$RUNNER_TEMP/v170/assets"
+          python "$RUNNER_TEMP/v170/archive/.exec/patch_v1_7_assets_v3.py" "$RUNNER_TEMP/v170/assets"
+
+          git show "$V180_CONTROLLER_SHA:.exec/materialize_v1_8_0.py" > "$RUNNER_TEMP/v180/materialize.py"
+          git show "$V180_CONTROLLER_SHA:.exec/patch_v1_8_0.py" > "$RUNNER_TEMP/v180/patch.py"
+          python "$RUNNER_TEMP/v180/patch.py" "$RUNNER_TEMP/v180/materialize.py"
+
+          python -m py_compile \
+            "$RUNNER_TEMP/v150/materialize.py" "$RUNNER_TEMP/v150/patch.py" \
+            "$RUNNER_TEMP/v160/materialize.py" "$RUNNER_TEMP/v160/patch.py" \
+            "$RUNNER_TEMP/v170/materialize.py" \
+            "$RUNNER_TEMP/v180/materialize.py" "$RUNNER_TEMP/v180/patch.py"
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-plan.txt
+
+      - name: Install exact Rust 1.98
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.98.0 --version --verbose
+          cargo +1.98.0 --version --verbose
+          for source in "$RUNNER_TEMP/v170/assets"/*.rs; do
+            rustfmt +1.98.0 --edition 2024 "$source"
+          done
+
+      - name: Switch to the exact V1.4.7 source parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_SOURCE_SHA"
+          git switch --detach "$BASE_SOURCE_SHA"
+          git switch -C "$CANDIDATE_BRANCH"
+          git config user.name "HeptaBao convergence controller"
+          git config user.email "heptabao-convergence@users.noreply.github.com"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python -m pip install --disable-pip-version-check --requirement requirements-plan.txt
+
+      - name: Materialize V1.5 control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/v150/materialize.py" .
+          test -f .github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml
+          cp .github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml "$RUNNER_TEMP/workflows/"
+          python scripts/render_module_source_truth_v1_5_0.py --check
+          python scripts/validate_plan_v1_5_0.py
+          git diff --check
+
+      - name: Materialize V1.6 sealed runtime recovery and operations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/v160/materialize.py" .
+          test -f .github/workflows/plan-v1.6.0-runtime-recovery-operations.yml
+          cp .github/workflows/plan-v1.6.0-runtime-recovery-operations.yml "$RUNNER_TEMP/workflows/"
+          python scripts/render_module_source_truth_v1_6_0.py --check
+          python scripts/validate_plan_v1_6_0.py
+          git diff --check
+
+      - name: Materialize V1.7 HTTP HA plugin compatibility and clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/v170/materialize.py" . --asset-root "$RUNNER_TEMP/v170/assets"
+          test -f .github/workflows/plan-v1.7.0-service-ha-plugin-compatibility.yml
+          cp .github/workflows/plan-v1.7.0-service-ha-plugin-compatibility.yml "$RUNNER_TEMP/workflows/"
+          python scripts/render_module_source_truth_v1_7_0.py --check
+          python scripts/validate_plan_v1_7_0.py
+          git diff --check
+
+      - name: Materialize V1.8 operational service and deterministic bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/v180/materialize.py" .
+          test -f .github/workflows/plan-v1.8.0-operational-service.yml
+          cp .github/workflows/plan-v1.8.0-operational-service.yml "$RUNNER_TEMP/workflows/"
+          python scripts/render_module_source_truth_v1_8_0.py --check
+          python scripts/validate_plan_v1_8_0.py
+          git diff --check
+
+      - name: Validate the complete staged 42-crate source before convergence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_plan_v1_8_0.py
+          python scripts/validate_plan_v1_7_0.py
+          python scripts/validate_plan_v1_6_0.py
+          python scripts/validate_plan_v1_5_0.py
+          python scripts/validate_plan_v1_4_7.py
+          python scripts/validate_plan_v1_4_6.py
+          python scripts/validate_plan_v1_4_5.py
+          python scripts/validate_module_documentation_v1_4_4.py
+          python -m unittest discover -s tests/plan -p 'test_*.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m compileall -q scripts tests
+          python scripts/build_release_bundle_v1_8.py --output "$RUNNER_TEMP/staged-one.tar.gz"
+          python scripts/build_release_bundle_v1_8.py --output "$RUNNER_TEMP/staged-two.tar.gz"
+          cmp "$RUNNER_TEMP/staged-one.tar.gz" "$RUNNER_TEMP/staged-two.tar.gz"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Materialize truthful V1.9 convergence state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p planning/generated-workflows
+          cp "$RUNNER_TEMP/workflows"/*.yml planning/generated-workflows/
+          V190_SOURCE_PARENT="$BASE_SOURCE_SHA" python "$RUNNER_TEMP/converge_v1_9.py"
+          test -f .github/workflows/plan-v1.9.0-full-repository-convergence.yml
+          cp .github/workflows/plan-v1.9.0-full-repository-convergence.yml "$RUNNER_TEMP/workflows/"
+          cp .github/workflows/plan-v1.9.0-full-repository-convergence.yml planning/generated-workflows/
+          python scripts/validate_plan_v1_9_0.py
+          python -m unittest discover -s tests/plan -p 'test_plan_v1_9_0.py' -v
+          python -m unittest discover -s tests/platform -p 'test_*.py' -v
+          python -m unittest discover -s tests/oracle -p 'test_*.py' -v
+          python -m compileall -q scripts tests
+          python scripts/build_release_bundle_v1_8.py --output "$RUNNER_TEMP/final-one.tar.gz"
+          python scripts/build_release_bundle_v1_8.py --output "$RUNNER_TEMP/final-two.tar.gz"
+          cmp "$RUNNER_TEMP/final-one.tar.gz" "$RUNNER_TEMP/final-two.tar.gz"
+          cargo +1.98.0 fmt --all -- --check
+          cargo +1.98.0 test --locked --workspace --all-targets
+          cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+          git diff --check
+
+      - name: Publish source candidate without workflow-token bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/plan-v1.5.0-control-plane-vertical-slice.yml \
+            .github/workflows/plan-v1.6.0-runtime-recovery-operations.yml \
+            .github/workflows/plan-v1.7.0-service-ha-plugin-compatibility.yml \
+            .github/workflows/plan-v1.8.0-operational-service.yml \
+            .github/workflows/plan-v1.9.0-full-repository-convergence.yml
+          git add --all
+          git commit -m "feat(v1.9.0): converge all repository-controlled source gaps"
+          candidate_sha="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if git ls-remote --exit-code --heads origin "refs/heads/$CANDIDATE_BRANCH" >/dev/null 2>&1; then
+            echo "candidate branch already exists; refusing an implicit overwrite" >&2
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH"
+          {
+            echo '## V1.9.0 convergence source candidate published'
+            echo "- commit: \`$candidate_sha\`"
+            echo "- tree: \`$candidate_tree\`"
+            echo '- workspace crates: 42'
+            echo '- repository blockers 059..093: source implemented, review required'
+            echo '- external/control blockers: authentic completion required'
+            echo '- administrator bypass: false'
+            echo '- authority effect: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export exact workflow admission inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v1.9.0-generated-workflows-${{ github.run_id }}
+          path: planning/generated-workflows/*.yml
+          if-no-files-found: error
+          retention-days: 14
