@@ -1,4 +1,4 @@
-name: exec export current PR63 git bundle macOS
+name: exec export exact repository audit inputs
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   export:
-    runs-on: macos-14
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout immutable current PR63 head
@@ -29,7 +29,7 @@ jobs:
           git for-each-ref --sort=refname --format='%(objectname) %(refname)' > "$RUNNER_TEMP/heptabao-source-refs.txt"
           git bundle create "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle" --all HEAD
           git bundle verify "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle"
-          shasum -a 256 "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle"
+          sha256sum "$RUNNER_TEMP/heptabao-repository-0ce5f15.bundle"
 
       - name: Upload immutable git bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -38,5 +38,28 @@ jobs:
           path: |
             ${{ runner.temp }}/heptabao-repository-0ce5f15.bundle
             ${{ runner.temp }}/heptabao-source-refs.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Prepare pinned Linux audit toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          toolchain="$HOME/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu"
+          test -d "$toolchain"
+          "$toolchain/bin/rustc" --version --verbose > "$RUNNER_TEMP/rust-toolchain-identity.txt"
+          "$toolchain/bin/cargo" --version --verbose >> "$RUNNER_TEMP/rust-toolchain-identity.txt"
+          tar -C "$toolchain" -czf "$RUNNER_TEMP/rust-1.98.0-linux-audit.tar.gz" bin lib libexec share
+          sha256sum "$RUNNER_TEMP/rust-1.98.0-linux-audit.tar.gz" > "$RUNNER_TEMP/rust-toolchain.sha256"
+
+      - name: Upload pinned Linux audit toolchain
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-1.98.0-linux-audit-toolchain
+          path: |
+            ${{ runner.temp }}/rust-1.98.0-linux-audit.tar.gz
+            ${{ runner.temp }}/rust-toolchain-identity.txt
+            ${{ runner.temp }}/rust-toolchain.sha256
           if-no-files-found: error
           retention-days: 7
