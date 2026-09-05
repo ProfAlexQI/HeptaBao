@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
+import py_compile
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -75,6 +78,78 @@ class WorkflowRenderTests(unittest.TestCase):
             with self.subTest(value_length=len(value)), patch.object(RENDERER, "_ORIGINAL_WORKFLOW", return_value=value):
                 with self.assertRaises(ValueError):
                     RENDERER.workflow_source()
+
+
+class FrozenExecutionTests(unittest.TestCase):
+    def prepare(self, root: Path) -> tuple[Path, Path, bytes]:
+        scripts = root / "scripts"
+        scripts.mkdir()
+        wrapper = scripts / "render_plan_v1_4_7.py"
+        baseline = scripts / "_render_plan_v1_4_7_baseline.py"
+        wrapper.write_bytes((ROOT / "scripts/render_plan_v1_4_7.py").read_bytes())
+        verified_bytes = RENDERER.BASELINE_PATH.read_bytes()
+        baseline.write_bytes(verified_bytes)
+        return wrapper, baseline, verified_bytes
+
+    def load(self, wrapper: Path):
+        spec = importlib.util.spec_from_file_location("isolated_v147_wrapper", wrapper)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_valid_foreign_timestamp_pyc_cannot_replace_verified_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper, baseline, trusted = self.prepare(Path(temporary))
+            foreign = b'raise RuntimeError("foreign cached renderer was executed")\n#'
+            self.assertLess(len(foreign), len(trusted))
+            foreign += b"x" * (len(trusted) - len(foreign) - 1) + b"\n"
+            timestamp = 1_700_000_000
+            baseline.write_bytes(foreign)
+            os.utime(baseline, (timestamp, timestamp))
+            pyc = Path(py_compile.compile(
+                str(baseline), doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP,
+            ))
+            cached = pyc.read_bytes()
+            self.assertEqual((0, timestamp, len(trusted)), struct.unpack("<III", cached[4:16]))
+            baseline.write_bytes(trusted)
+            os.utime(baseline, (timestamp, timestamp))
+            self.assertEqual(RENDERER.BASELINE_SHA256, hashlib.sha256(baseline.read_bytes()).hexdigest())
+            module = self.load(wrapper)
+            self.assertEqual(RENDERER.workflow_source(), module.workflow_source())
+            self.assertEqual(str(baseline), module.BASELINE.__file__)
+            self.assertEqual("heptabao_v147_frozen_renderer", module.BASELINE.__name__)
+            self.assertFalse(module.BASELINE.CLAIMS["production_authority"])
+            self.assertEqual(cached, pyc.read_bytes(), "the cache must be ignored, not rewritten")
+
+    def test_verified_bytes_are_executed_after_source_path_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper, baseline, trusted = self.prepare(Path(temporary))
+            original_read = Path.read_bytes
+            reads = []
+
+            def replace_after_read(path: Path) -> bytes:
+                data = original_read(path)
+                if path == baseline:
+                    reads.append(path)
+                    path.write_bytes(b'raise RuntimeError("reopened source was executed")\n')
+                return data
+
+            with patch.object(Path, "read_bytes", replace_after_read):
+                module = self.load(wrapper)
+            self.assertEqual([baseline], reads, "read the source exactly once")
+            self.assertNotEqual(trusted, baseline.read_bytes())
+            self.assertEqual(RENDERER.workflow_source(), module.workflow_source())
+            self.assertFalse(module.BASELINE.CLAIMS["production_authority"])
+
+    def test_integrity_failure_precedes_any_baseline_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper, baseline, _ = self.prepare(Path(temporary))
+            baseline.write_bytes(b'raise RuntimeError("unverified source was executed")\n')
+            with self.assertRaisesRegex(ValueError, "frozen V1.4.7 generator integrity mismatch"):
+                self.load(wrapper)
 
 
 if __name__ == "__main__":

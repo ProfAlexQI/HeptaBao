@@ -8,19 +8,29 @@ expected value. Check mode remains read-only and compares complete output bytes.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 BASELINE_PATH = Path(__file__).with_name("_render_plan_v1_4_7_baseline.py")
 BASELINE_SHA256 = "ed72827409aac7da450dce4100365c49bb8ea3a2210fe0767030e2c5c9824aed"
-if hashlib.sha256(BASELINE_PATH.read_bytes()).hexdigest() != BASELINE_SHA256:
-    raise ValueError("frozen V1.4.7 generator integrity mismatch")
-SPEC = importlib.util.spec_from_file_location("heptabao_v147_frozen_renderer", BASELINE_PATH)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("cannot load frozen V1.4.7 generator")
-BASELINE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BASELINE)
+
+
+def _load_frozen_renderer() -> ModuleType:
+    # Verify and execute the SAME snapshot. A file loader may reopen the path or
+    # accept an mtime/size-valid .pyc whose code was not covered by this digest.
+    source = BASELINE_PATH.read_bytes()
+    if hashlib.sha256(source).hexdigest() != BASELINE_SHA256:
+        raise ValueError("frozen V1.4.7 generator integrity mismatch")
+    module = ModuleType("heptabao_v147_frozen_renderer")
+    module.__file__ = str(BASELINE_PATH)
+    module.__package__ = ""
+    code = compile(source, str(BASELINE_PATH), "exec", dont_inherit=True)
+    exec(code, module.__dict__)
+    return module
+
+
+BASELINE = _load_frozen_renderer()
 _ORIGINAL_WORKFLOW = BASELINE.workflow_source
 _ORIGINAL_PATHS = BASELINE.normative_paths
 
