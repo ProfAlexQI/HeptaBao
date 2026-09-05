@@ -7,7 +7,7 @@ source_baseline:
   tree: c22288f561fdd711e908ce8a70c0116601d519e5
 files:
 - path: .github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml
-  sha256: 9fa3109d0c37df166ac7f0fb764a2621277dadac43c7d535d5ea152f0d21f4ee
+  sha256: 1cc4ea91a4d6760ae6c481b273a8a69c0cc8f8f0f53862fc4f445542eed612c6
 - path: docs/CURRENT_DOCUMENTATION.md
   sha256: 76696acc1b1f535a7048b7cb12ddf1a9a6b7a8d0d5d978b1520bd9355b7d3869
 - path: docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md
@@ -84,12 +84,16 @@ files:
   sha256: d461632c402c05c86e879f864ba4efcf18ff2145dc6c1003fadccdcf06bc34a1
 - path: schemas/heptabao_external_completion_evidence_v1.schema.json
   sha256: 4aa0e3a69b96d03f31c3acd87927e58f326797580de19289f3754ed5c8f6cbe9
-- path: scripts/render_plan_v1_4_7.py
+- path: scripts/_render_plan_v1_4_7_baseline.py
   sha256: ed72827409aac7da450dce4100365c49bb8ea3a2210fe0767030e2c5c9824aed
+- path: scripts/render_plan_v1_4_7.py
+  sha256: fad5d187ddcf57160f6a3092d038dd34f7fbc3b3a2e2825068f8009571542503
 - path: scripts/validate_external_completion_evidence_v1.py
   sha256: 2bd9d9e96638ec7e264f0bb38b9dba67509ab1b1a3addc9d68acb5ae9d57057f
 - path: scripts/validate_plan_v1_4_7.py
   sha256: 9c750c0f9a1cd0f6ae020d249d91d21202088d366b02ebc8fb9aa997c184aeed
+- path: tests/plan/test_workflow_render_v1_4_7.py
+  sha256: 2702d84274a707471979ed01c885a7f3e1a7cfd3bc005c5bb6319d3f8ed49af3
 claims:
   qualification: false
   compatibility_claim: false
