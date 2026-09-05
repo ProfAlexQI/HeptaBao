@@ -116,5 +116,15 @@ class CurrentEntryTests(unittest.TestCase):
             self.assertFalse((root / "README.md").exists())
 
 
+    def test_module_index_labels_historical_coverage_baseline(self) -> None:
+        module_index = (ROOT / "docs/modules/README.md").read_text(encoding="utf-8")
+        self.assertIn("V1.4.4 documentation-coverage baseline:", module_index)
+        self.assertNotIn("\nSource baseline:", module_index)
+        current_truth = section(module_index, "V1.4.7 machine-verified module truth")
+        self.assertIn("planning/HEPTABAO_MODULE_SOURCE_TRUTH_V1_4_7.yaml", current_truth)
+        truth = yaml.safe_load((ROOT / "planning/HEPTABAO_MODULE_SOURCE_TRUTH_V1_4_7.yaml").read_text())
+        self.assertEqual(19, truth["module_count"])
+
+
 if __name__ == "__main__":
     unittest.main()

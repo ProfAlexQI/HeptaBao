@@ -1,6 +1,6 @@
 # HeptaBao module developer documentation
 
-Source baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`  
+V1.4.4 documentation-coverage baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`  
 Coverage: **19 / 19 Cargo workspace crates**.
 
 | Crate | Owner role | Maturity | Developer guide |

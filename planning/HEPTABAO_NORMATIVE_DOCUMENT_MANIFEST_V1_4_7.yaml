@@ -17,7 +17,7 @@ files:
 - path: docs/modules/MODULE_DOCUMENTATION_STANDARD_V2.md
   sha256: 709ab9f93b47eda5aea4a562f6e3d06fb878fc15108cc8b87ceefa8c549db020
 - path: docs/modules/README.md
-  sha256: 1ccdc8ece960bc88b47e690e40af6e827b6dbc94496aa7802be360a781f981b2
+  sha256: 52974f02edb3a6438de44f315a50a57d45761492f2b5b915158a400c556f5988
 - path: docs/modules/heptabao-authbus-contracts.md
   sha256: 53671f7bcf51184c107879dc3ea3357ef32c5b58e8483fe58a57835ee8b2cb06
 - path: docs/modules/heptabao-barrier-api.md
@@ -95,7 +95,7 @@ files:
 - path: scripts/validate_plan_v1_4_7.py
   sha256: 9c750c0f9a1cd0f6ae020d249d91d21202088d366b02ebc8fb9aa997c184aeed
 - path: tests/plan/test_current_entry_v1_4_7.py
-  sha256: 5a6194afa7e0adb697841de74a55ca3e56e558546f14e492f93162d77574c019
+  sha256: e51e002eada4398150f814a328f8608f7d753ae16d77c001be7099a41ead73ee
 - path: tests/plan/test_workflow_render_v1_4_7.py
   sha256: 4fc1e37e012d390379c6e00407dfb2efb65999bb8ea4303988939f216bced3c0
 claims:
