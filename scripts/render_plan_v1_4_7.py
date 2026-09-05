@@ -1,4 +1,70 @@
-# HeptaBao
+#!/usr/bin/env python3
+"""Render V1.4.7 using the frozen generator with corrected shell escaping.
+
+The original generator is kept byte-for-byte for a reviewable, narrow repair.
+No workflow, test, authority claim or generated input is read back as its own
+expected value. Check mode remains read-only and compares complete output bytes.
+"""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+BASELINE_PATH = Path(__file__).with_name("_render_plan_v1_4_7_baseline.py")
+BASELINE_SHA256 = "ed72827409aac7da450dce4100365c49bb8ea3a2210fe0767030e2c5c9824aed"
+
+
+def _load_frozen_renderer() -> ModuleType:
+    # Verify and execute the SAME snapshot. A file loader may reopen the path or
+    # accept an mtime/size-valid .pyc whose code was not covered by this digest.
+    source = BASELINE_PATH.read_bytes()
+    if hashlib.sha256(source).hexdigest() != BASELINE_SHA256:
+        raise ValueError("frozen V1.4.7 generator integrity mismatch")
+    module = ModuleType("heptabao_v147_frozen_renderer")
+    module.__file__ = str(BASELINE_PATH)
+    module.__package__ = ""
+    code = compile(source, str(BASELINE_PATH), "exec", dont_inherit=True)
+    exec(code, module.__dict__)
+    return module
+
+
+BASELINE = _load_frozen_renderer()
+_ORIGINAL_WORKFLOW = BASELINE.workflow_source
+_ORIGINAL_PATHS = BASELINE.normative_paths
+_ORIGINAL_STATIC_FILES = BASELINE.static_files
+
+
+def workflow_source() -> str:
+    source = _ORIGINAL_WORKFLOW()
+    replacements = (
+        ("printf 'source_kind=%s\nsource_sha=%s\ntree=%s\n'",
+         r"printf 'source_kind=%s\nsource_sha=%s\ntree=%s\n'"),
+        ('compatibility_claim: true"             planning/',
+         'compatibility_claim: true" ' + "\\" + "\n" + "            planning/"),
+    )
+    for before, after in replacements:
+        if source.count(before) != 1:
+            raise ValueError("frozen workflow escape anchor mismatch")
+        source = source.replace(before, after, 1)
+    return source
+
+
+def readme_source() -> str:
+    """Build this tranche's entry page from the canonical portal and status.
+
+    Never use the checked-in README as its own expected value. Inherited plans
+    remain explicitly historical, and source availability is not qualification.
+    """
+    status = BASELINE.status_document()
+    portal = BASELINE.current_documentation()
+    heading = "## Current normative set\n"
+    end = "\n## Inherited immutable set\n"
+    if portal.count(heading) != 1 or portal.count(end) != 1:
+        raise ValueError("current documentation section mismatch")
+    table = portal.split(heading, 1)[1].split(end, 1)[0].strip()
+    return f'''# HeptaBao
 
 HeptaBao is an independent clean-room Rust reimplementation program for an OpenBao-compatible secrets-management server.
 
@@ -6,9 +72,9 @@ HeptaBao is an independent clean-room Rust reimplementation program for an OpenB
 
 ## Current truth
 
-- Current plan: **V1.4.7 post-merge truth and external admission** for this source tree.
-- Plan identity: `HEPTABAO-PLAN-2026-09-02-V1.4.7`.
-- Candidate state: **SOURCE_IMPLEMENTED_EXACT_HEAD_MERGE_AND_INDEPENDENT_REVIEW_REQUIRED**; this is not a merged or qualified release.
+- Current plan: **V{status["revision"]} post-merge truth and external admission** for this source tree.
+- Plan identity: `{status["plan_id"]}`.
+- Candidate state: **{status["status"]}**; this is not a merged or qualified release.
 - Current Cargo workspace documentation: **19 / 19** existing crates have developer guides under `docs/modules/`. This is file coverage, not full product design or implementation completion.
 - Qualification: **false**.
 - Compatibility claim: **false**.
@@ -22,23 +88,11 @@ The repository is **not production-deployable**. Do not use it to protect real s
 
 `docs/CURRENT_DOCUMENTATION.md` is the canonical current-entry portal. The complete table below is generated from that same portal, not maintained independently.
 
-| Subject | Current document |
-|---|---|
-| active plan | `docs/plan/HEPTABAO_PLAN_V1_4_7_POST_MERGE_TRUTH_AND_EXTERNAL_ADMISSION.md` |
-| current status | `planning/HEPTABAO_V1_4_7_POST_MERGE_TRUTH_STATUS.yaml` |
-| blocker register | `planning/HEPTABAO_BLOCKER_REGISTER_V1_4_7.yaml` |
-| normative manifest | `planning/HEPTABAO_NORMATIVE_DOCUMENT_MANIFEST_V1_4_7.yaml` |
-| post-merge V1.4.6 closure receipt | `planning/evidence/repository/HEPTABAO_V1_4_6_POST_MERGE_CLOSURE_RECEIPT.yaml` |
-| module documentation standard | `docs/modules/MODULE_DOCUMENTATION_STANDARD_V2.md` |
-| module index | `docs/modules/README.md` |
-| machine-bound module source truth | `planning/HEPTABAO_MODULE_SOURCE_TRUTH_V1_4_7.yaml` |
-| external completion admission protocol | `docs/governance/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_PROTOCOL_V1.md` |
-| external completion admission catalog | `planning/HEPTABAO_EXTERNAL_COMPLETION_ADMISSION_V1.yaml` |
-| current exact-head/merge gate | `.github/workflows/plan-v1.4.7-post-merge-truth-and-external-admission.yml` |
+{table}
 
 ## Inherited foundations
 
-- The inherited kernel baseline is **V1.4.6 authoritative recovery closure**, commit `54d524214df443752a2ecaeff6d4a05625bf52c7`, tree `c22288f561fdd711e908ce8a70c0116601d519e5`.
+- The inherited kernel baseline is **V1.4.6 authoritative recovery closure**, commit `{status["source_baseline"]["commit"]}`, tree `{status["source_baseline"]["tree"]}`.
 - **V1.4.5 security invariant closure** and **V1.4.4 module documentation closure** remain inherited regression subjects, not the current plan.
 - V1.4.4's file-coverage registry remains `planning/HEPTABAO_MODULE_DOCUMENTATION_COVERAGE_V1_4_4.yaml`; the current module standard and exact-source facts are in the current table above.
 - The portal's inherited table retains the older plans, status documents, blocker registers, recovery protocol and validation gates. Historical receipts are not reissued by updating this entry page.
@@ -87,3 +141,34 @@ cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 The README and its regression suite are included in the current normative manifest. Check mode rejects a missing or modified generated README without rewriting it, even when its manifest hash is updated. Exact current-head and prospective-merge identities come from the active pull request and its read-only workflows, not from this README. A source change requires new CI and eligible review; prior-head results are not inherited as approvals.
+'''
+
+
+def static_files() -> dict[Path, str]:
+    values = _ORIGINAL_STATIC_FILES()
+    values[Path("README.md")] = readme_source()
+    return values
+
+
+def normative_paths(truth: dict[str, Any]) -> list[Path]:
+    additions = {
+        Path("README.md"),
+        Path("tests/plan/test_current_entry_v1_4_7.py"),
+        Path("scripts/_render_plan_v1_4_7_baseline.py"),
+        Path("tests/plan/test_workflow_render_v1_4_7.py"),
+    }
+    return sorted(set(_ORIGINAL_PATHS(truth)) | additions, key=lambda path: path.as_posix())
+
+
+BASELINE.workflow_source = workflow_source
+BASELINE.normative_paths = normative_paths
+BASELINE.static_files = static_files
+
+
+def __getattr__(name: str) -> Any:
+    # Preserve the generator's public inspection API used by existing tests.
+    return getattr(BASELINE, name)
+
+
+if __name__ == "__main__":
+    raise SystemExit(BASELINE.main())

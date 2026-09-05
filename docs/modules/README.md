@@ -1,6 +1,6 @@
 # HeptaBao module developer documentation
 
-Source baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`  
+V1.4.4 documentation-coverage baseline: `3582fda50cd9b03ca39713814cdd8229462bbbd2` / `123c99b71c7e33169bef6033eaefb71e386ed6ca`  
 Coverage: **19 / 19 Cargo workspace crates**.
 
 | Crate | Owner role | Maturity | Developer guide |
@@ -26,3 +26,19 @@ Coverage: **19 / 19 Cargo workspace crates**.
 | `heptabao-storage-api` | `storage-core-api` | `PROVIDER_NEUTRAL_API_IMPLEMENTED` | [heptabao-storage-api.md](./heptabao-storage-api.md) |
 
 The coverage object and validator are authoritative for structural completeness. Target modules that do not yet exist in the Cargo workspace remain product gaps and are tracked by the master plan rather than being represented as implemented modules.
+
+<!-- BEGIN V1.4.7 MODULE TRUTH INDEX -->
+## V1.4.7 machine-verified module truth
+
+All `19` Cargo workspace crates are bound to source hashes, internal dependency declarations,
+public lexical declarations and discovered tests in
+`planning/HEPTABAO_MODULE_SOURCE_TRUTH_V1_4_7.yaml`. The generated Public API tables inside each module guide are normative for
+the exact candidate source; narrative stability or compatibility claims remain prohibited.
+
+Validation commands:
+
+```text
+python scripts/render_plan_v1_4_7.py --check
+python scripts/validate_plan_v1_4_7.py
+```
+<!-- END V1.4.7 MODULE TRUTH INDEX -->
